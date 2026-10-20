@@ -26,7 +26,7 @@ Every run records them in `scores.json`.
 ## Install
 
 Needs ffmpeg and ffprobe on PATH. This machine has the Gyan "full" build 9.0, installed with
-`winget install Gyan.FFmpeg`. It also needs Python 3.14 (any recent 3.x should work).
+`winget install Gyan.FFmpeg`. It also needs Python; tested on 3.14.7.
 
 ```powershell
 cd C:\AI\gta-clipper
@@ -77,8 +77,9 @@ It also saves one frame per clip in the run's `frames\` folder, so you can check
 
 ## Known limits (v1)
 
-- The scene score reacts to *sudden* change, so steady fast motion (e.g. a long high-speed drive)
-  scores low. Explosions, flashes and camera cuts score high.
+- ffmpeg's scene score is built to flag *sudden* change (cuts, flashes). Steady fast motion,
+  such as a long high-speed drive, probably scores low. That is not yet checked on real footage,
+  so look at the `visual_change` column in `timeline.csv`.
 - HDR input is not tone-mapped. The tool prints a warning if the file is HDR. Turn off HDR capture
   on the PS5, or expect washed-out colours.
 - No captions, no AI detection, no UI. These are deliberately left for later versions.
