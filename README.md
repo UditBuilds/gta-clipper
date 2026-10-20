@@ -75,6 +75,34 @@ fake minimap and a timecode, a quiet noise bed, and loud bursts plus white flash
 
 It also saves one frame per clip in the run's `frames\` folder, so you can check the layout.
 
+## Synthetic test results (2026-10-20)
+
+Test machine: HP Omen 15, i7-14650HX, RTX 5060 Laptop GPU (driver 616.56), Windows 11, ffmpeg 9.0 (Gyan full build),
+Python 3.14.7. The encoder chosen was `h264_nvenc`. The test video is 1920x1080, 60 fps, 180 s, with AAC stereo.
+
+**Result: PASS** with default flags. It also passed with `--crop`.
+
+| Planted event | Clip (rank) | Peak found | Offset |
+|---|---|---|---|
+| 0:40 | 0:32.5-0:52.5 (1) | 0:40.0 | +0.0 s |
+| 1:30 | 1:22.5-1:42.5 (3) | 1:30.0 | +0.0 s |
+| 2:20 | 2:12.5-2:32.5 (2) | 2:20.0 | +0.0 s |
+
+- **ffprobe:** all 3 clips are 1080x1920 h264, 20.000 s long, with AAC stereo audio. The same held in the `--crop` run.
+- **Count:** the default `--count 5` produced 3 clips plus a NOTE, because the score floor rejected the quiet stretches.
+- **Signals:** the quiet bed measured -42.7 LUFS and the bursts -5.7 LUFS. During the events, both the loudness and the picture-change scores hit the cap (z = 6).
+- **Frames:** checked one frame per clip by eye. In the default layout, the full frame is centred over the blur, and the minimap box and timecode are visible. With `--crop`, both are cut off. The burned-in timecode equals the clip start + 2 s, which confirms where each clip was cut.
+- **Runtime of `clip.py` on the 3-minute video:** 16.4 s in total.
+  - audio analysis: 0.2 s
+  - picture analysis: 4.1 s
+  - encoding 3 clips: 11.9 s
+- **Long-action path,** checked with `--min-len 1 --max-len 1.5` so the tool must keep the densest part of an event: it picked 0:40.0-0:41.5, 1:30.0-1:31.5 and 2:20.0-2:21.5, exactly the planted bursts, each 1.500 s long.
+- **Not tested yet:**
+  - real gameplay footage
+  - the libx264 fallback
+  - input with no audio
+  - the HDR warning
+
 ## Known limits (v1)
 
 - ffmpeg's scene score is built to flag *sudden* change (cuts, flashes). Steady fast motion,
