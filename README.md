@@ -61,6 +61,20 @@ Each run gets its own folder, so earlier runs are never overwritten:
 - `timeline.csv` has every 0.5 s step: loudness, picture change, hard cuts/flashes, both z-scores,
   the combined and smoothed score, and which clip (if any) covers it. Plot it to tune the scoring.
 
+## Review sheet
+
+```powershell
+.\.venv\Scripts\python.exe make_review.py C:\AI\gta\input\test1.webm C:\AI\gta\output\test1\<run> C:\AI\gta\review\test1_review.html
+```
+
+This builds one HTML page per run, with one thumbnail every 10 s (`--every`), each labelled with its timestamp.
+- Thumbnails inside a picked clip are outlined in that clip's colour.
+- Under each thumbnail is clip.py's highest score in the next 10 s. It turns orange at the 2.0 floor, so busy
+  stretches that weren't picked stand out.
+- The images are embedded, so the page opens by double-click with no server.
+- Clicking a thumbnail plays the source from that time. That part needs the source to stay where it is.
+- Thumbnails assume a limited-range source, which is what PS5 SDR captures contain.
+
 ## Self-test
 
 ```powershell
