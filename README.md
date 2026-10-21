@@ -110,4 +110,10 @@ Python 3.14.7. The encoder chosen was `h264_nvenc`. The test video is 1920x1080,
   so look at the `visual_change` column in `timeline.csv`.
 - HDR input is not tone-mapped. The tool prints a warning if the file is HDR. Turn off HDR capture
   on the PS5, or expect washed-out colours.
+- PS5 VP9 (`.webm`) captures contradict themselves about brightness range. The container says limited
+  (16-235), but the VP9 header says full (0-255). The pixels are limited range (measured on two captures,
+  2026-10-21). ffmpeg follows the header, so clips used to be flagged full range and looked washed out in
+  players that read the flag. When the input is VP9 and its container says limited, `clip.py` now rewrites
+  that header bit while cutting (ffmpeg's `vp9_metadata` bitstream filter). Pixel values are not changed.
+  `scores.json` records this as `vp9_range_relabel`.
 - No captions, no AI detection, no UI. These are deliberately left for later versions.

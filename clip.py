@@ -75,6 +75,7 @@ def probe(ffprobe, video):
         "fps": round(fps, 3),
         "video_codec": v.get("codec_name"),
         "color_transfer": v.get("color_transfer"),
+        "color_range": v.get("color_range"),
         "has_audio": any(s.get("codec_type") == "audio" for s in streams),
     }
 
@@ -260,10 +261,12 @@ def vertical_filter(crop):
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[v]")
 
 
-def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio):
-    cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error", "-y",
-           "-ss", f"{clip['start_s']:.3f}", "-i", str(video), "-t", f"{clip['duration_s']:.3f}",
-           "-filter_complex", vertical_filter(crop), "-map", "[v]"]
+def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio, range_fix):
+    cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error", "-y"]
+    if range_fix:
+        cmd += ["-bsf:v", "vp9_metadata=color_range=tv"]
+    cmd += ["-ss", f"{clip['start_s']:.3f}", "-i", str(video), "-t", f"{clip['duration_s']:.3f}",
+            "-filter_complex", vertical_filter(crop), "-map", "[v]"]
     if has_audio:
         cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
     cmd += enc_args + ["-movflags", "+faststart", str(out_path)]
@@ -300,6 +303,12 @@ def main():
           f"{hms(info['duration'])} ({info['duration']:.1f} s)")
     if info["color_transfer"] in ("smpte2084", "arib-std-b67"):
         print("WARNING: input is HDR. v1 encodes SDR without tone mapping, so colours may look washed out.")
+    # PS5 VP9 captures: the container says limited range but the VP9 header says full range, and ffmpeg
+    # follows the header. Clips then come out flagged full range and look washed out, so trust the container.
+    range_fix = info["video_codec"] == "vp9" and info["color_range"] == "tv"
+    info["vp9_range_relabel"] = range_fix
+    if range_fix:
+        print("Input is VP9 marked limited range by its container: clips will be flagged limited range too.")
 
     n = int(math.ceil(info["duration"] / BUCKET))
     t0 = time.perf_counter()
@@ -345,7 +354,7 @@ def main():
         clip["rank"], clip["file"] = rank, name
         print(f"  [{rank}] {hms(clip['start_s'])}-{hms(clip['end_s'])} ({clip['duration_s']:.1f} s)  "
               f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}")
-        render(ffmpeg, args.video, clip, run_dir / name, args.crop, enc_args, info["has_audio"])
+        render(ffmpeg, args.video, clip, run_dir / name, args.crop, enc_args, info["has_audio"], range_fix)
     t_encode = time.perf_counter() - t0
 
     for note in notes:
