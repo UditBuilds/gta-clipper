@@ -117,6 +117,32 @@ Python 3.14.7. The encoder chosen was `h264_nvenc`. The test video is 1920x1080,
   - input with no audio
   - the HDR warning
 
+## Evaluation
+
+The self-test only proves that planted bursts are found. `eval.py` checks a run on real footage against a
+hand-made answer key in `eval/answer_keys/` (one per test video; the videos themselves are not in the repo):
+
+- `action`: stretches a viewer would want clipped, such as shootouts, chases, crashes, carjacks and driving with wanted stars.
+- `never_pick`: pause/map screens, cutscenes, phone calls and shop menus. Each has a `kind`.
+
+Everything else is neutral. Times are seconds in the source.
+
+```powershell
+.\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>      # key defaults to eval\answer_keys\test1.json
+```
+
+It lists each clip with the ranges it touches and by how many seconds, then prints:
+- **precision:** picked clips that touch an action range, out of the clips picked
+- **recall:** action ranges touched by at least one clip, out of all action ranges
+- **bad picks:** clips that touch a never-pick range
+
+Any shared time counts, so check the overlap seconds for clips that only graze a range. The last line
+(`SUMMARY ...`) is meant for scripts.
+
+The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
+checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Edges that were only seen on the 10 s
+sheets are good to about 5 s. The v1 baseline is in [eval/BASELINE.md](eval/BASELINE.md).
+
 ## Known limits (v1)
 
 - ffmpeg's scene score is built to flag *sudden* change (cuts, flashes). Steady fast motion,

@@ -1,0 +1,21 @@
+{
+  "video": "test1.webm",
+  "duration_s": 924.674,
+  "confirmed": "2026-10-22",
+  "method": "Drafted from contact sheets (one frame every 10 s), with pause-map, phone-call and cutscene edges checked on 2.5 s and 0.5 s sheets. Confirmed by the owner, who also supplied the ranges up to 4:10.",
+  "note": "Times are seconds in the source. Ranges are closed intervals. Anything in neither list (walking, calm drives with dialogue) is neutral: it counts against precision but is not a bad pick. Edges not checked on a fine sheet are good to about 5 s.",
+  "action": [
+    {"start_s": 50, "end_s": 70, "note": "0:50-1:10 gun out + carjack (owner)"},
+    {"start_s": 80, "end_s": 120, "note": "1:20-2:00 driving with wanted stars (owner)"},
+    {"start_s": 130, "end_s": 177, "note": "2:10-2:57 shootout at 2:10, wanted stars through 2:57, body on road at 2:50 (owner merged two points into one range)"},
+    {"start_s": 190, "end_s": 250, "note": "3:10-4:10 driving with wanted stars (owner)"},
+    {"start_s": 600, "end_s": 750, "note": "10:00-12:30 yacht chase: Franklin climbs aboard 10:20-10:50, traffic crash 10:30, fight on the yacht 11:40, boom swinging on the bridge 12:00-12:20; ends when the engine dies at 12:30. No wanted stars"}
+  ],
+  "never_pick": [
+    {"start_s": 177.5, "end_s": 182, "kind": "pause_map", "note": "2:57.5-3:02.0 pause-menu map, about 4 s (edges checked at 0.5 s)"},
+    {"start_s": 255, "end_s": 278, "kind": "cutscene", "note": "4:15-4:38 safehouse intro camera, HUD hidden, help text"},
+    {"start_s": 284, "end_s": 486, "kind": "cutscene", "note": "4:44-8:06 family scene, then Michael and Franklin by the pool"},
+    {"start_s": 492, "end_s": 522, "kind": "phone_call", "note": "8:12-8:42 Jimmy calls while Michael walks to the red car"},
+    {"start_s": 891, "end_s": 924.674, "kind": "cutscene", "note": "14:51-end LS Customs cutscene; the last ~5 s is the garage intro camera"}
+  ]
+}
