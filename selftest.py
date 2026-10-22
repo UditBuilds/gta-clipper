@@ -6,7 +6,10 @@ saves one frame per clip as a PNG.
 
 Pass = each planted time has a clip whose highest-scoring step is within 5 s of it and whose
 time range contains it. Every clip must be 1080x1920 with an audio stream, and its length must
-be within the requested range (with a 0.1 s tolerance for frame and AAC rounding).
+be within the requested range (with a 0.1 s tolerance for frame and AAC rounding). The video has
+no GTA V HUD, so clip.py must also switch its HUD rules off by itself.
+
+The HUD detectors are checked on real footage by hudtest.py.
 
 Usage:  python selftest.py [--regen] [extra clip.py flags, e.g. --crop --count 3]
 """
@@ -85,6 +88,10 @@ def main():
     ok = True
 
     print(f"\nRun folder: {run_dir}")
+    hud_state = scores.get("hud", {}).get("state", "missing")
+    hud_off = hud_state.startswith("off")
+    ok &= hud_off
+    print(f"HUD rules: {hud_state} ({'OK, there is no GTA V HUD here' if hud_off else 'BAD, expected off'})")
     print("Planted events:")
     for ev in EVENTS:
         hit = [c for c in clips if abs(c["peak_time_s"] - ev) <= TOLERANCE and c["start_s"] <= ev <= c["end_s"]]
