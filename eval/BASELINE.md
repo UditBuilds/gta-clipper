@@ -48,3 +48,39 @@ test2:
   commentary only: the headline numbers above use the brief's definition.
 - **Bad picks by kind:** pause map 1, phone call 2, cutscene 1. Pause maps and cutscenes hide the minimap.
   Phone calls do not.
+
+# v2 (HUD-aware scoring) compared with the baseline (2026-10-22)
+
+These are the same machine, default flags and CPU decoding, run one at a time. The answer keys are exactly
+as confirmed. Run folders: `test1\20261022-120429` and `test2\20261022-120930`.
+
+| Video | Version | Precision | Recall | Bad picks | Run time |
+|---|---|---|---|---|---|
+| test1 | v1 | 4/5 | 3/5 | 2 (phone call 8:22, pause map 3:00) | 213.7 s |
+| test1 | v2 | 5/5 | 4/5 | 1 (safehouse intro, 3.5 s; see below) | 229.7 s |
+| test2 | v1 | 3/5 | 3/3 | 2 (cutscene 2:36, phone call 18:57) | 278.0 s |
+| test2 | v2 | 3/5 | 2/3 | 1 (phone call 18:57) | 290.3 s |
+
+v2 picks:
+- **test1:** 3:03.5-3:33.5, 1:18.0-1:48.0, 3:48.5-4:18.5, 2:26.0-2:46.0 and 0:48.0-1:08.0. All five are in the
+  wanted-star stretch. The yacht chase (no stars) is missed.
+- **test2:** 0:00-0:20, 4:36.8-4:56.8, 0:39.7-0:59.7, 18:57.6-19:17.6 and 5:06.8-5:26.8. test2 has no wanted
+  stars, so the only change from v1 is that the cutscene pick at 2:36 became a second gang-chase clip.
+
+Notes:
+- **test1's one bad pick is a key-edge effect.** Clip 3 ends at 4:18.5 and overlaps the safehouse-intro range
+  (4:15-4:38) by 3.5 s. That range's start came from the 10 s sheet. Frames at 4:13-4:19 show driving with the
+  minimap and two stars; the intro camera starts between 4:19 and 4:20. With that edge moved to 4:19.5, and the
+  missed pause map below added, a what-if eval gives test1 v2 0 bad picks and v1 still 2. The confirmed key has
+  not been changed.
+- **v2 found a second pause map at test1 2:46.5-2:48.0** that the key is missing. The frame at 2:47 shows the
+  pause menu. No run picks it either way.
+- **test2's recall drops** because the house collapse (2:55-3:35) is partly a scripted camera with the HUD hidden,
+  so v2 excludes 3:19.5-3:35.5. v1 only "hit" it with a cutscene clip that grazed it by 1.8 s.
+- **v2 has no phone-call signal.** The minimap stays up during calls and no stars show. test1's 8:22 call
+  dropped out only because boosted wanted stretches outranked it. test2's 18:57 call is still picked.
+- **Run time** rose 16.0 s on test1 and 12.3 s on test2. Picture analysis (now including the HUD crops) took
+  +8.5 s and +13.6 s. The HUD pixel work in Python took 4.3 s and 5.8 s, overlapped with decoding. On test1, clips
+  got longer (three 30 s clips), adding 7.8 s of encoding.
+- **v1's signals are untouched.** The loudness, picture-change, hard-cut and z-score columns of `timeline.csv`
+  match the v1 runs in every row.
