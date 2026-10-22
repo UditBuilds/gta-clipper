@@ -171,8 +171,9 @@ Any shared time counts, so check the overlap seconds for clips that only graze a
 (`SUMMARY ...`) is meant for scripts.
 
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
-checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Edges that were only seen on the 10 s
-sheets are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELINE.md](eval/BASELINE.md).
+checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
+0.5 s frames; each key's `revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets
+are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELINE.md](eval/BASELINE.md).
 
 ## Known limits
 
@@ -184,8 +185,19 @@ sheets are good to about 5 s. The v1 baseline and the v2 comparison are in [eval
   - GTA 6 will need new boxes and new detectors.
 - **No signal for phone calls.** During a call the minimap stays and no stars show, so v2 neither excludes nor
   boosts a phone call.
-- **Scripted moments hide the HUD too.** The game hides it for some mission set-pieces (seen: the house collapse
-  in Marriage Counseling, a camera shot in the yacht chase). Those stretches are excluded even though they're action.
+- **Short HUD hides inside action are excluded (by decision).** The game hides the HUD for some mission
+  set-pieces, and v2 treats every stretch of 1.5 s or more without the minimap like a cutscene. Seen:
+  - the house collapse in Marriage Counseling (test2 3:19.5-3:35.5)
+  - a 5 s camera shot in the yacht chase (test1 11:10-11:15)
+
+  Those moments can't be clipped, even though they're action. This is why test2's recall fell from 3/3 to 2/3.
+- **The +3.0 wanted-star boost (kept by decision) outweighs most other action.**
+  - Any step with stars outranks almost everything without them.
+  - 4 of the 8 action ranges in the answer keys never show stars: the yacht chase, the house pull, the gang chase,
+    and the crash and car switch. They compete on loudness and picture change alone.
+- **All five test1 picks come from one sequence.** They all sit in the 0:48-4:18 police stretch. The yacht chase
+  (10:00-12:30), which held v1's top two picks, gets none. Picking has no rule yet to spread clips across
+  different action sequences.
 - **The minimap check can be fooled.** It reads the three bars under the minimap. A busy cutscene background can
   look like them for a few seconds, which leaves short gaps in an exclusion. In the two test videos those gaps
   were 5 s or less, too short for a 20 s clip.
