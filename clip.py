@@ -1,10 +1,11 @@
-"""Gameplay auto-clipper v2.
+"""Gameplay auto-clipper v3.
 
 Finds the loudest, busiest moments in a gameplay recording and cuts them into
 vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.
 
 v2 also reads GTA V's HUD (PS5 layout): stretches where the minimap is gone (pause/map screens,
 cutscenes) can't be picked, and steps where wanted stars show get a strong score boost.
+v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips from each.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
 """
@@ -58,6 +59,10 @@ MIN_HIDDEN = 1.5         # seconds the minimap must be missing before that stret
 HIDDEN_PAD = 0.5         # excluded stretches grow this much on each side (menu and cutscene fades)
 STAR_BOOST = 3.0         # added to a step's combined score while wanted stars show
 HUD_MIN_SHARE = 0.2      # minimap seen in less of the video than this: not this HUD, so HUD rules are off
+
+# --- Spreading picks (v3). Chosen before looking at any eval result; not tuned to the test videos. ---
+SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
+MAX_PER_SEQ = 2          # most clips taken from one action sequence
 
 OUT_W, OUT_H = 1080, 1920
 
@@ -321,14 +326,38 @@ def gaussian_smooth(values, sigma_steps):
     return out
 
 
-def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, excluded):
+def action_sequences(combined, excluded):
+    """Sequence number per step (None for quiet and excluded steps), and each sequence's (start_s, end_s).
+
+    A step is active when its combined score reaches MIN_PEAK_SCORE, the score a clip needs somewhere in it.
+    A sequence is a run of active steps; it ends at an excluded stretch or at SEQ_QUIET seconds without an
+    active step. Shorter lulls stay inside the sequence.
+    """
+    seq, spans, last = [None] * len(combined), [], None
+    gap = round(SEQ_QUIET / BUCKET)
+    for i, (c, ex) in enumerate(zip(combined, excluded)):
+        if ex:
+            last = None
+            continue
+        if c < MIN_PEAK_SCORE:
+            continue
+        if last is None or i - last - 1 >= gap:
+            spans.append([i, i])
+        seq[i], spans[-1][1], last = len(spans) - 1, i, i
+    return seq, [(round(a * BUCKET, 2), round((b + 1) * BUCKET, 2)) for a, b in spans]
+
+
+def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, excluded, seq):
     """Greedy: best remaining peak first; each clip keeps min_gap seconds clear on both sides.
 
     Excluded steps (no minimap) are hard walls: no peak inside them, and no clip reaches into them.
+    A clip belongs to the action sequence of its highest-scoring step; once a sequence has MAX_PER_SEQ
+    clips, further peaks in it are skipped.
     """
     n = len(smooth)
     baseline = statistics.median(smooth)
     taken, rejected, notes = [], [False] * n, []
+    per_seq, seq_full = {}, False
     for p in sorted(range(n), key=lambda i: smooth[i], reverse=True):
         if len(taken) >= count:
             break
@@ -370,6 +399,11 @@ def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, e
             for i in range(a, b + 1):
                 rejected[i] = True
             continue
+        q = max(range(a, b + 1), key=lambda i: combined[i])
+        if per_seq.get(seq[q], 0) >= MAX_PER_SEQ:
+            seq_full = True
+            continue
+        per_seq[seq[q]] = per_seq.get(seq[q], 0) + 1
         span_s, span_e = a * BUCKET, min((b + 1) * BUCKET, fb)
         span = span_e - span_s
         length = min(max(span, min_len), max_len, fb - fa)
@@ -387,11 +421,12 @@ def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, e
         start = round(min(max(start, fa), fb - length), 2)
         taken.append({"start_s": start, "end_s": round(start + length, 2), "duration_s": round(length, 2),
                       "smoothed_peak_time_s": round(tp, 2), "smoothed_peak_score": round(smooth[p], 3),
-                      "event_span_s": [round(span_s, 2), round(span_e, 2)]})
+                      "event_span_s": [round(span_s, 2), round(span_e, 2)], "sequence": seq[q] + 1})
     if len(taken) < count:
         notes.append(f"asked for {count} clips, found {len(taken)}: no other stretch had a step scoring "
                      f">= {MIN_PEAK_SCORE} with room for a {min_len:g} s clip and {min_gap:g} s gaps"
-                     + (" outside the stretches with no minimap" if any(excluded) else ""))
+                     + (" outside the stretches with no minimap" if any(excluded) else "")
+                     + (f" in an action sequence with fewer than {MAX_PER_SEQ} clips" if seq_full else ""))
     return taken, baseline, notes
 
 
@@ -424,6 +459,8 @@ def explain(clip, tl, stats):
                  f"(z {peak['visual_z']:.1f}{' capped' if peak['visual_z'] >= Z_CAP else ''})")
     parts.append(f"{clip['hard_changes']} hard cuts/flashes (scene > {HARD_CHANGE}) in clip")
     parts.append(f"event span {hms(clip['event_span_s'][0])}-{hms(clip['event_span_s'][1])}")
+    a, b = stats["sequences"][clip["sequence"] - 1]
+    parts.append(f"action sequence {clip['sequence']} ({hms(a)}-{hms(b)})")
     clip["reason"] = "; ".join(parts)
 
 
@@ -545,14 +582,19 @@ def main():
     # Excluded steps score 0, so they can't pull a smoothed peak towards them either.
     combined = [0.0 if excluded[i] else wa * za[i] + wv * zv[i] + boost[i] for i in range(n)]
     smooth = gaussian_smooth(combined, SMOOTH_SIGMA / BUCKET)
+    seq, seq_spans = action_sequences(combined, excluded)
     tl = [{"time_s": round(i * BUCKET, 2), "loudness_lufs": round(loud[i], 2), "audio_z": za[i],
            "visual_change": round(vis[i], 4), "hard_changes": hard[i], "visual_z": zv[i],
            "combined": combined[i], "smoothed": smooth[i], "star_score": star_sc[i], "stars": stars[i],
-           "minimap": seen[i], "excluded": excluded[i], "star_boost": boost[i]} for i in range(n)]
+           "minimap": seen[i], "excluded": excluded[i], "star_boost": boost[i], "sequence": seq[i]}
+          for i in range(n)]
+    print(f"Action sequences: {len(seq_spans)} (split at {SEQ_QUIET:g} s quiet gaps and excluded stretches); "
+          f"at most {MAX_PER_SEQ} clips each")
 
     clips, baseline, notes = pick_clips(combined, smooth, usable_end, args.count,
-                                        args.min_len, args.max_len, args.min_gap, excluded)
-    stats = {"has_audio": info["has_audio"], "audio_median": a_med, "visual_median": v_med, "hud": hud_on}
+                                        args.min_len, args.max_len, args.min_gap, excluded, seq)
+    stats = {"has_audio": info["has_audio"], "audio_median": a_med, "visual_median": v_med, "hud": hud_on,
+             "sequences": seq_spans}
     for clip in clips:
         explain(clip, tl, stats)
         if clip["excluded_s"] > 0:
@@ -569,7 +611,7 @@ def main():
         name = f"clip_{rank:02d}_{m}m{s:02d}s.mp4"
         clip["rank"], clip["file"] = rank, name
         print(f"  [{rank}] {hms(clip['start_s'])}-{hms(clip['end_s'])} ({clip['duration_s']:.1f} s)  "
-              f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}")
+              f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}  sequence {clip['sequence']}")
         render(ffmpeg, args.video, clip, run_dir / name, args.crop, enc_args, info["has_audio"], range_fix)
     t_encode = time.perf_counter() - t0
 
@@ -583,17 +625,18 @@ def main():
         w = csv.writer(f)
         w.writerow(["time_s", "loudness_lufs", "audio_z", "visual_change", "hard_changes",
                     "visual_z", "combined", "smoothed", "clip",
-                    "star_score", "stars", "minimap", "excluded"])
+                    "star_score", "stars", "minimap", "excluded", "sequence"])
         for i, r in enumerate(tl):
             w.writerow([r["time_s"], r["loudness_lufs"], f"{r['audio_z']:.3f}", r["visual_change"],
                         r["hard_changes"], f"{r['visual_z']:.3f}", f"{r['combined']:.3f}",
                         f"{r['smoothed']:.3f}", in_clip.get(i, ""),
                         "" if r["star_score"] is None else f"{r['star_score']:.3f}",
-                        int(r["stars"]), int(r["minimap"]), int(r["excluded"])])
+                        int(r["stars"]), int(r["minimap"]), int(r["excluded"]),
+                        "" if r["sequence"] is None else r["sequence"] + 1])
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v2",
+        "tool": "gta-clipper v3",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
@@ -607,6 +650,8 @@ def main():
                 "star_boost": STAR_BOOST, "min_share": HUD_MIN_SHARE,
                 "minimap_seen_share": round(seen_share, 4), "stars_share": round(sum(stars) / n, 4),
                 "excluded_s": sum(excluded) * BUCKET, "excluded_ranges_s": excluded_runs},
+        "spread": {"seq_quiet_s": SEQ_QUIET, "max_per_sequence": MAX_PER_SEQ,
+                   "active_score": MIN_PEAK_SCORE, "sequences_s": seq_spans},
         "scoring": {"bucket_s": BUCKET, "audio_weight": wa, "visual_weight": wv, "z_cap": Z_CAP,
                     "audio_scale_floor": AUDIO_SCALE_FLOOR, "visual_scale_floor": VISUAL_SCALE_FLOOR,
                     "loudness_floor_lufs": LOUDNESS_FLOOR, "smooth_sigma_s": SMOOTH_SIGMA,

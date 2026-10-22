@@ -1,4 +1,4 @@
-# gta-clipper (v2)
+# gta-clipper (v3)
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (20-30 s each). Built and tested on Windows 11 for GTA 5 PS5 captures.
@@ -30,6 +30,11 @@ No AI model and no GPU is needed for the analysis. It uses Python's standard lib
 6. Picking is greedy: best moment first, then the next best that doesn't overlap.
    `--min-gap` is the minimum distance from the end of one clip to the start of the next.
    Excluded stretches are hard walls (no gap needed).
+   **Spread (v3):** the video is split into *action sequences*, and at most **2 clips** come from any one
+   sequence. A sequence ends at an excluded stretch, or after **20 s** in which no step reaches the 2.0 floor
+   (step 7). Shorter lulls, like a straight stretch in a chase, stay inside the sequence. A clip belongs to the
+   sequence of its highest-scoring step. Both numbers were chosen before looking at any eval result:
+   20 s is the default shortest clip, so a lull that long holds nothing worth a clip.
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
 
@@ -77,6 +82,8 @@ Each run gets its own folder, so earlier runs are never overwritten:
   the combined and smoothed score, and which clip (if any) covers it. Plot it to tune the scoring.
   v2 appends four columns at the end: `star_score`, `stars`, `minimap` and `excluded`. The earlier columns are
   unchanged, but `combined` now includes the star boost and is 0 in excluded steps.
+  v3 appends `sequence`: the action sequence a step belongs to (empty for quiet and excluded steps).
+  `scores.json` lists the sequences under `spread`, and each clip's `sequence`.
 
 ## Review sheet
 
