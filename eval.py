@@ -5,9 +5,12 @@ never-pick ranges (pause/map screens, cutscenes, phone calls, menus). Ranges are
 source seconds; a range with start == end is a single moment. A clip "hits" a range if they share
 any time at all (clip start <= range end and range start <= clip end).
 
-- precision: picked clips that hit at least one action range, out of the clips actually picked
-- recall:    action ranges hit by at least one clip, out of all action ranges (each range counts once)
-- bad picks: clips that hit any never-pick range
+- overlap precision: picked clips that hit at least one action range, out of the clips actually picked
+- strict precision:  picked clips with at least STRICT_SHARE (50 %) of their length inside action ranges
+                     (inside the union of the ranges, so overlapping ranges are not counted twice)
+- recall:    action ranges hit by at least one clip, out of all action ranges (each range counts once;
+             any shared time counts, as for overlap precision)
+- bad picks: clips that hit any never-pick range (any shared time)
 
 Per-clip overlap seconds are printed too, so a clip that only grazes a range by a second stands out.
 The last line starts with SUMMARY and is meant to be parsed.
@@ -24,6 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KEY_DIR = HERE / "eval" / "answer_keys"
 DURATION_TOL = 1.0  # seconds; warn if the run's input and the key disagree by more
+STRICT_SHARE = 0.5  # share of a clip's length that must be inside action ranges for a strict hit
 
 
 def hms(seconds):
@@ -44,6 +48,18 @@ def hits(clip, ranges):
             for i, r in enumerate(ranges) if s <= r["end_s"] and r["start_s"] <= e]
 
 
+def inside(clip, ranges):
+    """Seconds of the clip that lie inside the union of the ranges."""
+    merged = []
+    for r in sorted(ranges, key=lambda r: r["start_s"]):
+        if merged and r["start_s"] <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], r["end_s"])
+        else:
+            merged.append([r["start_s"], r["end_s"]])
+    s, e = clip["start_s"], clip["end_s"]
+    return sum(max(0.0, min(e, b) - max(s, a)) for a, b in merged)
+
+
 def evaluate(scores, key):
     clips = sorted(scores["clips"], key=lambda c: c["rank"])
     action, never = key["action"], key["never_pick"]
@@ -51,11 +67,15 @@ def evaluate(scores, key):
     for c in clips:
         a, n = hits(c, action), hits(c, never)
         ranges_hit.update(i for i, _ in a)
-        rows.append({"clip": c, "action": a, "never": n})
+        length = c["end_s"] - c["start_s"]
+        ins = inside(c, action)
+        rows.append({"clip": c, "action": a, "never": n, "inside_s": ins,
+                     "strict": length > 0 and ins >= STRICT_SHARE * length})
     return {
         "rows": rows,
         "n_clips": len(clips),
         "n_action_clips": sum(1 for r in rows if r["action"]),
+        "n_strict": sum(1 for r in rows if r["strict"]),
         "n_ranges": len(action),
         "ranges_hit": ranges_hit,
         "n_bad": sum(1 for r in rows if r["never"]),
@@ -98,9 +118,14 @@ def main():
         c = r["clip"]
         a = ", ".join(f"A{i + 1} {span(action[i])} ({ov:.1f} s)" for i, ov in r["action"]) or "-"
         n = ", ".join(f"N{i + 1} {never[i]['kind']} {span(never[i])} ({ov:.1f} s)" for i, ov in r["never"])
-        verdict = ("action" if r["action"] else "no action") + (", BAD" if r["never"] else "")
+        verdict = (("strict hit" if r["strict"] else "action, under half") if r["action"] else "no action") \
+            + (", BAD" if r["never"] else "")
+        length = c["end_s"] - c["start_s"]
         print(f"  [{c['rank']}] {hms(c['start_s'])}-{hms(c['end_s'])}  {verdict}")
         print(f"      action: {a}")
+        print(f"      inside action ranges: {r['inside_s']:.1f} of {length:.1f} s "
+              f"({r['inside_s'] / length:.0%}; strict hit needs {STRICT_SHARE:.0%})" if length > 0 else
+              "      inside action ranges: zero-length clip")
         if n:
             print(f"      never-pick: {n}")
     print("\nAction ranges:")
@@ -109,12 +134,15 @@ def main():
         got = "clip " + ", ".join(map(str, by)) if by else "MISSED"
         print(f"  A{i + 1} {span(rng):>15}  {got:<12} {rng['note']}")
 
-    print(f"\nPrecision: {ratio(res['n_action_clips'], res['n_clips'])} picked clips hit an action range")
-    print(f"Recall:    {ratio(len(res['ranges_hit']), res['n_ranges'])} action ranges got a clip")
+    print(f"\nOverlap precision: {ratio(res['n_action_clips'], res['n_clips'])} picked clips touch an action range")
+    print(f"Strict precision:  {ratio(res['n_strict'], res['n_clips'])} picked clips are at least "
+          f"{STRICT_SHARE:.0%} inside action ranges")
+    print(f"Recall:    {ratio(len(res['ranges_hit']), res['n_ranges'])} action ranges got a clip (any overlap)")
     print(f"Bad picks: {res['n_bad']} clip(s) hit a never-pick range")
     total = scores.get("timing_s", {}).get("total")
     print(f"SUMMARY video={Path(video).stem} run={args.run_dir.name} tool=\"{scores.get('tool', '?')}\" "
           f"clips={res['n_clips']} precision={res['n_action_clips']}/{res['n_clips']} "
+          f"strict={res['n_strict']}/{res['n_clips']} "
           f"recall={len(res['ranges_hit'])}/{res['n_ranges']} bad={res['n_bad']} "
           f"runtime_s={total if total is not None else 'na'}")
 

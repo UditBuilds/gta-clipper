@@ -163,12 +163,13 @@ Everything else is neutral. Times are seconds in the source.
 ```
 
 It lists each clip with the ranges it touches and by how many seconds, then prints:
-- **precision:** picked clips that touch an action range, out of the clips picked
-- **recall:** action ranges touched by at least one clip, out of all action ranges
-- **bad picks:** clips that touch a never-pick range
+- **overlap precision:** picked clips that touch an action range at all, out of the clips picked
+- **strict precision:** picked clips with at least 50 % of their length inside action ranges, out of the clips picked
+- **recall:** action ranges touched by at least one clip, out of all action ranges (any shared time counts)
+- **bad picks:** clips that touch a never-pick range (any shared time counts)
 
-Any shared time counts, so check the overlap seconds for clips that only graze a range. The last line
-(`SUMMARY ...`) is meant for scripts.
+Overlap precision counts a clip that only grazes an action range by a second; strict precision doesn't. The last
+line (`SUMMARY ...`) is meant for scripts: `precision=` is overlap precision and `strict=` is strict precision.
 
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
