@@ -8,7 +8,10 @@ cutscenes) can't be picked, and steps where wanted stars show get a strong score
 v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips from each, and treats the
 phone's call screen like a missing minimap: stretches with it can't be picked.
 
+The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
+
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
+                       [--cpu-decode]
 """
 
 import argparse
@@ -109,12 +112,17 @@ def probe(ffprobe, video):
     v = vstreams[0]
     num, _, den = v.get("avg_frame_rate", "0/1").partition("/")
     fps = float(num) / float(den) if float(den or 0) else 0.0
+    # Container-level cropping (PS5 .webm: 1920x1088 stored, bottom 8 rows cropped). The CPU decoder applies
+    # it; GPU frames come out uncropped, so the GPU path crops them itself.
+    crop = next((sd for sd in v.get("side_data_list", []) if sd.get("side_data_type") == "Frame Cropping"), {})
     return {
         "duration": float(info["format"]["duration"]),
         "width": int(v["width"]),
         "height": int(v["height"]),
         "fps": round(fps, 3),
         "video_codec": v.get("codec_name"),
+        "pix_fmt": v.get("pix_fmt"),
+        "container_crop": {k: int(crop.get("crop_" + k, 0)) for k in ("top", "bottom", "left", "right")},
         "color_transfer": v.get("color_transfer"),
         "color_range": v.get("color_range"),
         "has_audio": any(s.get("codec_type") == "audio" for s in streams),
@@ -279,25 +287,60 @@ def phone_seen(rgb):
             and m["panel_max"] - m["panel_min"] <= PHONE_PANEL_SPREAD and m["panel_tint"] <= PHONE_PANEL_TINT)
 
 
-def analyse_video(ffmpeg, video, info, range_fix):
-    """One decode for both picture signals.
+GPU_INPUT = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]  # decode on the GPU, frames stay there
+GPU_DOWNLOAD = {"yuv420p": "nv12"}  # CPU decoder's pixel format -> what GPU frames download as (only 8-bit tested)
+
+
+def gpu_download(info):
+    """Filters that turn a GPU frame into exactly the frame the CPU decoder would give.
+
+    Copied to the CPU, cropped like the CPU decoder crops (container cropping), then repacked into the
+    CPU decoder's pixel format. Repacking nv12 -> yuv420p moves bytes without changing any value.
+    """
+    c = info["container_crop"]
+    crop = (f"crop={info['width'] - c['left'] - c['right']}:{info['height'] - c['top'] - c['bottom']}:"
+            f"{c['left']}:{c['top']}," if any(c.values()) else "")
+    return f"hwdownload,format={GPU_DOWNLOAD[info['pix_fmt']]},{crop}format={info['pix_fmt']}"
+
+
+def pick_decoder(ffmpeg, video, info, force_cpu):
+    """('cuda' or 'cpu', why). GPU if a 1-frame test decode through the same download chain works."""
+    if force_cpu:
+        return "cpu", "--cpu-decode"
+    if info["pix_fmt"] not in GPU_DOWNLOAD:
+        return "cpu", f"pixel format {info['pix_fmt']} has no GPU path here"
+    test = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error"] + GPU_INPUT
+                          + ["-i", str(video), "-frames:v", "1", "-an", "-vf", gpu_download(info), "-f", "null", "-"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if test.returncode != 0:
+        last = (test.stderr.strip().splitlines() or ["no error text"])[-1]
+        return "cpu", f"GPU test decode failed: {last}"
+    return "cuda", "GPU test decode worked"
+
+
+def analyse_video(ffmpeg, video, info, range_fix, decoder):
+    """One decode for both picture signals, on the GPU (decoder 'cuda') or the CPU.
 
     Returns the frame-to-frame change score (0..1) on small frames at ANALYSIS_FPS, the HUD samples
-    (time, star score, minimap seen, phone seen) at HUD_FPS, and the seconds spent on HUD pixel work.
+    (time, star score, minimap seen, phone seen) at HUD_FPS, the seconds spent on HUD pixel work, and
+    ffmpeg's error text (None on success).
     """
+    # GPU frames are only copied to the CPU after fps= has dropped all but the frames the analysis uses.
+    dl = gpu_download(info) + "," if decoder == "cuda" else ""
     graph = (f"[0:v:0]split=2[vs][vh];"
-             f"[vs]fps={ANALYSIS_FPS},scale={ANALYSIS_WIDTH}:-2,"
+             f"[vs]fps={ANALYSIS_FPS},{dl}scale={ANALYSIS_WIDTH}:-2,"
              f"select='gte(scene,0)',metadata=print:key=lavfi.scene_score:file=scene.txt[scene];"
-             f"[vh]fps={HUD_FPS},{hud_filter(info, range_fix)}[hud]")
+             f"[vh]fps={HUD_FPS},{dl}{hud_filter(info, range_fix)}[hud]")
     hud, t_px = [], 0.0
     with tempfile.TemporaryDirectory() as tmp:
         # The scene scores go to a file in tmp (relative path: no drive-letter escaping in the filter),
         # the HUD crops come through stdout and are scored as they arrive.
         with open(Path(tmp) / "stderr.txt", "w+", encoding="utf-8", errors="replace") as err:
-            proc = subprocess.Popen([ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error",
-                                     "-i", str(video.resolve()), "-filter_complex", graph,
-                                     "-map", "[scene]", "-f", "null", "-",
-                                     "-map", "[hud]", "-f", "rawvideo", "pipe:1"],
+            proc = subprocess.Popen([ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error"]
+                                    + (GPU_INPUT if decoder == "cuda" else [])
+                                    + ["-i", str(video.resolve()), "-filter_complex", graph,
+                                       "-map", "[scene]", "-f", "null", "-",
+                                       "-map", "[hud]", "-f", "rawvideo", "pipe:1"],
                                     stdout=subprocess.PIPE, stderr=err, cwd=tmp)
             while True:
                 raw = proc.stdout.read(HUD_FRAME_BYTES)
@@ -310,9 +353,9 @@ def analyse_video(ffmpeg, video, info, range_fix):
             if proc.wait() != 0:
                 err.seek(0)
                 tail = "\n".join(err.read().strip().splitlines()[-15:])
-                fail(f"picture analysis failed ({proc.returncode}):\n{tail}")
+                return None, None, t_px, f"picture analysis failed ({proc.returncode}):\n{tail}"
         text = (Path(tmp) / "scene.txt").read_text(encoding="utf-8", errors="replace")
-    return parse_metadata(text, "lavfi.scene_score"), hud, t_px
+    return parse_metadata(text, "lavfi.scene_score"), hud, t_px, None
 
 
 def hud_steps(hud, n):
@@ -572,6 +615,8 @@ def main():
     ap.add_argument("--crop", action="store_true", help="plain centre crop instead of blurred background")
     ap.add_argument("--no-hud", action="store_true",
                     help="ignore the GTA V HUD (no exclusions, no wanted-star boost): scores like v1")
+    ap.add_argument("--cpu-decode", action="store_true",
+                    help="decode on the CPU even if the GPU can (the scores are the same; for comparisons)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output root (default {DEFAULT_OUT})")
     args = ap.parse_args()
 
@@ -611,8 +656,16 @@ def main():
     t_audio = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    print("Analysing picture changes and HUD...")
-    scene, hud, t_hud_px = analyse_video(ffmpeg, args.video, info, range_fix)
+    decoder, why = pick_decoder(ffmpeg, args.video, info, args.cpu_decode)
+    print(f"Analysing picture changes and HUD, decoding on the {'GPU (cuda)' if decoder == 'cuda' else 'CPU'} "
+          f"({why})...")
+    scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder)
+    if err and decoder == "cuda":
+        print("WARNING: GPU decoding failed partway; running the picture analysis again on the CPU.\n" + err)
+        decoder, why = "cpu", "GPU decode failed partway: " + err.splitlines()[-1]
+        scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder)
+    if err:
+        fail(err)
     vis = bucketize(scene, n, statistics.mean, 0.0)
     hard = bucketize(scene, n, lambda g: sum(1 for v in g if v > HARD_CHANGE), 0)
     t_video = time.perf_counter() - t0
@@ -703,7 +756,8 @@ def main():
         "input": str(args.video.resolve()),
         "input_info": info,
         "settings": {"count": args.count, "min_len": args.min_len, "max_len": args.max_len,
-                     "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder},
+                     "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder,
+                     "decoder": decoder, "decoder_reason": why},
         "hud": {"state": hud_state, "reference_size": [HUD_REF_W, HUD_REF_H], "samples_per_s": HUD_FPS,
                 "star_box": STAR_BOX, "star_tips_x": STAR_TIPS_X, "star_tip_y": STAR_TIP_Y,
                 "star_radius": STAR_RADIUS, "star_inner": STAR_INNER, "star_min_score": STAR_MIN_SCORE,
@@ -733,8 +787,8 @@ def main():
         "clips": clips,
     }
     (run_dir / "scores.json").write_text(json.dumps(scores, indent=2), encoding="utf-8")
-    print(f"Done in {total:.1f} s (audio {t_audio:.1f}, picture {t_video:.1f}, encode {t_encode:.1f}). "
-          f"Scores: {run_dir / 'scores.json'}")
+    print(f"Done in {total:.1f} s (audio {t_audio:.1f}, picture {t_video:.1f} decoded on "
+          f"{'GPU' if decoder == 'cuda' else 'CPU'}, encode {t_encode:.1f}). Scores: {run_dir / 'scores.json'}")
 
 
 if __name__ == "__main__":

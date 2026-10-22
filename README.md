@@ -3,7 +3,8 @@
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (20-30 s each). Built and tested on Windows 11 for GTA 5 PS5 captures.
 
-No AI model and no GPU is needed for the analysis. It uses Python's standard library plus ffmpeg.
+No AI model is needed for the analysis. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
+for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required.
 
 ## How it picks moments
 
@@ -70,9 +71,24 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--min-gap` | 10 | seconds between the end of one clip and the start of the next |
 | `--crop` | off | plain centre crop instead of the full frame over a blurred background (cuts off the minimap) |
 | `--no-hud` | off | ignore the GTA V HUD: no exclusions and no star boost, so it scores like v1 |
+| `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
+
+### GPU decoding
+
+The picture analysis is the slow part: it decodes every frame of the video. v3 decodes on the GPU
+(`-hwaccel cuda`, NVIDIA's NVDEC) when a 1-frame test decode works, and on the CPU otherwise. The run prints which
+it used and why, and `scores.json` records it under `settings.decoder` and `settings.decoder_reason`. If GPU
+decoding fails partway through, the analysis runs again on the CPU, with a WARNING.
+
+The decoded frames stay on the GPU until `fps=` has dropped all but the 10 + 2 per second that are analysed.
+Only those are copied back, then cropped and repacked so they are byte-for-byte the frames the CPU decoder gives.
+That last step matters for PS5 captures: the `.webm` stores 1920x1088 and tells players to crop the bottom 8 rows.
+The CPU decoder does that crop, but GPU frames come back uncropped, and the extra rows would change every
+picture-change score. Only 8-bit 4:2:0 video (`yuv420p`) takes the GPU path; anything else decodes on the CPU.
+Clip encoding is unchanged.
 
 ## Output
 
