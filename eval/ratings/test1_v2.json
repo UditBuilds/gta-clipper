@@ -1,0 +1,16 @@
+{
+  "video": "test1.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-22",
+  "run": "test1/20261022-120429",
+  "tool": "gta-clipper v2",
+  "method": "The owner watched the five v2 clips and said which he would post. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The two 'not postable' reasons were given together for both clips, so both entries carry the same words.",
+  "clips": [
+    {"start_s": 183.5, "end_s": 213.5, "span": "3:03.5-3:33.5", "postable": true, "reason": "no reason given"},
+    {"start_s": 78.0, "end_s": 108.0, "span": "1:18.0-1:48.0", "postable": true, "reason": "no reason given"},
+    {"start_s": 228.5, "end_s": 258.5, "span": "3:48.5-4:18.5", "postable": true, "reason": "no reason given"},
+    {"start_s": 146.0, "end_s": 166.0, "span": "2:26.0-2:46.0", "postable": false, "reason": "boring, bad cut (given for this clip and 0:48.0-1:08.0 together)"},
+    {"start_s": 48.0, "end_s": 68.0, "span": "0:48.0-1:08.0", "postable": false, "reason": "boring, bad cut (given for this clip and 2:26.0-2:46.0 together)"}
+  ]
+}

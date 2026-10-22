@@ -1,9 +1,10 @@
-# gta-clipper (v2)
+# gta-clipper (v3)
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (20-30 s each). Built and tested on Windows 11 for GTA 5 PS5 captures.
 
-No AI model and no GPU is needed for the analysis. It uses Python's standard library plus ffmpeg.
+No AI model is needed for the analysis. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
+for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required.
 
 ## How it picks moments
 
@@ -18,6 +19,11 @@ No AI model and no GPU is needed for the analysis. It uses Python's standard lib
    - **Wanted stars.** The star row's edges are compared with the outline of the five star slots. This matches
      filled, empty and flashing stars, but not the ammo or cash text that sits in that row when you're not wanted.
      Steps where stars show (2 of 3 neighbouring samples) get **+3.0** added to their score.
+   - **Phone (v3).** The bottom-right corner is checked for Michael's phone showing a call (the iFruit call
+     screen). Three parts must all match: the black face of the phone above the status bar, the bright battery
+     icon in the status bar, and the even grey call panel on either side of the logo. ffmpeg averages that corner
+     into 8x4-pixel cells first, so this costs little. A stretch of 1.5 s or more with the phone up is
+     **excluded**, exactly like a missing minimap (same 0.5 s growth on each side).
    - If the bars show in less than 20 % of the video, it isn't this HUD (another game, or a different layout or
      resolution). The HUD rules then switch off with a WARNING, and scoring is loudness + picture change as in v1.
      `--no-hud` switches them off by hand.
@@ -30,6 +36,11 @@ No AI model and no GPU is needed for the analysis. It uses Python's standard lib
 6. Picking is greedy: best moment first, then the next best that doesn't overlap.
    `--min-gap` is the minimum distance from the end of one clip to the start of the next.
    Excluded stretches are hard walls (no gap needed).
+   **Spread (v3):** the video is split into *action sequences*, and at most **2 clips** come from any one
+   sequence. A sequence ends at an excluded stretch, or after **20 s** in which no step reaches the 2.0 floor
+   (step 7). Shorter lulls, like a straight stretch in a chase, stay inside the sequence. A clip belongs to the
+   sequence of its highest-scoring step. Both numbers were chosen before looking at any eval result:
+   20 s is the default shortest clip, so a lull that long holds nothing worth a clip.
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
 
@@ -60,9 +71,24 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--min-gap` | 10 | seconds between the end of one clip and the start of the next |
 | `--crop` | off | plain centre crop instead of the full frame over a blurred background (cuts off the minimap) |
 | `--no-hud` | off | ignore the GTA V HUD: no exclusions and no star boost, so it scores like v1 |
+| `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
+
+### GPU decoding
+
+The picture analysis is the slow part: it decodes every frame of the video. v3 decodes on the GPU
+(`-hwaccel cuda`, NVIDIA's NVDEC) when a 1-frame test decode works, and on the CPU otherwise. The run prints which
+it used and why, and `scores.json` records it under `settings.decoder` and `settings.decoder_reason`. If GPU
+decoding fails partway through, the analysis runs again on the CPU, with a WARNING.
+
+The decoded frames stay on the GPU until `fps=` has dropped all but the 10 + 2 per second that are analysed.
+Only those are copied back, then cropped and repacked so they are byte-for-byte the frames the CPU decoder gives.
+That last step matters for PS5 captures: the `.webm` stores 1920x1088 and tells players to crop the bottom 8 rows.
+The CPU decoder does that crop, but GPU frames come back uncropped, and the extra rows would change every
+picture-change score. Only 8-bit 4:2:0 video (`yuv420p`) takes the GPU path; anything else decodes on the CPU.
+Clip encoding is unchanged.
 
 ## Output
 
@@ -77,6 +103,10 @@ Each run gets its own folder, so earlier runs are never overwritten:
   the combined and smoothed score, and which clip (if any) covers it. Plot it to tune the scoring.
   v2 appends four columns at the end: `star_score`, `stars`, `minimap` and `excluded`. The earlier columns are
   unchanged, but `combined` now includes the star boost and is 0 in excluded steps.
+  v3 appends `sequence`: the action sequence a step belongs to (empty for quiet and excluded steps), then
+  `phone` (1 while the phone's call screen shows). `excluded` now covers the phone stretches too.
+  `scores.json` lists the sequences under `spread`, each clip's `sequence`, and the phone stretches under
+  `hud.phone_ranges_s`.
 
 ## Review sheet
 
@@ -107,16 +137,21 @@ fake minimap and a timecode, a quiet noise bed, and loud bursts plus white flash
 
 It also saves one frame per clip in the run's `frames\` folder, so you can check the layout.
 
-The HUD detectors are checked on real frames of the owner's test1.webm, which is not in the repo:
+The HUD detectors are checked on real frames of the owner's test1.webm and test2.webm, which are not in the repo:
 
 ```powershell
-.\.venv\Scripts\python.exe hudtest.py            # default C:\AI\gta\input\test1.webm
+.\.venv\Scripts\python.exe hudtest.py            # defaults C:\AI\gta\input\test1.webm and test2.webm
 ```
 
-- 3:00 (pause map): the minimap must read as absent.
-- 2:50 (wanted): stars must read as present.
-- 8:30 (phone call): stars absent, minimap present.
-- Two extra calibration frames: the minimap flashing red, and the ammo counter in the star row.
+- test1 3:00 (pause map): the minimap must read as absent.
+- test1 2:50 (wanted): stars present, phone absent.
+- test1 8:30 (phone call): stars absent, minimap present.
+- test1 8:20 and test2 18:57 (phone calls): phone present.
+- Four extra calibration frames: the minimap flashing red, the ammo counter in the star row, and two more calls
+  (test2 4:10 and 12:10).
+
+All the phone frames were used to set the phone check, so these are regression checks. The check was then run on
+every 0.5 s of both videos; see `eval/BASELINE.md`.
 
 If the footage is missing, it prints SKIP and exits with code 2. It never reports a pass without the footage.
 
@@ -163,17 +198,28 @@ Everything else is neutral. Times are seconds in the source.
 ```
 
 It lists each clip with the ranges it touches and by how many seconds, then prints:
-- **precision:** picked clips that touch an action range, out of the clips picked
-- **recall:** action ranges touched by at least one clip, out of all action ranges
-- **bad picks:** clips that touch a never-pick range
+- **overlap precision:** picked clips that touch an action range at all, out of the clips picked
+- **strict precision:** picked clips with at least 50 % of their length inside action ranges, out of the clips picked
+- **recall:** action ranges touched by at least one clip, out of all action ranges (any shared time counts)
+- **bad picks:** clips that touch a never-pick range (any shared time counts)
+- **postable:** clips the owner rated postable, out of the clips picked, e.g. `3/5 (0 unrated)`
 
-Any shared time counts, so check the overlap seconds for clips that only graze a range. The last line
-(`SUMMARY ...`) is meant for scripts.
+Overlap precision counts a clip that only grazes an action range by a second; strict precision doesn't. The last
+line (`SUMMARY ...`) is meant for scripts: `precision=` is overlap precision and `strict=` is strict precision.
+
+**Owner ratings** live in `eval/ratings/<video>_<version>.json`. Each rated clip is stored by its time range in the
+source (not its clip number) with `postable` true/false and the owner's reason. eval.py reads every ratings file for
+the video. A clip from any run reuses a rating only if the two time ranges share at least 80 % of the longer one,
+so each covers 80 % of the other. Otherwise it shows as `unrated`. A rating is about the cut as well as the
+content ("bad cut"), so a 20 s clip inside a rated 30 s clip stays unrated.
 
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
 0.5 s frames; each key's `revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets
-are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELINE.md](eval/BASELINE.md).
+are good to about 5 s. The v1 baseline and the v2 and v3 comparisons are in [eval/BASELINE.md](eval/BASELINE.md).
+
+v3 on the two test videos: 0 bad picks in both, postable 4/5 (test1) and 3/5 (test2). With GPU decoding, full runs
+took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was byte-identical either way.
 
 ## Known limits
 
@@ -183,21 +229,35 @@ are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELI
   - A different in-game safe-zone/HUD-size setting moves the HUD and breaks the boxes. The 20 % guard then turns
     the rules off.
   - GTA 6 will need new boxes and new detectors.
-- **No signal for phone calls.** During a call the minimap stays and no stars show, so v2 neither excludes nor
-  boosts a phone call.
+- **The phone check only knows Michael's iFruit call screen.** It was set on four calls, all on Michael's phone.
+  Franklin's and Trevor's phones look different, and so do the phone's other screens (contacts, texts, camera).
+  None of those are in the test footage, so they would not be excluded.
+- **A call with no phone on screen isn't seen.** In test2 10:53-11:02 a scripted call carries on into gameplay
+  with Michael holding the phone to his ear and no phone on screen.
+- **The exclusion follows the phone, not the conversation.** The answer keys' phone-call ranges start or end up
+  to about 1.5 s before or after the phone is on screen (dialogue before it slides up, or after it's gone). The
+  exclusion is the phone's time on screen plus 0.5 s each side, so a clip can touch a key's phone range by
+  about 1 s.
+- **The phone rule also removes action that happens during a call.** In test2 the car crashes into a lamp post
+  (19:07.5-19:09.5) while the call screen is still up, so the crash is excluded. v2's clip of it was rated
+  postable by the owner. v3 picks the house pull instead, and the 19:09-19:55 action range gets no clip.
 - **Short HUD hides inside action are excluded (by decision).** The game hides the HUD for some mission
   set-pieces, and v2 treats every stretch of 1.5 s or more without the minimap like a cutscene. Seen:
   - the house collapse in Marriage Counseling (test2 3:19.5-3:35.5)
   - a 5 s camera shot in the yacht chase (test1 11:10-11:15)
 
-  Those moments can't be clipped, even though they're action. This is why test2's recall fell from 3/3 to 2/3.
+  Those moments can't be clipped, even though they're action. In v2 this cost test2's house-pull range. v3 clips
+  the pull up to 3:19.5, cut half a second before the house falls.
 - **The +3.0 wanted-star boost (kept by decision) outweighs most other action.**
   - Any step with stars outranks almost everything without them.
   - 4 of the 8 action ranges in the answer keys never show stars: the yacht chase, the house pull, the gang chase,
     and the crash and car switch. They compete on loudness and picture change alone.
-- **All five test1 picks come from one sequence.** They all sit in the 0:48-4:18 police stretch. The yacht chase
-  (10:00-12:30), which held v1's top two picks, gets none. Picking has no rule yet to spread clips across
-  different action sequences.
+- **A pause map splits a sequence.** Any excluded stretch ends an action sequence, even a 2 s pause map in the
+  middle of a chase. test1's two pause maps cut its police stretch into three sequences. So that stretch still gives
+  4 of the 5 picks (2 + 0 + 2), even with the cap of 2 per sequence. The fifth pick now goes to the yacht chase,
+  which v2 missed.
+- **Strict precision can't see a bad cut.** Both clips the owner rejected in test1 ("boring, bad cut") sit fully
+  inside action ranges, so they count as strict hits. Only the owner's ratings catch them.
 - **The minimap check can be fooled.** It reads the three bars under the minimap. A busy cutscene background can
   look like them for a few seconds, which leaves short gaps in an exclusion. In the two test videos those gaps
   were 5 s or less, too short for a 20 s clip.

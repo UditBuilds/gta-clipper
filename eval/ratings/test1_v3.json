@@ -1,0 +1,12 @@
+{
+  "video": "test1.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-22",
+  "run": "test1/20261022-130115",
+  "tool": "gta-clipper v3",
+  "method": "The owner rated the v3 clips that no earlier rating covered. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "Only the newly rated clip is stored here. The other four v3 clips match v2 clips exactly and reuse eval/ratings/test1_v2.json.",
+  "clips": [
+    {"start_s": 720.2, "end_s": 740.2, "span": "12:00.2-12:20.2", "postable": true, "reason": "great chase"}
+  ]
+}

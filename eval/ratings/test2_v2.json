@@ -1,0 +1,16 @@
+{
+  "video": "test2.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-22",
+  "run": "test2/20261022-120930",
+  "tool": "gta-clipper v2",
+  "method": "The owner watched the five v2 clips and said which he would post. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The 'not postable' reason was given together for 0:00.0-0:20.0 and 0:39.7-0:59.7, so both entries carry the same words. 18:57.6-19:17.6 is mostly a phone call (a never-pick range in the answer key) followed by the 19:10 crash; the owner rated it postable.",
+  "clips": [
+    {"start_s": 0.0, "end_s": 20.0, "span": "0:00.0-0:20.0", "postable": false, "reason": "clumsy crashes (crashing right after leaving the house; a bus pulling out and causing a crash) (given for this clip and 0:39.7-0:59.7 together)"},
+    {"start_s": 276.8, "end_s": 296.8, "span": "4:36.8-4:56.8", "postable": true, "reason": "no reason given"},
+    {"start_s": 39.7, "end_s": 59.7, "span": "0:39.7-0:59.7", "postable": false, "reason": "clumsy crashes (crashing right after leaving the house; a bus pulling out and causing a crash) (given for this clip and 0:00.0-0:20.0 together)"},
+    {"start_s": 1137.6, "end_s": 1157.6, "span": "18:57.6-19:17.6", "postable": true, "reason": "no reason given"},
+    {"start_s": 306.8, "end_s": 326.8, "span": "5:06.8-5:26.8", "postable": true, "reason": "no reason given"}
+  ]
+}
