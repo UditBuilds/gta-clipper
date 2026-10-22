@@ -168,8 +168,16 @@ It lists each clip with the ranges it touches and by how many seconds, then prin
 - **recall:** action ranges touched by at least one clip, out of all action ranges (any shared time counts)
 - **bad picks:** clips that touch a never-pick range (any shared time counts)
 
+- **postable:** clips the owner rated postable, out of the clips picked, e.g. `3/5 (0 unrated)`
+
 Overlap precision counts a clip that only grazes an action range by a second; strict precision doesn't. The last
 line (`SUMMARY ...`) is meant for scripts: `precision=` is overlap precision and `strict=` is strict precision.
+
+**Owner ratings** live in `eval/ratings/<video>_<version>.json`. Each rated clip is stored by its time range in the
+source (not its clip number) with `postable` true/false and the owner's reason. eval.py reads every ratings file for
+the video. A clip from any run reuses a rating only if the two time ranges share at least 80 % of the longer one,
+so each covers 80 % of the other. Otherwise it shows as `unrated`. A rating is about the cut as well as the
+content ("bad cut"), so a 20 s clip inside a rated 30 s clip stays unrated.
 
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
