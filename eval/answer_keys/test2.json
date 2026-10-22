@@ -1,0 +1,25 @@
+{
+  "video": "test2.webm",
+  "duration_s": 1249.732,
+  "confirmed": "2026-10-22",
+  "method": "Drafted from contact sheets (one frame every 10 s), with pause-map, phone-call and cutscene edges checked on 2.5 s sheets. Confirmed by the owner.",
+  "note": "Times are seconds in the source. Ranges are closed intervals. Anything in neither list is neutral: it counts against precision but is not a bad pick. The 0:00-1:00 'follow the tennis coach' tail is deliberately neutral (owner). Edges not checked on a fine sheet are good to about 5 s.",
+  "action": [
+    {"start_s": 175, "end_s": 215, "note": "2:55-3:35 truck winch pulls the house off the hillside; it collapses 3:20-3:30"},
+    {"start_s": 275, "end_s": 380, "note": "4:35-6:20 gang chase: 'eses right behind us' 4:35, Franklin's slow-mo 4:50, drive-by aim prompts 5:00-5:10, fleeing, 'I think you slipped 'em' 6:20. No wanted stars"},
+    {"start_s": 1149, "end_s": 1195, "note": "19:09-19:55 crash into a lamp post 19:10, switches to a Coquette around 19:25, fast driving to 19:50"}
+  ],
+  "never_pick": [
+    {"start_s": 104, "end_s": 164, "kind": "cutscene", "note": "1:44-2:44 tennis coach on the balcony"},
+    {"start_s": 242, "end_s": 274, "kind": "phone_call", "note": "4:02-4:34 Madrazo call while driving"},
+    {"start_s": 467, "end_s": 625, "kind": "cutscene", "note": "7:47-10:25 Madrazo at Michael's house"},
+    {"start_s": 625, "end_s": 638, "kind": "menu", "note": "10:25-10:38 'Mission passed' screen"},
+    {"start_s": 638, "end_s": 662, "kind": "cutscene", "note": "10:38-11:02 phone-call cutscene; the call carries on into gameplay until about 11:02"},
+    {"start_s": 677.5, "end_s": 702.5, "kind": "pause_map", "note": "11:17.5-11:42.5 pause-menu map"},
+    {"start_s": 717.5, "end_s": 746, "kind": "phone_call", "note": "11:57.5-12:26 Dr. Friedlander call while driving"},
+    {"start_s": 835, "end_s": 915, "kind": "cutscene", "note": "13:55-15:15 Lester's house"},
+    {"start_s": 1035, "end_s": 1115, "kind": "menu", "note": "17:15-18:35 clothes shop, shop menus with HUD hidden (owner: never-pick)"},
+    {"start_s": 1128, "end_s": 1149, "kind": "phone_call", "note": "18:48-19:09 Lester call while driving; ends right before the 19:10 crash"},
+    {"start_s": 1205, "end_s": 1235, "kind": "cutscene", "note": "20:05-20:35 Lifeinvader entrance"}
+  ]
+}
