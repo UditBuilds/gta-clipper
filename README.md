@@ -18,6 +18,11 @@ No AI model and no GPU is needed for the analysis. It uses Python's standard lib
    - **Wanted stars.** The star row's edges are compared with the outline of the five star slots. This matches
      filled, empty and flashing stars, but not the ammo or cash text that sits in that row when you're not wanted.
      Steps where stars show (2 of 3 neighbouring samples) get **+3.0** added to their score.
+   - **Phone (v3).** The bottom-right corner is checked for Michael's phone showing a call (the iFruit call
+     screen). Three parts must all match: the black face of the phone above the status bar, the bright battery
+     icon in the status bar, and the even grey call panel on either side of the logo. ffmpeg averages that corner
+     into 8x4-pixel cells first, so this costs little. A stretch of 1.5 s or more with the phone up is
+     **excluded**, exactly like a missing minimap (same 0.5 s growth on each side).
    - If the bars show in less than 20 % of the video, it isn't this HUD (another game, or a different layout or
      resolution). The HUD rules then switch off with a WARNING, and scoring is loudness + picture change as in v1.
      `--no-hud` switches them off by hand.
@@ -82,8 +87,10 @@ Each run gets its own folder, so earlier runs are never overwritten:
   the combined and smoothed score, and which clip (if any) covers it. Plot it to tune the scoring.
   v2 appends four columns at the end: `star_score`, `stars`, `minimap` and `excluded`. The earlier columns are
   unchanged, but `combined` now includes the star boost and is 0 in excluded steps.
-  v3 appends `sequence`: the action sequence a step belongs to (empty for quiet and excluded steps).
-  `scores.json` lists the sequences under `spread`, and each clip's `sequence`.
+  v3 appends `sequence`: the action sequence a step belongs to (empty for quiet and excluded steps), then
+  `phone` (1 while the phone's call screen shows). `excluded` now covers the phone stretches too.
+  `scores.json` lists the sequences under `spread`, each clip's `sequence`, and the phone stretches under
+  `hud.phone_ranges_s`.
 
 ## Review sheet
 
@@ -114,16 +121,21 @@ fake minimap and a timecode, a quiet noise bed, and loud bursts plus white flash
 
 It also saves one frame per clip in the run's `frames\` folder, so you can check the layout.
 
-The HUD detectors are checked on real frames of the owner's test1.webm, which is not in the repo:
+The HUD detectors are checked on real frames of the owner's test1.webm and test2.webm, which are not in the repo:
 
 ```powershell
-.\.venv\Scripts\python.exe hudtest.py            # default C:\AI\gta\input\test1.webm
+.\.venv\Scripts\python.exe hudtest.py            # defaults C:\AI\gta\input\test1.webm and test2.webm
 ```
 
-- 3:00 (pause map): the minimap must read as absent.
-- 2:50 (wanted): stars must read as present.
-- 8:30 (phone call): stars absent, minimap present.
-- Two extra calibration frames: the minimap flashing red, and the ammo counter in the star row.
+- test1 3:00 (pause map): the minimap must read as absent.
+- test1 2:50 (wanted): stars present, phone absent.
+- test1 8:30 (phone call): stars absent, minimap present.
+- test1 8:20 and test2 18:57 (phone calls): phone present.
+- Four extra calibration frames: the minimap flashing red, the ammo counter in the star row, and two more calls
+  (test2 4:10 and 12:10).
+
+All the phone frames were used to set the phone check, so these are regression checks. The check was then run on
+every 0.5 s of both videos; see `eval/BASELINE.md`.
 
 If the footage is missing, it prints SKIP and exits with code 2. It never reports a pass without the footage.
 
@@ -199,8 +211,15 @@ are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELI
   - A different in-game safe-zone/HUD-size setting moves the HUD and breaks the boxes. The 20 % guard then turns
     the rules off.
   - GTA 6 will need new boxes and new detectors.
-- **No signal for phone calls.** During a call the minimap stays and no stars show, so v2 neither excludes nor
-  boosts a phone call.
+- **The phone check only knows Michael's iFruit call screen.** It was set on four calls, all on Michael's phone.
+  Franklin's and Trevor's phones look different, and so do the phone's other screens (contacts, texts, camera).
+  None of those are in the test footage, so they would not be excluded.
+- **A call with no phone on screen isn't seen.** In test2 10:53-11:02 a scripted call carries on into gameplay
+  with Michael holding the phone to his ear and no phone on screen.
+- **The exclusion follows the phone, not the conversation.** The answer keys' phone-call ranges start or end up
+  to about 1.5 s before or after the phone is on screen (dialogue before it slides up, or after it's gone). The
+  exclusion is the phone's time on screen plus 0.5 s each side, so a clip can touch a key's phone range by
+  about 1 s.
 - **Short HUD hides inside action are excluded (by decision).** The game hides the HUD for some mission
   set-pieces, and v2 treats every stretch of 1.5 s or more without the minimap like a cutscene. Seen:
   - the house collapse in Marriage Counseling (test2 3:19.5-3:35.5)

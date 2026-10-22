@@ -5,7 +5,8 @@ vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.
 
 v2 also reads GTA V's HUD (PS5 layout): stretches where the minimap is gone (pause/map screens,
 cutscenes) can't be picked, and steps where wanted stars show get a strong score boost.
-v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips from each.
+v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips from each, and treats the
+phone's call screen like a missing minimap: stretches with it can't be picked.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
 """
@@ -55,10 +56,23 @@ BAR_BOX = (96, 1014, 272, 6)     # health, armour and special-ability bars under
 BAR_SEGMENTS = ((104, 224), (240, 290), (306, 360))  # x ranges of those three bars
 BAR_MIN_SAT = 0.3        # a bar is a clearly coloured strip, not grey
 BAR_MIN_DISTINCT = 60.0  # RGB distance between passing bars, so one plain colour can't pass as two bars
-MIN_HIDDEN = 1.5         # seconds the minimap must be missing before that stretch is excluded
+MIN_HIDDEN = 1.5         # seconds the minimap must be missing (or the phone up) before that stretch is excluded
 HIDDEN_PAD = 0.5         # excluded stretches grow this much on each side (menu and cutscene fades)
 STAR_BOOST = 3.0         # added to a step's combined score while wanted stars show
 HUD_MIN_SHARE = 0.2      # minimap seen in less of the video than this: not this HUD, so HUD rules are off
+# Phone call screen (v3): the top of Michael's iFruit phone, bottom right. ffmpeg averages the box into
+# PHONE_CELL-sized cells; the three checks below are (x0, x1, y0, y1) areas in the same 1920x1088 pixels.
+PHONE_BOX = (1552, 656, 248, 240)  # x, y, w, h
+PHONE_CELL = (8, 4)      # w, h of one averaged cell
+PHONE_FACE = (1560, 1800, 660, 680)     # black phone face between the "iFruit" logo and the status bar
+PHONE_BATTERY = (1768, 1792, 684, 696)  # battery icon at the right end of the status bar
+PHONE_PANEL = ((1560, 1648, 820, 860), (1720, 1792, 820, 860))  # grey call panel, left and right of the logo
+# Limits on brightness (0-255). "Calls" = the 210 call-screen samples found in test1 and test2 (4 calls).
+PHONE_FACE_MAX = 15.0    # brightest face cell; calls up to 6
+PHONE_BATTERY_MIN = 70.0 # mean battery-icon brightness; calls 147 or more
+PHONE_PANEL_RANGE = (12.0, 50.0)  # every panel cell's brightness; calls 19-40 (the panel lets a little background through)
+PHONE_PANEL_SPREAD = 20.0         # brightest minus darkest panel cell; calls up to 11.9
+PHONE_PANEL_TINT = 10.0  # largest R/G/B difference in a panel cell (the panel is neutral grey); calls up to 8
 
 # --- Spreading picks (v3). Chosen before looking at any eval result; not tuned to the test videos. ---
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
@@ -157,19 +171,23 @@ def star_template():
 
 
 STAR_TEMPLATE = star_template()
-HUD_W = max(STAR_BOX[2], BAR_BOX[2])
-HUD_FRAME_BYTES = HUD_W * (STAR_BOX[3] + BAR_BOX[3]) * 3
+PHONE_COLS, PHONE_ROWS = PHONE_BOX[2] // PHONE_CELL[0], PHONE_BOX[3] // PHONE_CELL[1]
+HUD_W = max(STAR_BOX[2], BAR_BOX[2], PHONE_COLS)
+HUD_FRAME_BYTES = HUD_W * (STAR_BOX[3] + BAR_BOX[3] + PHONE_ROWS) * 3
 
 
 def hud_filter(info, range_fix):
-    """Filter chain: one frame in, the star box stacked on the bar box out, RGB at 1920x1088 scale."""
+    """Filter chain: one frame in; star box, bar box and phone cells stacked out, RGB at 1920x1088 scale."""
     sx, sy = info["width"] / HUD_REF_W, info["height"] / HUD_REF_H
     # Same range handling as make_review.py: PS5 VP9 pixels are limited range whatever the header says.
     conv = "in_color_matrix=bt709:in_range=tv:" if range_fix else ""
     parts = [f"[{tag}0]crop={round(w * sx)}:{round(h * sy)}:{round(x * sx)}:{round(y * sy)},"
-             f"scale={w}:{h}:{conv}out_range=pc,format=rgb24,pad={HUD_W}:{h}[{tag}1]"
-             for tag, (x, y, w, h) in (("s", STAR_BOX), ("b", BAR_BOX))]
-    return "split=2[s0][b0];" + ";".join(parts) + ";[s1][b1]vstack"
+             f"scale={ow}:{oh}:{flags}{conv}out_range=pc,format=rgb24,pad={HUD_W}:{oh}[{tag}1]"
+             for tag, (x, y, w, h), (ow, oh), flags in (
+                 ("s", STAR_BOX, STAR_BOX[2:], ""),
+                 ("b", BAR_BOX, BAR_BOX[2:], ""),
+                 ("p", PHONE_BOX, (PHONE_COLS, PHONE_ROWS), "flags=area:"))]  # area = plain cell averages
+    return "split=3[s0][b0][p0];" + ";".join(parts) + ";[s1][b1][p1]vstack=inputs=3"
 
 
 def star_score(rgb):
@@ -222,11 +240,50 @@ def minimap_seen(rgb):
     return len(ok) >= 2 and max(math.dist(p, q) for i, p in enumerate(ok) for q in ok[i + 1:]) >= BAR_MIN_DISTINCT
 
 
+def phone_cells(rgb, area):
+    """(r, g, b) of every averaged phone cell inside area (x0, x1, y0, y1, in 1920x1088 pixels)."""
+    off = (STAR_BOX[3] + BAR_BOX[3]) * HUD_W * 3
+    x0, x1, y0, y1 = area
+    cw, ch = PHONE_CELL
+    out = []
+    for row in range((y0 - PHONE_BOX[1]) // ch, (y1 - PHONE_BOX[1]) // ch):
+        for col in range((x0 - PHONE_BOX[0]) // cw, (x1 - PHONE_BOX[0]) // cw):
+            i = off + (row * HUD_W + col) * 3
+            out.append((rgb[i], rgb[i + 1], rgb[i + 2]))
+    return out
+
+
+def phone_measure(rgb):
+    """The numbers phone_seen() tests: face max, battery mean, panel min/max/tint (brightness 0-255)."""
+    def lum(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    face = [lum(c) for c in phone_cells(rgb, PHONE_FACE)]
+    battery = [lum(c) for c in phone_cells(rgb, PHONE_BATTERY)]
+    panel = [c for area in PHONE_PANEL for c in phone_cells(rgb, area)]
+    plum = [lum(c) for c in panel]
+    return {"face_max": max(face), "battery_mean": sum(battery) / len(battery),
+            "panel_min": min(plum), "panel_max": max(plum), "panel_tint": max(max(c) - min(c) for c in panel)}
+
+
+def phone_seen(rgb):
+    """True when Michael's phone shows its call screen at the bottom right.
+
+    Three parts of the phone must all match: the black face above the status bar, the bright battery icon in
+    the status bar, and the even, neutral grey call panel either side of the iFruit logo. A dark scene can
+    pass the black check, but not the bright icon and the grey panel at the same time.
+    """
+    m = phone_measure(rgb)
+    lo, hi = PHONE_PANEL_RANGE
+    return (m["face_max"] <= PHONE_FACE_MAX and m["battery_mean"] >= PHONE_BATTERY_MIN
+            and lo <= m["panel_min"] and m["panel_max"] <= hi
+            and m["panel_max"] - m["panel_min"] <= PHONE_PANEL_SPREAD and m["panel_tint"] <= PHONE_PANEL_TINT)
+
+
 def analyse_video(ffmpeg, video, info, range_fix):
     """One decode for both picture signals.
 
     Returns the frame-to-frame change score (0..1) on small frames at ANALYSIS_FPS, the HUD samples
-    (time, star score, minimap seen) at HUD_FPS, and the seconds spent on HUD pixel work.
+    (time, star score, minimap seen, phone seen) at HUD_FPS, and the seconds spent on HUD pixel work.
     """
     graph = (f"[0:v:0]split=2[vs][vh];"
              f"[vs]fps={ANALYSIS_FPS},scale={ANALYSIS_WIDTH}:-2,"
@@ -247,7 +304,7 @@ def analyse_video(ffmpeg, video, info, range_fix):
                 if len(raw) < HUD_FRAME_BYTES:
                     break
                 t0 = time.perf_counter()
-                hud.append((len(hud) / HUD_FPS, star_score(raw), minimap_seen(raw)))
+                hud.append((len(hud) / HUD_FPS, star_score(raw), minimap_seen(raw), phone_seen(raw)))
                 t_px += time.perf_counter() - t0
             proc.stdout.close()
             if proc.wait() != 0:
@@ -259,24 +316,27 @@ def analyse_video(ffmpeg, video, info, range_fix):
 
 
 def hud_steps(hud, n):
-    """Per timeline step: star score, stars showing (2 of 3 neighbouring samples), minimap seen, excluded."""
-    score = bucketize([(t, s) for t, s, _ in hud], n, max, None)
-    seen = bucketize([(t, m) for t, _, m in hud], n, lambda g: 2 * sum(g) >= len(g), None)
+    """Per timeline step: star score, stars showing (2 of 3 neighbouring samples), minimap seen, phone seen,
+    excluded."""
+    score = bucketize([(t, s) for t, s, _, _ in hud], n, max, None)
+    seen = bucketize([(t, m) for t, _, m, _ in hud], n, lambda g: 2 * sum(g) >= len(g), None)
+    phone = bucketize([(t, p) for t, _, _, p in hud], n, lambda g: 2 * sum(g) > len(g), False)
     raw = [s is not None and s >= STAR_MIN_SCORE for s in score]
     stars = [sorted((raw[max(0, i - 1)], raw[i], raw[min(n - 1, i + 1)]))[1] for i in range(n)]
-    # Missing minimap for MIN_HIDDEN seconds or more: exclude that stretch, grown by HIDDEN_PAD each side.
-    # Steps with no sample (the last fraction of a second) count as seen.
+    # Minimap missing or phone up for MIN_HIDDEN seconds or more: exclude that stretch, grown by HIDDEN_PAD
+    # each side. Steps with no sample (the last fraction of a second) count as minimap seen, no phone.
+    hidden = [seen[i] is False or phone[i] for i in range(n)]
     excluded, i = [False] * n, 0
     need, pad = round(MIN_HIDDEN / BUCKET), round(HIDDEN_PAD / BUCKET)
     while i < n:
         j = i
-        while j < n and seen[j] is False:
+        while j < n and hidden[j]:
             j += 1
         if j - i >= need:
             for k in range(max(0, i - pad), min(n, j + pad)):
                 excluded[k] = True
         i = max(j, i + 1)
-    return score, stars, [s is not False for s in seen], excluded
+    return score, stars, [s is not False for s in seen], phone, excluded
 
 
 def runs(flags):
@@ -350,8 +410,8 @@ def action_sequences(combined, excluded):
 def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, excluded, seq):
     """Greedy: best remaining peak first; each clip keeps min_gap seconds clear on both sides.
 
-    Excluded steps (no minimap) are hard walls: no peak inside them, and no clip reaches into them.
-    A clip belongs to the action sequence of its highest-scoring step; once a sequence has MAX_PER_SEQ
+    Excluded steps (no minimap, or the phone up) are hard walls: no peak inside them, and no clip reaches into
+    them. A clip belongs to the action sequence of its highest-scoring step; once a sequence has MAX_PER_SEQ
     clips, further peaks in it are skipped.
     """
     n = len(smooth)
@@ -425,7 +485,7 @@ def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, e
     if len(taken) < count:
         notes.append(f"asked for {count} clips, found {len(taken)}: no other stretch had a step scoring "
                      f">= {MIN_PEAK_SCORE} with room for a {min_len:g} s clip and {min_gap:g} s gaps"
-                     + (" outside the stretches with no minimap" if any(excluded) else "")
+                     + (" outside the stretches with no minimap or the phone up" if any(excluded) else "")
                      + (f" in an action sequence with fewer than {MAX_PER_SEQ} clips" if seq_full else ""))
     return taken, baseline, notes
 
@@ -557,8 +617,10 @@ def main():
     hard = bucketize(scene, n, lambda g: sum(1 for v in g if v > HARD_CHANGE), 0)
     t_video = time.perf_counter() - t0
 
-    star_sc, stars, seen, excluded = hud_steps(hud, n)
-    seen_share = sum(1 for _, _, m in hud if m) / len(hud) if hud else 0.0
+    star_sc, stars, seen, phone, excluded = hud_steps(hud, n)
+    seen_share = sum(1 for _, _, m, _ in hud if m) / len(hud) if hud else 0.0
+    phone_share = sum(1 for _, _, _, p in hud if p) / len(hud) if hud else 0.0
+    phone_runs = [r for r in runs(phone) if r[1] - r[0] >= MIN_HIDDEN]
     if args.no_hud:
         hud_on, hud_state = False, "off (--no-hud)"
     elif seen_share < HUD_MIN_SHARE:
@@ -572,9 +634,9 @@ def main():
     boost = [STAR_BOOST if hud_on and s else 0.0 for s in stars]
     excluded_runs = runs(excluded)
     print(f"HUD rules {hud_state}. Minimap seen in {seen_share:.0%} of samples, wanted stars in "
-          f"{sum(stars) / n:.0%} of steps"
-          + (f"; {len(excluded_runs)} stretch(es) with no minimap excluded "
-             f"({sum(excluded) * BUCKET:.0f} s)" if hud_on else ""))
+          f"{sum(stars) / n:.0%} of steps, phone call screen in {phone_share:.0%} of samples"
+          + (f"; {len(excluded_runs)} stretch(es) with no minimap or the phone up excluded "
+             f"({sum(excluded) * BUCKET:.0f} s; {len(phone_runs)} phone stretch(es))" if hud_on else ""))
 
     wa, wv = (AUDIO_WEIGHT, VISUAL_WEIGHT) if info["has_audio"] else (0.0, 1.0)
     za, a_med, a_scale = robust_z(loud, AUDIO_SCALE_FLOOR)
@@ -586,8 +648,8 @@ def main():
     tl = [{"time_s": round(i * BUCKET, 2), "loudness_lufs": round(loud[i], 2), "audio_z": za[i],
            "visual_change": round(vis[i], 4), "hard_changes": hard[i], "visual_z": zv[i],
            "combined": combined[i], "smoothed": smooth[i], "star_score": star_sc[i], "stars": stars[i],
-           "minimap": seen[i], "excluded": excluded[i], "star_boost": boost[i], "sequence": seq[i]}
-          for i in range(n)]
+           "minimap": seen[i], "excluded": excluded[i], "star_boost": boost[i], "sequence": seq[i],
+           "phone": phone[i]} for i in range(n)]
     print(f"Action sequences: {len(seq_spans)} (split at {SEQ_QUIET:g} s quiet gaps and excluded stretches); "
           f"at most {MAX_PER_SEQ} clips each")
 
@@ -598,8 +660,8 @@ def main():
     for clip in clips:
         explain(clip, tl, stats)
         if clip["excluded_s"] > 0:
-            fail(f"internal error: clip {hms(clip['start_s'])}-{hms(clip['end_s'])} reaches into a "
-                 f"no-minimap stretch ({clip['excluded_s']:g} s)")
+            fail(f"internal error: clip {hms(clip['start_s'])}-{hms(clip['end_s'])} reaches into an "
+                 f"excluded stretch ({clip['excluded_s']:g} s)")
 
     run_dir = args.out / args.video.stem / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -625,14 +687,14 @@ def main():
         w = csv.writer(f)
         w.writerow(["time_s", "loudness_lufs", "audio_z", "visual_change", "hard_changes",
                     "visual_z", "combined", "smoothed", "clip",
-                    "star_score", "stars", "minimap", "excluded", "sequence"])
+                    "star_score", "stars", "minimap", "excluded", "sequence", "phone"])
         for i, r in enumerate(tl):
             w.writerow([r["time_s"], r["loudness_lufs"], f"{r['audio_z']:.3f}", r["visual_change"],
                         r["hard_changes"], f"{r['visual_z']:.3f}", f"{r['combined']:.3f}",
                         f"{r['smoothed']:.3f}", in_clip.get(i, ""),
                         "" if r["star_score"] is None else f"{r['star_score']:.3f}",
                         int(r["stars"]), int(r["minimap"]), int(r["excluded"]),
-                        "" if r["sequence"] is None else r["sequence"] + 1])
+                        "" if r["sequence"] is None else r["sequence"] + 1, int(r["phone"])])
 
     total = time.perf_counter() - t_start
     scores = {
@@ -648,7 +710,12 @@ def main():
                 "bar_box": BAR_BOX, "bar_segments": BAR_SEGMENTS, "bar_min_sat": BAR_MIN_SAT,
                 "bar_min_distinct": BAR_MIN_DISTINCT, "min_hidden_s": MIN_HIDDEN, "hidden_pad_s": HIDDEN_PAD,
                 "star_boost": STAR_BOOST, "min_share": HUD_MIN_SHARE,
+                "phone_box": PHONE_BOX, "phone_cell": PHONE_CELL, "phone_face": PHONE_FACE,
+                "phone_battery": PHONE_BATTERY, "phone_panel": PHONE_PANEL, "phone_face_max": PHONE_FACE_MAX,
+                "phone_battery_min": PHONE_BATTERY_MIN, "phone_panel_range": PHONE_PANEL_RANGE,
+                "phone_panel_spread": PHONE_PANEL_SPREAD, "phone_panel_tint": PHONE_PANEL_TINT,
                 "minimap_seen_share": round(seen_share, 4), "stars_share": round(sum(stars) / n, 4),
+                "phone_seen_share": round(phone_share, 4), "phone_ranges_s": phone_runs,
                 "excluded_s": sum(excluded) * BUCKET, "excluded_ranges_s": excluded_runs},
         "spread": {"seq_quiet_s": SEQ_QUIET, "max_per_sequence": MAX_PER_SEQ,
                    "active_score": MIN_PEAK_SCORE, "sequences_s": seq_spans},
