@@ -202,7 +202,6 @@ It lists each clip with the ranges it touches and by how many seconds, then prin
 - **strict precision:** picked clips with at least 50 % of their length inside action ranges, out of the clips picked
 - **recall:** action ranges touched by at least one clip, out of all action ranges (any shared time counts)
 - **bad picks:** clips that touch a never-pick range (any shared time counts)
-
 - **postable:** clips the owner rated postable, out of the clips picked, e.g. `3/5 (0 unrated)`
 
 Overlap precision counts a clip that only grazes an action range by a second; strict precision doesn't. The last
@@ -217,7 +216,10 @@ content ("bad cut"), so a 20 s clip inside a rated 30 s clip stays unrated.
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
 0.5 s frames; each key's `revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets
-are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELINE.md](eval/BASELINE.md).
+are good to about 5 s. The v1 baseline and the v2 and v3 comparisons are in [eval/BASELINE.md](eval/BASELINE.md).
+
+v3 on the two test videos: 0 bad picks in both, postable 4/5 (test1) and 3/5 (test2). With GPU decoding, full runs
+took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was byte-identical either way.
 
 ## Known limits
 
@@ -236,19 +238,26 @@ are good to about 5 s. The v1 baseline and the v2 comparison are in [eval/BASELI
   to about 1.5 s before or after the phone is on screen (dialogue before it slides up, or after it's gone). The
   exclusion is the phone's time on screen plus 0.5 s each side, so a clip can touch a key's phone range by
   about 1 s.
+- **The phone rule also removes action that happens during a call.** In test2 the car crashes into a lamp post
+  (19:07.5-19:09.5) while the call screen is still up, so the crash is excluded. v2's clip of it was rated
+  postable by the owner. v3 picks the house pull instead, and the 19:09-19:55 action range gets no clip.
 - **Short HUD hides inside action are excluded (by decision).** The game hides the HUD for some mission
   set-pieces, and v2 treats every stretch of 1.5 s or more without the minimap like a cutscene. Seen:
   - the house collapse in Marriage Counseling (test2 3:19.5-3:35.5)
   - a 5 s camera shot in the yacht chase (test1 11:10-11:15)
 
-  Those moments can't be clipped, even though they're action. This is why test2's recall fell from 3/3 to 2/3.
+  Those moments can't be clipped, even though they're action. In v2 this cost test2's house-pull range. v3 clips
+  the pull up to 3:19.5, cut half a second before the house falls.
 - **The +3.0 wanted-star boost (kept by decision) outweighs most other action.**
   - Any step with stars outranks almost everything without them.
   - 4 of the 8 action ranges in the answer keys never show stars: the yacht chase, the house pull, the gang chase,
     and the crash and car switch. They compete on loudness and picture change alone.
-- **All five test1 picks come from one sequence.** They all sit in the 0:48-4:18 police stretch. The yacht chase
-  (10:00-12:30), which held v1's top two picks, gets none. Picking has no rule yet to spread clips across
-  different action sequences.
+- **A pause map splits a sequence.** Any excluded stretch ends an action sequence, even a 2 s pause map in the
+  middle of a chase. test1's two pause maps cut its police stretch into three sequences. So that stretch still gives
+  4 of the 5 picks (2 + 0 + 2), even with the cap of 2 per sequence. The fifth pick now goes to the yacht chase,
+  which v2 missed.
+- **Strict precision can't see a bad cut.** Both clips the owner rejected in test1 ("boring, bad cut") sit fully
+  inside action ranges, so they count as strict hits. Only the owner's ratings catch them.
 - **The minimap check can be fooled.** It reads the three bars under the minimap. A busy cutscene background can
   look like them for a few seconds, which leaves short gaps in an exclusion. In the two test videos those gaps
   were 5 s or less, too short for a 20 s clip.
