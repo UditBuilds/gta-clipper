@@ -1,4 +1,4 @@
-"""Gameplay auto-clipper v3.
+"""Gameplay auto-clipper v4.
 
 Finds the loudest, busiest moments in a gameplay recording and cuts them into
 vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.
@@ -7,6 +7,8 @@ v2 also reads GTA V's HUD (PS5 layout): stretches where the minimap is gone (pau
 cutscenes) can't be picked, and steps where wanted stars show get a strong score boost.
 v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips from each, and treats the
 phone's call screen like a missing minimap: stretches with it can't be picked.
+v4 cuts each clip to the action around its peak (LEAD_IN before it starts, TAIL after it ends), and cuts the
+phone's call screen out of a clip instead of ruling out everything around it.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
@@ -39,8 +41,8 @@ AUDIO_SCALE_FLOOR = 1.0  # LU; stops near-constant audio turning tiny wobbles in
 VISUAL_SCALE_FLOOR = 0.005
 LOUDNESS_FLOOR = -70.0   # LUFS; ebur128 reports about -120 for silence and its 0.4 s warm-up
 SMOOTH_SIGMA = 1.0       # seconds; Gaussian smoothing used to find dense stretches of action
-MIN_PEAK_SCORE = 2.0     # a clip must contain at least one step scoring this high
-LEAD_FRAC = 0.4          # share of a clip's spare time placed before the action (build-up)
+MIN_PEAK_SCORE = 2.0     # a clip must contain at least one step scoring this high; steps this high are "active"
+LEAD_FRAC = 0.4          # share of the time added to a too-short clip that goes before the action (build-up)
 HARD_CHANGE = 0.3        # scene score counted as a cut or flash (reported, not scored)
 ANALYSIS_FPS = 10        # frames per second compared for visual change
 ANALYSIS_WIDTH = 320     # frames are shrunk to this width before comparing
@@ -80,6 +82,12 @@ PHONE_PANEL_TINT = 10.0  # largest R/G/B difference in a panel cell (the panel i
 # --- Spreading picks (v3). Chosen before looking at any eval result; not tuned to the test videos. ---
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
 MAX_PER_SEQ = 2          # most clips taken from one action sequence
+
+# --- Clip edges (v4). Set by the owner before any v4 run; not tuned to the test videos. The shortest clip
+# (--min-len, 15 s) is the owner's judgement of a postable length: the 8 s clips were "too short". ---
+LEAD_IN = 1.0            # seconds kept before the action's first active step
+TAIL = 1.5               # seconds kept after its last active step
+ACTION_GAP = LEAD_IN + TAIL  # quiet seconds that end the action; a shorter gap is covered by the tail and lead-in anyway
 
 OUT_W, OUT_H = 1080, 1920
 
@@ -358,9 +366,25 @@ def analyse_video(ffmpeg, video, info, range_fix, decoder):
     return parse_metadata(text, "lavfi.scene_score"), hud, t_px, None
 
 
+def stretches(flags):
+    """Runs of True lasting MIN_HIDDEN seconds or more, each grown by HIDDEN_PAD on both sides."""
+    n = len(flags)
+    out, i = [False] * n, 0
+    need, pad = round(MIN_HIDDEN / BUCKET), round(HIDDEN_PAD / BUCKET)
+    while i < n:
+        j = i
+        while j < n and flags[j]:
+            j += 1
+        if j - i >= need:
+            for k in range(max(0, i - pad), min(n, j + pad)):
+                out[k] = True
+        i = max(j, i + 1)
+    return out
+
+
 def hud_steps(hud, n):
     """Per timeline step: star score, stars showing (2 of 3 neighbouring samples), minimap seen, phone seen,
-    excluded."""
+    excluded, and the phone stretches on their own."""
     score = bucketize([(t, s) for t, s, _, _ in hud], n, max, None)
     seen = bucketize([(t, m) for t, _, m, _ in hud], n, lambda g: 2 * sum(g) >= len(g), None)
     phone = bucketize([(t, p) for t, _, _, p in hud], n, lambda g: 2 * sum(g) > len(g), False)
@@ -368,18 +392,9 @@ def hud_steps(hud, n):
     stars = [sorted((raw[max(0, i - 1)], raw[i], raw[min(n - 1, i + 1)]))[1] for i in range(n)]
     # Minimap missing or phone up for MIN_HIDDEN seconds or more: exclude that stretch, grown by HIDDEN_PAD
     # each side. Steps with no sample (the last fraction of a second) count as minimap seen, no phone.
-    hidden = [seen[i] is False or phone[i] for i in range(n)]
-    excluded, i = [False] * n, 0
-    need, pad = round(MIN_HIDDEN / BUCKET), round(HIDDEN_PAD / BUCKET)
-    while i < n:
-        j = i
-        while j < n and hidden[j]:
-            j += 1
-        if j - i >= need:
-            for k in range(max(0, i - pad), min(n, j + pad)):
-                excluded[k] = True
-        i = max(j, i + 1)
-    return score, stars, [s is not False for s in seen], phone, excluded
+    # v4 cuts the phone stretches (same length rule and pad) out of clips; the rest of excluded stays a wall.
+    excluded = stretches([seen[i] is False or phone[i] for i in range(n)])
+    return score, stars, [s is not False for s in seen], phone, excluded, stretches(phone)
 
 
 def runs(flags):
@@ -450,30 +465,41 @@ def action_sequences(combined, excluded):
     return seq, [(round(a * BUCKET, 2), round((b + 1) * BUCKET, 2)) for a, b in spans]
 
 
-def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, excluded, seq):
+def pick_clips(score, smooth, usable_end, count, min_len, max_len, min_gap, walls, phone_cut, seq):
     """Greedy: best remaining peak first; each clip keeps min_gap seconds clear on both sides.
 
-    Excluded steps (no minimap, or the phone up) are hard walls: no peak inside them, and no clip reaches into
-    them. A clip belongs to the action sequence of its highest-scoring step; once a sequence has MAX_PER_SEQ
-    clips, further peaks in it are skipped.
+    Each clip is cut to the action around its peak: the active steps (score >= MIN_PEAK_SCORE) joined across
+    quiet gaps of up to ACTION_GAP, with LEAD_IN before and TAIL after, then held to min_len..max_len.
+    Walls (no minimap) are hard: no peak inside them, and no clip or action reaches into them. The phone's
+    call screen is not a wall. Its steps keep their score, so action during a call is found, but the phone
+    stretch is cut out of the clip afterwards. What is left must still be min_len long and contain a step
+    scoring MIN_PEAK_SCORE or more. A clip belongs to the action sequence of its highest-scoring step; once a
+    sequence has MAX_PER_SEQ clips, further peaks in it are skipped.
     """
     n = len(smooth)
     baseline = statistics.median(smooth)
     taken, rejected, notes = [], [False] * n, []
     per_seq, seq_full = {}, False
+    reach = max(1, math.ceil(3 * SMOOTH_SIGMA / BUCKET))  # steps the smoothed score at a peak draws on
+    gap = round(ACTION_GAP / BUCKET)
+
+    def steps(a, b):
+        """Timeline steps that share time with a..b seconds."""
+        return range(int(a // BUCKET), min(n, math.ceil(b / BUCKET)))
+
     for p in sorted(range(n), key=lambda i: smooth[i], reverse=True):
         if len(taken) >= count:
             break
-        if rejected[p] or excluded[p]:
+        if rejected[p] or walls[p]:
             continue
         tp = (p + 0.5) * BUCKET
         if tp >= usable_end:
             continue
-        # Free stretch around this peak, between excluded steps, already-picked clips (plus gap) and the file ends.
+        # Free stretch around this peak, between walls, already-picked clips (plus gap) and the file ends.
         lo = hi = p
-        while lo > 0 and not excluded[lo - 1]:
+        while lo > 0 and not walls[lo - 1]:
             lo -= 1
-        while hi + 1 < n and not excluded[hi + 1]:
+        while hi + 1 < n and not walls[hi + 1]:
             hi += 1
         fa, fb, blocked = lo * BUCKET, min(usable_end, (hi + 1) * BUCKET), False
         for c in taken:
@@ -491,44 +517,69 @@ def pick_clips(combined, smooth, usable_end, count, min_len, max_len, min_gap, e
             for i in range(int(fa // BUCKET), min(n, int(fb // BUCKET) + 1)):
                 rejected[i] = True
             continue
-        # Event span: neighbouring steps whose smoothed score is at least halfway up the peak.
-        half = baseline + 0.5 * (smooth[p] - baseline)
-        a = b = p
-        while a - 1 >= 0 and smooth[a - 1] >= half and (a - 1) * BUCKET >= fa:
-            a -= 1
-        while b + 1 < n and smooth[b + 1] >= half and (b + 2) * BUCKET <= fb:
-            b += 1
-        if max(combined[a:b + 1]) < MIN_PEAK_SCORE:
-            for i in range(a, b + 1):
+        # Whole steps inside the free stretch, and the best step the smoothed peak drew on.
+        first, last = math.ceil(fa / BUCKET - 1e-9), min(n, math.floor(fb / BUCKET + 1e-9)) - 1
+        near = range(max(first, p - reach), min(last, p + reach) + 1)
+        q = max(near, key=lambda i: score[i])
+        if score[q] < MIN_PEAK_SCORE:
+            for i in near:
                 rejected[i] = True
             continue
-        q = max(range(a, b + 1), key=lambda i: combined[i])
+        # Action edges: active steps on either side of q, across quiet gaps of up to ACTION_GAP.
+        a = b = q
+        for i in range(q - 1, first - 1, -1):
+            if a - i - 1 > gap:
+                break
+            if score[i] >= MIN_PEAK_SCORE:
+                a = i
+        for i in range(q + 1, last + 1):
+            if i - b - 1 > gap:
+                break
+            if score[i] >= MIN_PEAK_SCORE:
+                b = i
+        act_s, act_e = a * BUCKET, (b + 1) * BUCKET
+        start, end = max(act_s - LEAD_IN, fa), min(act_e + TAIL, fb)
+        if end - start > max_len:
+            # Long action: keep max_len seconds centred on the peak.
+            start = min(max(tp - max_len / 2, start), end - max_len)
+            end = start + max_len
+        if end - start < min_len:
+            # Short action: add the missing time, LEAD_FRAC of it before, and stay inside the free stretch.
+            spare = min_len - (end - start)
+            start, end = start - LEAD_FRAC * spare, end + (1 - LEAD_FRAC) * spare
+            shift = max(0.0, fa - start) - max(0.0, end - fb)
+            start, end = start + shift, end + shift
+        # Cut the phone stretches out. If that leaves more than one piece, keep the one with the best step.
+        pieces, s = [], start
+        for i in steps(start, end):
+            if phone_cut[i]:
+                if i * BUCKET > s:
+                    pieces.append((s, i * BUCKET))
+                s = max(s, (i + 1) * BUCKET)
+        if end > s:
+            pieces.append((s, end))
+        best = [(max(score[i] for i in steps(ps, pe)), ps, pe) for ps, pe in pieces]
+        top, ps, pe = max(best) if best else (0.0, start, start)
+        if pe - ps < min_len - 1e-6 or top < MIN_PEAK_SCORE:
+            for i in [p] + [i for i in steps(start, end) if a <= i <= b]:
+                rejected[i] = True
+            continue
+        q = max(steps(ps, pe), key=lambda i: score[i])
         if per_seq.get(seq[q], 0) >= MAX_PER_SEQ:
             seq_full = True
             continue
         per_seq[seq[q]] = per_seq.get(seq[q], 0) + 1
-        span_s, span_e = a * BUCKET, min((b + 1) * BUCKET, fb)
-        span = span_e - span_s
-        length = min(max(span, min_len), max_len, fb - fa)
-        if span > length:
-            # Long action: keep the densest `length` seconds of it.
-            steps = int(round(length / BUCKET))
-            best_i, best_sum = a, -1.0
-            for i in range(a, b - steps + 2):
-                s = sum(combined[i:i + steps])
-                if s > best_sum:
-                    best_i, best_sum = i, s
-            start = best_i * BUCKET
-        else:
-            start = span_s - LEAD_FRAC * (length - span)
-        start = round(min(max(start, fa), fb - length), 2)
-        taken.append({"start_s": start, "end_s": round(start + length, 2), "duration_s": round(length, 2),
+        length = round(pe - ps, 2)
+        taken.append({"start_s": round(ps, 2), "end_s": round(round(ps, 2) + length, 2), "duration_s": length,
                       "smoothed_peak_time_s": round(tp, 2), "smoothed_peak_score": round(smooth[p], 3),
-                      "event_span_s": [round(span_s, 2), round(span_e, 2)], "sequence": seq[q] + 1})
+                      "action_span_s": [round(act_s, 2), round(act_e, 2)],
+                      "window_s": [round(start, 2), round(end, 2)],
+                      "phone_cut_s": round(end - start - (pe - ps), 2), "sequence": seq[q] + 1})
     if len(taken) < count:
         notes.append(f"asked for {count} clips, found {len(taken)}: no other stretch had a step scoring "
-                     f">= {MIN_PEAK_SCORE} with room for a {min_len:g} s clip and {min_gap:g} s gaps"
-                     + (" outside the stretches with no minimap or the phone up" if any(excluded) else "")
+                     f">= {MIN_PEAK_SCORE} with room for a clip of {min_len:g} s and {min_gap:g} s gaps"
+                     + (" outside the stretches with no minimap and the phone's call screen"
+                        if any(walls) or any(phone_cut) else "")
                      + (f" in an action sequence with fewer than {MAX_PER_SEQ} clips" if seq_full else ""))
     return taken, baseline, notes
 
@@ -561,7 +612,10 @@ def explain(clip, tl, stats):
     parts.append(f"visual change {peak['visual_change']:.3f} vs median {stats['visual_median']:.3f} "
                  f"(z {peak['visual_z']:.1f}{' capped' if peak['visual_z'] >= Z_CAP else ''})")
     parts.append(f"{clip['hard_changes']} hard cuts/flashes (scene > {HARD_CHANGE}) in clip")
-    parts.append(f"event span {hms(clip['event_span_s'][0])}-{hms(clip['event_span_s'][1])}")
+    parts.append(f"action {hms(clip['action_span_s'][0])}-{hms(clip['action_span_s'][1])}")
+    if clip["phone_cut_s"] > 0:
+        parts.append(f"{clip['phone_cut_s']:g} s of the phone's call screen cut from "
+                     f"{hms(clip['window_s'][0])}-{hms(clip['window_s'][1])}")
     a, b = stats["sequences"][clip["sequence"] - 1]
     parts.append(f"action sequence {clip['sequence']} ({hms(a)}-{hms(b)})")
     clip["reason"] = "; ".join(parts)
@@ -608,7 +662,7 @@ def main():
                                              "into vertical 1080x1920 clips.")
     ap.add_argument("video", type=Path)
     ap.add_argument("--count", type=int, default=5, help="clips to make (default 5)")
-    ap.add_argument("--min-len", type=float, default=20.0, help="shortest clip, seconds (default 20)")
+    ap.add_argument("--min-len", type=float, default=15.0, help="shortest clip, seconds (default 15)")
     ap.add_argument("--max-len", type=float, default=30.0, help="longest clip, seconds (default 30)")
     ap.add_argument("--min-gap", type=float, default=10.0,
                     help="seconds between the end of one clip and the start of the next (default 10)")
@@ -670,7 +724,7 @@ def main():
     hard = bucketize(scene, n, lambda g: sum(1 for v in g if v > HARD_CHANGE), 0)
     t_video = time.perf_counter() - t0
 
-    star_sc, stars, seen, phone, excluded = hud_steps(hud, n)
+    star_sc, stars, seen, phone, excluded, phone_cut = hud_steps(hud, n)
     seen_share = sum(1 for _, _, m, _ in hud if m) / len(hud) if hud else 0.0
     phone_share = sum(1 for _, _, _, p in hud if p) / len(hud) if hud else 0.0
     phone_runs = [r for r in runs(phone) if r[1] - r[0] >= MIN_HIDDEN]
@@ -683,13 +737,17 @@ def main():
     else:
         hud_on, hud_state = True, "on"
     if not hud_on:
-        excluded = [False] * n
+        excluded = phone_cut = [False] * n
+    walls = [e and not c for e, c in zip(excluded, phone_cut)]
     boost = [STAR_BOOST if hud_on and s else 0.0 for s in stars]
     excluded_runs = runs(excluded)
     print(f"HUD rules {hud_state}. Minimap seen in {seen_share:.0%} of samples, wanted stars in "
           f"{sum(stars) / n:.0%} of steps, phone call screen in {phone_share:.0%} of samples"
           + (f"; {len(excluded_runs)} stretch(es) with no minimap or the phone up excluded "
              f"({sum(excluded) * BUCKET:.0f} s; {len(phone_runs)} phone stretch(es))" if hud_on else ""))
+    if any(phone_cut):
+        print(f"The phone stretches ({sum(phone_cut) * BUCKET:g} s) are cut out of clips; only the "
+              f"{sum(walls) * BUCKET:g} s with no minimap are walls.")
 
     wa, wv = (AUDIO_WEIGHT, VISUAL_WEIGHT) if info["has_audio"] else (0.0, 1.0)
     za, a_med, a_scale = robust_z(loud, AUDIO_SCALE_FLOOR)
@@ -698,6 +756,10 @@ def main():
     combined = [0.0 if excluded[i] else wa * za[i] + wv * zv[i] + boost[i] for i in range(n)]
     smooth = gaussian_smooth(combined, SMOOTH_SIGMA / BUCKET)
     seq, seq_spans = action_sequences(combined, excluded)
+    # v4 picks on the same score, except that phone steps keep theirs (only walls score 0), so action during a
+    # call can be found and the phone cut out of the clip afterwards. combined and smoothed stay as in v3.
+    pick = [0.0 if walls[i] else wa * za[i] + wv * zv[i] + boost[i] for i in range(n)]
+    pick_smooth = gaussian_smooth(pick, SMOOTH_SIGMA / BUCKET)
     tl = [{"time_s": round(i * BUCKET, 2), "loudness_lufs": round(loud[i], 2), "audio_z": za[i],
            "visual_change": round(vis[i], 4), "hard_changes": hard[i], "visual_z": zv[i],
            "combined": combined[i], "smoothed": smooth[i], "star_score": star_sc[i], "stars": stars[i],
@@ -706,15 +768,15 @@ def main():
     print(f"Action sequences: {len(seq_spans)} (split at {SEQ_QUIET:g} s quiet gaps and excluded stretches); "
           f"at most {MAX_PER_SEQ} clips each")
 
-    clips, baseline, notes = pick_clips(combined, smooth, usable_end, args.count,
-                                        args.min_len, args.max_len, args.min_gap, excluded, seq)
+    clips, baseline, notes = pick_clips(pick, pick_smooth, usable_end, args.count,
+                                        args.min_len, args.max_len, args.min_gap, walls, phone_cut, seq)
     stats = {"has_audio": info["has_audio"], "audio_median": a_med, "visual_median": v_med, "hud": hud_on,
              "sequences": seq_spans}
     for clip in clips:
         explain(clip, tl, stats)
         if clip["excluded_s"] > 0:
             fail(f"internal error: clip {hms(clip['start_s'])}-{hms(clip['end_s'])} reaches into an "
-                 f"excluded stretch ({clip['excluded_s']:g} s)")
+                 f"excluded stretch (no minimap or the phone's call screen, {clip['excluded_s']:g} s)")
 
     run_dir = args.out / args.video.stem / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -732,26 +794,31 @@ def main():
 
     for note in notes:
         print("NOTE: " + note)
-    in_clip = {}
+    in_clip, in_action = {}, {}
     for clip in clips:
         for i in range(int(clip["start_s"] // BUCKET), min(n, int(math.ceil(clip["end_s"] / BUCKET)))):
             in_clip[i] = clip["rank"]
+        a, b = clip["action_span_s"]
+        for i in range(round(a / BUCKET), min(n, round(b / BUCKET))):
+            in_action[i] = clip["rank"]
     with open(run_dir / "timeline.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["time_s", "loudness_lufs", "audio_z", "visual_change", "hard_changes",
                     "visual_z", "combined", "smoothed", "clip",
-                    "star_score", "stars", "minimap", "excluded", "sequence", "phone"])
+                    "star_score", "stars", "minimap", "excluded", "sequence", "phone",
+                    "pick_score", "pick_smoothed", "phone_cut", "action"])
         for i, r in enumerate(tl):
             w.writerow([r["time_s"], r["loudness_lufs"], f"{r['audio_z']:.3f}", r["visual_change"],
                         r["hard_changes"], f"{r['visual_z']:.3f}", f"{r['combined']:.3f}",
                         f"{r['smoothed']:.3f}", in_clip.get(i, ""),
                         "" if r["star_score"] is None else f"{r['star_score']:.3f}",
                         int(r["stars"]), int(r["minimap"]), int(r["excluded"]),
-                        "" if r["sequence"] is None else r["sequence"] + 1, int(r["phone"])])
+                        "" if r["sequence"] is None else r["sequence"] + 1, int(r["phone"]),
+                        f"{pick[i]:.3f}", f"{pick_smooth[i]:.3f}", int(phone_cut[i]), in_action.get(i, "")])
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v3",
+        "tool": "gta-clipper v4",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
@@ -770,9 +837,13 @@ def main():
                 "phone_panel_spread": PHONE_PANEL_SPREAD, "phone_panel_tint": PHONE_PANEL_TINT,
                 "minimap_seen_share": round(seen_share, 4), "stars_share": round(sum(stars) / n, 4),
                 "phone_seen_share": round(phone_share, 4), "phone_ranges_s": phone_runs,
-                "excluded_s": sum(excluded) * BUCKET, "excluded_ranges_s": excluded_runs},
+                "excluded_s": sum(excluded) * BUCKET, "excluded_ranges_s": excluded_runs,
+                "wall_ranges_s": runs(walls), "phone_cut_ranges_s": runs(phone_cut)},
         "spread": {"seq_quiet_s": SEQ_QUIET, "max_per_sequence": MAX_PER_SEQ,
                    "active_score": MIN_PEAK_SCORE, "sequences_s": seq_spans},
+        "edges": {"lead_in_s": LEAD_IN, "tail_s": TAIL, "action_gap_s": ACTION_GAP, "active_score": MIN_PEAK_SCORE,
+                  "lead_frac": LEAD_FRAC, "long_action": "max_len centred on the smoothed peak",
+                  "phone": "phone stretches cut out of the clip; the piece with the best step is kept"},
         "scoring": {"bucket_s": BUCKET, "audio_weight": wa, "visual_weight": wv, "z_cap": Z_CAP,
                     "audio_scale_floor": AUDIO_SCALE_FLOOR, "visual_scale_floor": VISUAL_SCALE_FLOOR,
                     "loudness_floor_lufs": LOUDNESS_FLOOR, "smooth_sigma_s": SMOOTH_SIGMA,

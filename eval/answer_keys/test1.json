@@ -16,7 +16,7 @@
     {"start_s": 177.5, "end_s": 182, "kind": "pause_map", "note": "2:57.5-3:02.0 pause-menu map, about 4 s (edges checked at 0.5 s)"},
     {"start_s": 259, "end_s": 278, "kind": "cutscene", "note": "4:19-4:38 safehouse intro camera, HUD hidden, help text (start checked at 0.5 s in revision 1; end still about 5 s)"},
     {"start_s": 284, "end_s": 486, "kind": "cutscene", "note": "4:44-8:06 family scene, then Michael and Franklin by the pool"},
-    {"start_s": 492, "end_s": 522, "kind": "phone_call", "note": "8:12-8:42 Jimmy calls while Michael walks to the red car"},
+    {"start_s": 491.5, "end_s": 521, "kind": "phone_call", "note": "8:11.5-8:41.0 Jimmy's call on screen while Michael walks to the red car; the dialogue goes on after the phone is put away (edges checked at 0.5 s in revision 2)"},
     {"start_s": 882.5, "end_s": 924.674, "kind": "cutscene", "note": "14:42.5-end LS Customs cutscene; the last ~5 s is the garage intro camera (start checked at 0.5 s in revision 1)"}
   ],
   "revisions": [
@@ -25,6 +25,10 @@
        {"change": "added pause map 166.5-168.5 (2:46.5-2:48.5)", "evidence": "2:46.5 gameplay (Michael getting out of the car); 2:47.0 and 2:47.5 pause menu with map; 2:48.0 pause backdrop, map closing, no HUD; 2:48.5 gameplay with minimap, stars and ammo"},
        {"change": "safehouse intro start 255 -> 259 (4:15 -> 4:19.0)", "evidence": "4:13-4:19.0 driving into the driveway with minimap and two wanted stars; 4:19.5 and 4:20.0 intro camera with 'Garage' help text and no HUD. The owner asked for 4:19.5 (the first intro frame); the rule above puts the start at the last gameplay frame, 4:19.0"},
        {"change": "LS Customs cutscene start 891 -> 882.5 (14:51 -> 14:42.5)", "evidence": "14:41.5-14:42.5 car pulling in, minimap visible, Franklin's 'this the place' line; 14:43.0 minimap gone; 14:44-14:48 cinematic close-ups in the car; 14:50-14:51 scripted wide shot; 14:52 close-up"}
+     ]},
+    {"revision": 2, "date": "2026-10-23", "rule": "Phone-call ranges follow the phone on screen, not the conversation: each runs from the last frame without the phone before it to the first frame without the phone after it, sampled at 0.5 s (revision 1's rule, so it can only be too wide). An action range starts at the first 0.5 s frame that shows the action.",
+     "changes": [
+       {"change": "phone call 492-522 -> 491.5-521 (8:12-8:42 -> 8:11.5-8:41.0)", "evidence": "8:11.5 no phone; 8:12.0 the phone sliding up, its edge visible bottom right; 8:12.5-8:40.5 call screen (Jimmy, incoming then connected); 8:41.0, 8:41.5 and 8:42.0 no phone (walking)"}
      ]}
   ]
 }

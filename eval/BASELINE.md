@@ -175,3 +175,149 @@ Bad picks are 0 in both videos.
   - Unchanged in every row of both videos, compared with the v2 runs: loudness, audio_z, visual_change,
     hard_changes, visual_z, star_score, stars and minimap.
   - combined, smoothed and excluded differ only at steps within 0.5 s of a phone step.
+
+# v4 (clips cut to the action edges, first with an 8 s minimum) compared with v3 (2026-10-23)
+
+Same machine, default flags, GPU decoding, run one at a time. v3 was run again from a separate checkout of main
+(dd64c62) so both versions ran on the same day. Scored against the answer keys at **revision 2** (phone-call ranges
+follow the phone on screen; test2's crash range starts at 19:07.5). Revision 2 was committed before any v4 run.
+Run folders: v3 `test1\20261023-202444`, `test2\20261023-202755`; v4 `test1\20261023-203050`,
+`test2\20261023-203232`.
+
+| Video | Version | Hits (strict) | Overlap | Recall | Bad picks | Average length | Lengths (s) | Postable | Run time |
+|---|---|---|---|---|---|---|---|---|---|
+| test1 | v3 | 5/5 | 5/5 | 4/5 | 0 | 26.0 s | 30, 30, 30, 20, 20 | 4/5 (0 unrated) | 87.9 s |
+| test1 | v4 | 5/5 | 5/5 | **5/5** | **1** (0.0 s shared) | 25.4 s | 30, 30, 28.75, 30, 8 | 1/5 (4 unrated) | 84.4 s |
+| test2 | v3 | 3/5 | 3/5 | 2/3 | 0 | 20.0 s | 20, 20, 20, 20, 20 | 3/5 (0 unrated) | 94.7 s |
+| test2 | v4 | 3/5 | 3/5 | 2/3 | 0 | **9.7 s** | 8, 16.5, 8, 8, 8 | 1/5 (4 unrated) | 79.4 s |
+
+- **Hits** are strict hits: at least 50 % of the clip inside action ranges. Average length is the mean of
+  `duration_s` in `scores.json`.
+- **The key revision changes no v3 number.** The 2026-10-22 v3 runs score the same on revisions 1 and 2.
+- **The fresh v3 runs reproduce v3.** They pick the same clips as on 2026-10-22, and their `timeline.csv` files are
+  byte-identical to those runs.
+- **Postable** is mostly "unrated": a rating carries over only with 80 % of the longer clip shared. The two rated
+  v4 clips reuse v2 ratings: test1 3:50.2-4:19.0 (28.2 s shared with 3:48.5-4:18.5) and test2 4:40.0-4:56.5
+  (16.5 s shared with 4:36.8-4:56.8).
+
+## v4 picks
+
+| Video | # | Clip | Action found | Peak (score) | What decides the edges |
+|---|---|---|---|---|---|
+| test1 | 1 | 3:10.2-3:40.2 | 3:03.0-4:19.0 (76 s) | 3:24.5 (5.68) | 30 s centred on the peak (wanted stars throughout) |
+| test1 | 2 | 0:57.5-1:27.5 | 0:58.5-1:52.5 (54 s) | 1:08.5 (5.66) | start 1 s before the action; end by the 30 s cap |
+| test1 | 3 | 3:50.2-4:19.0 | 3:50.5-4:19.0 | 4:01.5 (6.00) | start: 10 s gap after clip 1; end: minimap wall (safehouse intro) |
+| test1 | 4 | 2:16.0-2:46.0 | 2:07.5-2:46.0 (38.5 s) | 2:35.0 (4.82) | end: pause-map wall at 2:46.0; 30 s back from it |
+| test1 | 5 | 12:05.1-12:13.1 | 12:07.5-12:09.5 (2 s) | 12:07.5 (3.29) | 8 s minimum around a 2 s burst |
+| test2 | 1 | 0:02.9-0:10.9 | 0:04.5-0:08.5 (4 s) | 0:07.5 (3.31) | 8 s minimum |
+| test2 | 2 | 4:40.0-4:56.5 | 4:41.0-4:55.0 (14 s) | 4:49.5 (3.61) | 1 s before, 1.5 s after the action |
+| test2 | 3 | 0:45.1-0:53.1 | 0:46.5-0:51.0 (4.5 s) | 0:47.5 (4.07) | 8 s minimum |
+| test2 | 4 | 5:06.5-5:14.5 | 5:07.0-5:08.5 (1.5 s) | 5:07.5 (3.70) | 8 s minimum |
+| test2 | 5 | 3:11.5-3:19.5 | 3:17.5-3:18.5 (1 s) | 3:18.0 (3.55) | end: minimap wall (house collapse); 8 s back from it |
+
+- **v4 picks the same five moments as v3.** In both videos all five smoothed peaks, their order and their
+  sequences are identical; only the cuts differ.
+- **Why test1's recall rises to 5/5.**
+  - For the peak at 1:08.8, v3 kept the densest 30 s, 1:18.0-1:48.0.
+  - v4 centres 30 s on the peak, and the window may not start more than 1 s before the action (0:58.5). That
+    gives 0:57.5-1:27.5.
+  - This clip reaches 12.5 s into the 0:50-1:10 carjack range.
+- **test1's bad pick is eval's closed-interval rule, not a cut into the cutscene.** Clip 3 ends at 4:19.0, where
+  the minimap wall starts (the safehouse intro, 4:19.5, minus the 0.5 s growth) and where the key's cutscene range
+  starts too (revision 1 put that range's start on the last gameplay frame, 4:19.0). Shared time: 0.0 s.
+  eval.py was not changed.
+- **Stills of the v4 clips** (1 s apart; test2 clip 2 at 1.5 s):
+  - test2 1 (0:02.9-0:10.9): pulling out of the drive, sideswiping a yellow sports car about 0:07-0:10.
+  - test2 3 (0:45.1-0:53.1): an RV pulls out, the truck hits a gate about 0:48, then drives on.
+  - These are the same "clumsy crashes" as v3's 0:00-0:20 and 0:39.7-0:59.7, now cut tighter.
+  - test2 4 (5:06.5-5:14.5): a green slow-motion flash at 5:07.5, then driving.
+  - test2 5 (3:11.5-3:19.5): the truck winching the house, ending as it tips.
+  - test1 5 (12:05.1-12:13.1): driving behind the swinging boom on the bridge, with a camera cut to Franklin on
+    the boom at 12:08.
+
+## The lamp-post crash (test2 19:07.5-19:09.5)
+
+It did not come back, and no rule was changed to win it back:
+- **The crash was a candidate.** Its smoothed peak (19:07.5, 1.84) ranks above v4's fifth pick (1.69), so the
+  greedy picker reached it.
+- **The action found is short.** It is 19:07.0-19:08.0: only 19:07.0 (2.41) and 19:07.5 (3.52) are active. The
+  lamp-post step at 19:09.5 scores 1.43.
+- **The window was 19:04.2-19:12.2** (8 s). The phone stretch runs 18:48.0-19:10.0: the call screen is up until
+  19:09.5, plus the 0.5 s growth.
+- **Cutting the phone out leaves 19:10.0-19:12.2:** 2.2 s, with a best step of 0.92. That fails both rules:
+  shorter than 8 s, and no step scoring 2.0 or more.
+- **Nothing after it qualifies either.** With `--count 20`, the nearest pick is 19:22.0-19:30.0, the car switch.
+
+## The phone at frame level
+
+- **The rule changed no pick on these videos.** No v4 clip has any phone cut out: test1's call peak (8:33.0,
+  smoothed 1.97) is 345th of 1,851 steps by smoothed score.
+- **Even 20 clips don't change that.** With `--count 20`, still no clip in either video has phone time cut out.
+
+## v3 columns unchanged
+
+All 15 v3 columns of `timeline.csv` match the fresh v3 runs in every row of both videos (1,851 and 2,501 rows),
+except `clip`, which marks the picked clips. v4 appends `pick_score`, `pick_smoothed`, `phone_cut` and `action`.
+
+## Changed after looking at test1/test2
+
+- **No number was changed.** The lead-in (1 s), tail (1.5 s), gap (2.5 s), 8 s minimum and 30 s maximum were
+  set before any v4 run.
+- **One order was fixed after the first v4 run of test1.** The 30 s cap was applied before the window was held
+  inside the walls, so test1's 2:17.5-2:46.0 came out 28.5 s. Now walls first, then the cap: 2:16.0-2:46.0,
+  30 s. Only that clip changed. The table above is from the fixed code.
+
+# v4 with a 15 s minimum (2026-10-23)
+
+## Owner ratings of the 8 s test2 clips
+
+Rated with the review page's play-clip button against `test2\20261023-203232` (`ratings/test2_v4.json`):
+
+| # | Clip | Owner |
+|---|---|---|
+| 1 | 0:02.9-0:10.9 | not postable: "boring" |
+| 2 | 4:40.0-4:56.5 | postable: "good action sequence" |
+| 3 | 0:45.1-0:53.1 | not postable: "clumsy crash, same problem as clip 1" |
+| 4 | 5:06.5-5:14.5 | "kinda postable - too short" (stored as postable) |
+| 5 | 3:11.5-3:19.5 | postable: "most enjoyable - but too short" |
+
+With these ratings the 8 s run scores postable 3/5 (0 unrated). For clip 2, eval shows the v2 rating of
+4:36.8-4:56.8 instead: both ratings share all 16.5 s, and eval.py keeps the first file on a tie. Both say postable.
+
+## The change
+
+The owner set the shortest clip to **15 s** (from 8 s): "too short" was the owner's judgement of a postable length,
+not a score. It applies to the extension of short actions and to the piece left after the phone cut. A clip that
+can't reach 15 s is dropped and the next candidate taken. No other rule or number changed.
+
+## Results
+
+Same machine, default flags, GPU, run one at a time, keys at revision 2. v3 was run again from a separate checkout of
+main. Runs: v3 `test1\20261023-205249`, `test2\20261023-205553`; v4 (15 s) `test1\20261023-205413`,
+`test2\20261023-205723`.
+
+| Video | Version | Hits (strict) | Recall | Bad picks | Average length | Lengths (s) | Postable | Run time |
+|---|---|---|---|---|---|---|---|---|
+| test1 | v3 | 5/5 | 4/5 | 0 | 26.0 s | 30, 30, 30, 20, 20 | 4/5 (0 unrated) | 84.2 s |
+| test1 | v4, 8 s | 5/5 | 5/5 | 1 | 25.4 s | 30, 30, 28.75, 30, 8 | 1/5 (4 unrated) | 84.4 s |
+| test1 | v4, 15 s | 5/5 | 5/5 | 1 | 26.8 s | 30, 30, 28.75, 30, 15 | 1/5 (4 unrated) | 83.7 s |
+| test2 | v3 | 3/5 | 2/3 | 0 | 20.0 s | 20, 20, 20, 20, 20 | 3/5 (0 unrated) | 90.1 s |
+| test2 | v4, 8 s | 3/5 | 2/3 | 0 | 9.7 s | 8, 16.5, 8, 8, 8 | 3/5 (0 unrated) | 79.4 s |
+| test2 | v4, 15 s | 3/5 | 2/3 | 0 | 15.3 s | 15, 16.5, 15, 15, 15 | 1/5 (4 unrated) | 83.9 s |
+
+- **No new picks.** At 15 s, v4 picks the same five moments as at 8 s in both videos (and as v3). The clips
+  that were shorter than 15 s are longer now; the others are unchanged:
+  - test1 5: 12:05.1-12:13.1 → 12:02.3-12:17.3.
+  - test2 1: 0:02.9-0:10.9 → 0:00.1-0:15.1.
+  - test2 3: 0:45.1-0:53.1 → 0:42.3-0:57.3.
+  - test2 4: 5:06.5-5:14.5 → 5:06.5-5:21.5.
+  - test2 5: 3:11.5-3:19.5 → 3:04.5-3:19.5. It still ends at the house-collapse wall, so all 7 s were added
+    before the action.
+  - Unchanged: test1 1-4 and test2 2 (4:40.0-4:56.5).
+- **The bad pick is the same.** test1's 3:50.2-4:19.0 touches the safehouse cutscene range at 4:19.0 with 0.0 s
+  shared.
+- **The fresh v3 runs reproduce v3.** Their `timeline.csv` is byte-identical to the 2026-10-22 v3 runs, and v4's
+  15 v3 columns match them in every row except `clip`.
+- **The lamp-post crash still gets no clip.** What is left after the phone cut is 2.2 s, under 15 s.
+- **Postable** for the 15 s clips is mostly unrated: the 8 s ratings don't carry over to them (8 s is under 80 % of
+  15 s).

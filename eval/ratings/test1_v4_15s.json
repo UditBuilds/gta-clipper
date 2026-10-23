@@ -1,0 +1,12 @@
+{
+  "video": "test1.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-23",
+  "run": "test1/20261023-205413",
+  "tool": "gta-clipper v4 (15 s minimum)",
+  "method": "The owner re-rated the 15 s v4 clips. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "Only the clips the owner rated are stored here (clip 5 of that run). No reason was given.",
+  "clips": [
+    {"start_s": 722.3, "end_s": 737.3, "span": "12:02.3-12:17.3", "postable": true, "reason": "no reason given"}
+  ]
+}
