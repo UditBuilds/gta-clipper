@@ -83,7 +83,8 @@ PHONE_PANEL_TINT = 10.0  # largest R/G/B difference in a panel cell (the panel i
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
 MAX_PER_SEQ = 2          # most clips taken from one action sequence
 
-# --- Clip edges (v4). Set by the owner before any v4 run; not tuned to the test videos. ---
+# --- Clip edges (v4). Set by the owner before any v4 run; not tuned to the test videos. The shortest clip
+# (--min-len, 15 s) is the owner's judgement of a postable length: the 8 s clips were "too short". ---
 LEAD_IN = 1.0            # seconds kept before the action's first active step
 TAIL = 1.5               # seconds kept after its last active step
 ACTION_GAP = LEAD_IN + TAIL  # quiet seconds that end the action; a shorter gap is covered by the tail and lead-in anyway
@@ -661,7 +662,7 @@ def main():
                                              "into vertical 1080x1920 clips.")
     ap.add_argument("video", type=Path)
     ap.add_argument("--count", type=int, default=5, help="clips to make (default 5)")
-    ap.add_argument("--min-len", type=float, default=8.0, help="shortest clip, seconds (default 8)")
+    ap.add_argument("--min-len", type=float, default=15.0, help="shortest clip, seconds (default 15)")
     ap.add_argument("--max-len", type=float, default=30.0, help="longest clip, seconds (default 30)")
     ap.add_argument("--min-gap", type=float, default=10.0,
                     help="seconds between the end of one clip and the start of the next (default 10)")
