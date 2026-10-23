@@ -18,11 +18,13 @@ with start == end could never be hit, so eval.py stops with an error on one.
                - the picked clip is RATED_MIN_LEN-RATED_MAX_LEN (15-30) s long,
                - the rated clip is at least RATED_MIN_LEN long (ratings of shorter clips stay in the files as
                  history but don't count), and
-               - the two peaks are at most RATING_PEAK_TOL (4 s) apart.
-             If several apply, the newest wins: the latest rated date, then the latest run (its folder name is a
-             timestamp; rating dates have no time of day), then the nearest peak, then the most shared time.
-             Otherwise the clip is "unrated", which never counts as postable. Because the cut isn't compared,
-             a rating such as "bad cut" can carry over to a different cut of the same moment.
+               - the two peaks are at most RATING_PEAK_TOL (4 s) apart, or it is the same clip (start and end
+                 within SAME_CLIP_TOL), whatever the peaks.
+             If several apply, a rating of the same clip wins; then the newest: the latest rated date, then the
+             latest run (its folder name is a timestamp; rating dates have no time of day), then the nearest
+             peak, then the most shared time. Otherwise the clip is "unrated", which never counts as postable.
+             Between different cuts the cut isn't compared, so a rating such as "bad cut" can carry over to a
+             different cut of the same moment, unless the clip has a rating of its own.
              Rating files from before PR 5 store no peak; eval/rating_peaks.json has their peaks. Newer rating
              files put peak_s on each clip. eval.py stops if a rated clip has neither.
 - Postable@5: the same count over the first TOP_K (5) picks by rank only, out of 5 even when the run picked
@@ -49,6 +51,7 @@ STRICT_SHARE = 0.5  # share of a clip's length that must be inside action ranges
 RATING_PEAK_TOL = 4.0  # seconds between a picked clip's peak and a rated clip's peak for the rating to apply
 RATED_MIN_LEN, RATED_MAX_LEN = 15.0, 30.0  # seconds; picked clips this long can take a rating; rated clips need 15+
 LEN_TOL = 1e-6  # seconds of float slack on those limits
+SAME_CLIP_TOL = 0.01  # seconds; start and end this close = the same clip (scores.json rounds times to 0.01 s)
 TOP_K = 5  # Postable@5 counts the first TOP_K picks by rank, out of TOP_K
 
 
@@ -88,6 +91,11 @@ def inside(clip, ranges):
     return sum(max(0.0, min(e, b) - max(s, a)) for a, b in merged)
 
 
+def same_clip(a, b):
+    """True when two clips start and end within SAME_CLIP_TOL of each other."""
+    return abs(a["start_s"] - b["start_s"]) < SAME_CLIP_TOL and abs(a["end_s"] - b["end_s"]) < SAME_CLIP_TOL
+
+
 def with_peaks(name, data, peaks):
     """The clips of one ratings file (name = its stem), each with its peak_s, rated date and run.
 
@@ -96,7 +104,7 @@ def with_peaks(name, data, peaks):
     out = []
     for r in data["clips"]:
         known = [p["peak_s"] for p in peaks.get(name, [])
-                 if abs(p["start_s"] - r["start_s"]) < 0.01 and abs(p["end_s"] - r["end_s"]) < 0.01]
+                 if same_clip(p, r)]
         peak = r.get("peak_s", known[0] if known else None)
         if peak is None:
             sys.exit(f"ERROR: {name}.json: rated clip {hms(r['start_s'])}-{hms(r['end_s'])} has no peak_s and no "
@@ -120,20 +128,21 @@ def counts(rated_clip):
 
 
 def rating_for(clip, rated):
-    """(rating, shared seconds) of the newest rating that applies to the clip, or (None, 0.0); see the docstring."""
+    """(rating, shared seconds) of the rating that applies to the clip (its own first, else the newest), or
+    (None, 0.0); see the docstring."""
     s, e = clip["start_s"], clip["end_s"]
     if not RATED_MIN_LEN - LEN_TOL <= e - s <= RATED_MAX_LEN + LEN_TOL:
         return None, 0.0
     best, best_rank = None, None
     for r in rated:
-        apart = abs(r["peak_s"] - clip["peak_time_s"])
-        if not counts(r) or apart > RATING_PEAK_TOL + LEN_TOL:
+        apart, same = abs(r["peak_s"] - clip["peak_time_s"]), same_clip(r, clip)
+        if not counts(r) or (apart > RATING_PEAK_TOL + LEN_TOL and not same):
             continue
         ov = max(0.0, min(e, r["end_s"]) - max(s, r["start_s"]))
-        rank = (r["rated"], r["run"].split("/")[-1], -apart, ov)  # the run folder is YYYYMMDD-HHMMSS
+        rank = (same, r["rated"], r["run"].split("/")[-1], -apart, ov)  # the run folder is YYYYMMDD-HHMMSS
         if best_rank is None or rank > best_rank:
             best, best_rank = r, rank
-    return best, best_rank[3] if best else 0.0
+    return best, best_rank[-1] if best else 0.0  # the shared seconds are last in the rank
 
 
 def evaluate(scores, key, rated):

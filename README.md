@@ -269,10 +269,12 @@ its highest-scoring 0.5 s step). It applies to a picked clip when:
 - the rated clip is at least 15 s long (ratings of shorter clips stay in the files as history but don't count), and
 - the two peaks are at most 4 s apart.
 
-If several apply, the newest wins: the latest `rated` date, then the latest run (its folder name is a timestamp, and
-dates have no time of day), then the nearest peak. Otherwise the clip is `unrated`. The cut isn't compared, so a
-rating carries over to another cut of the same moment, "bad cut" ratings included. (Before PR 5 a rating carried over
-only when the two clips shared 80 % of the longer one.) The rating files from before PR 5 store no peak and were not
+A rating of the exact same clip (start and end within 0.01 s) beats every other rating, and applies even if the two
+peaks are more than 4 s apart (the length rules still apply). Otherwise, if several apply, the newest wins: the latest
+`rated` date, then the latest run (its folder name is a timestamp, and dates have no time of day), then the nearest
+peak. If none applies, the clip is `unrated`. Between different cuts the cut isn't compared, so a rating carries over to
+another cut of the same moment, "bad cut" ratings included, unless the clip has a rating of its own. (Before PR 5 a
+rating carried over only when the two clips shared 80 % of the longer one.) The rating files from before PR 5 store no peak and were not
 rewritten: `eval/rating_peaks.json` has their peaks, read from the run each file names. Newer rating files put
 `peak_s` on each clip. eval.py stops if a rated clip has neither.
 
@@ -289,14 +291,14 @@ v3 and v4 (15 s minimum) on the dev set, scored with PR 5's eval.py (keys at rev
 
 | Video | Version | Hits (strict) | Postable@5 | Unrated | Recall | Bad picks | Average length |
 |---|---|---|---|---|---|---|---|
-| test1 | v3 | 5/5 | 5/5 | 0 | 4/5 | 0 | 26.0 s |
+| test1 | v3 | 5/5 | 4/5 | 0 | 4/5 | 0 | 26.0 s |
 | test1 | v4 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s |
 | test2 | v3 | 3/5 | 3/5 | 0 | 2/3 | 0 | 20.0 s |
 | test2 | v4 | 3/5 | 3/5 | 0 | 2/3 | 0 | 15.3 s |
 
-test1 v3's 5/5 includes 2:26.0-2:46.0, a clip the owner rated "not postable, boring, bad cut" itself: the newer
-postable rating of v4's 2:16.0-2:46.0, with the same peak, wins (see Known limits). Details and the earlier numbers
-are in [eval/BASELINE.md](eval/BASELINE.md).
+test1 v3's 2:26.0-2:46.0 keeps its own rating, "not postable, boring, bad cut", although the owner later rated v4's
+2:16.0-2:46.0 (same peak) postable: a clip's own rating beats a newer rating of another cut. Details and the earlier
+numbers are in [eval/BASELINE.md](eval/BASELINE.md).
 
 ## Known limits
 
@@ -352,10 +354,10 @@ are in [eval/BASELINE.md](eval/BASELINE.md).
   like the chase and the house pull the owner liked, and test2 has no wanted stars, so nothing in the score tells
   them apart. Planned for a later PR.
 - **A rating follows the moment, not the cut (PR 5).** A rating applies to any 15-30 s clip whose peak is within 4 s
-  of the rated clip's, and the newest rating of a moment wins, for clips of older runs too. So a "bad cut" rating
-  carries over to a different cut, and a newer rating can overrule a clip's own: test1 v3's 2:26.0-2:46.0 was rated
-  "not postable, boring, bad cut", but counts as postable since the owner rated v4's 2:16.0-2:46.0 (same peak, 2:35.0)
-  postable.
+  of the rated clip's, so a "bad cut" rating carries over to a different cut of the same moment. Only a clip's own
+  rating (the exact same clip) beats that: test1 v3's 2:26.0-2:46.0 stays "not postable, boring, bad cut" although
+  v4's 2:16.0-2:46.0 (same peak, 2:35.0) was rated postable later. A clip with no rating of its own takes the newest
+  rating of its moment, for clips of older runs too.
 - **Rated peaks are fixed; new peaks follow the current scoring.** A rated clip's peak is the one its own run found.
   If a later scoring change (such as the low-speed-crash item above) moves a clip's best step by more than 4 s, its
   old ratings stop applying, or apply to a different moment. Not tested.

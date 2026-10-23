@@ -340,9 +340,10 @@ section above with PR 5's eval.py (keys at revision 2): v3 `test1\20261023-20524
   at its edge (0.0 s shared) counted. A range whose end isn't after its start now stops eval.py with an error; no key
   has one.
 - **Ratings follow the peak.** A rating applies to a picked clip when the picked clip is 15-30 s long, the rated clip
-  is at least 15 s long, and the two peaks (`peak_time_s`) are at most 4 s apart. Ratings of clips under 15 s stay in
-  the files as history but don't count. Of several, the newest wins: rated date, then run timestamp, then nearest peak.
-  The old rule needed 80 % of the longer clip shared.
+  is at least 15 s long, and the two peaks (`peak_time_s`) are at most 4 s apart, or it is the same clip (start and end
+  within 0.01 s), whatever the peaks. Ratings of clips under 15 s stay in the files as history but don't count. Of
+  several, a rating of the same clip wins; then the newest: rated date, then run timestamp, then nearest peak. The old
+  rule needed 80 % of the longer clip shared.
 - **Peaks of old ratings.** The rating files from before PR 5 store no peak and were not rewritten.
   `rating_peaks.json` holds their peaks, read from the run each file names; all 20 rated clips matched exactly one
   clip there. Newer rating files carry `peak_s` on each clip.
@@ -353,7 +354,7 @@ section above with PR 5's eval.py (keys at revision 2): v3 `test1\20261023-20524
 
 | Video | Version | Hits (strict) | Postable@5 | Unrated | Recall | Bad picks | Average length |
 |---|---|---|---|---|---|---|---|
-| test1 | v3 | 5/5 | 5/5 | 0 | 4/5 | 0 | 26.0 s |
+| test1 | v3 | 5/5 | 4/5 | 0 | 4/5 | 0 | 26.0 s |
 | test1 | v4 | 5/5 | 5/5 | 0 | 5/5 | **0** (was 1) | 26.8 s |
 | test2 | v3 | 3/5 | 3/5 | 0 | 2/3 | 0 | 20.0 s |
 | test2 | v4 | 3/5 | 3/5 | 0 | 2/3 | 0 | 15.3 s |
@@ -365,8 +366,11 @@ The same runs and rating files under the old rules: test1 v3 postable 4/5 (0 unr
   4:19.0-4:38.0. Old and new eval.py were run on all 22 test1/test2 runs (v1-v4). The only other changes are the two
   earlier v4 runs of test1 (`20261023-202612`, `20261023-203050`): the same clip, the same 1 → 0. No precision,
   strict or recall number changed in any run.
-- **test1 v3 rises to 5/5 because of newest-wins.** Its clip 4, 2:26.0-2:46.0, has its own v2 rating: not postable,
-  "boring, bad cut". The owner's newer rating of v4's 2:16.0-2:46.0 (postable) has the same peak, 2:35.0, so it wins.
+- **A clip's own rating beats a newer one of another cut.** test1 v3's clip 4, 2:26.0-2:46.0, keeps its own v2
+  rating, not postable ("boring, bad cut"), although the owner later rated v4's 2:16.0-2:46.0 (same peak, 2:35.0)
+  postable. With plain newest-wins, as this PR first built it, clip 4 took that rating and test1 v3 scored 5/5; the
+  owner chose the same-clip rule instead. It changes no other Postable@5: test1 v3's 12:00.2-12:20.2 and test2 v3's
+  2:59.5-3:19.5 now take their own ratings instead of newer ones of the same moment, and all of them say postable.
 
 ## Which rating each clip takes
 
@@ -375,8 +379,8 @@ The same runs and rating files under the old rules: test1 v3 postable 4/5 (0 unr
 | test1 | v3 | 1 | 3:03.5-3:33.5 (3:24.5) | postable | test1_v2, the same clip |
 | test1 | v3 | 2 | 1:18.0-1:48.0 (1:32.5) | postable | test1_v2, the same clip |
 | test1 | v3 | 3 | 3:48.5-4:18.5 (4:01.5) | postable | test1_v2, the same clip |
-| test1 | v3 | 4 | 2:26.0-2:46.0 (2:35.0) | postable | test1_v4_15s_b, 2:16.0-2:46.0 (2:35.0) |
-| test1 | v3 | 5 | 12:00.2-12:20.2 (12:03.5) | postable | test1_v4_15s, 12:02.3-12:17.3 (12:03.5) |
+| test1 | v3 | 4 | 2:26.0-2:46.0 (2:35.0) | not postable | test1_v2, the same clip |
+| test1 | v3 | 5 | 12:00.2-12:20.2 (12:03.5) | postable | test1_v3, the same clip |
 | test1 | v4 | 1 | 3:10.2-3:40.2 (3:24.5) | postable | test1_v2, 3:03.5-3:33.5 (3:24.5) |
 | test1 | v4 | 2 | 0:57.5-1:27.5 (1:08.5) | postable | test1_v4_15s_b, the same clip |
 | test1 | v4 | 3 | 3:50.2-4:19.0 (4:01.5) | postable | test1_v2, 3:48.5-4:18.5 (4:01.5) |
@@ -386,7 +390,7 @@ The same runs and rating files under the old rules: test1 v3 postable 4/5 (0 unr
 | test2 | v3 | 2 | 4:37.0-4:57.0 (4:49.5) | postable | test2_v4, 4:40.0-4:56.5 (4:49.5) |
 | test2 | v3 | 3 | 0:39.7-0:59.7 (0:47.5) | not postable | test2_v2, the same clip |
 | test2 | v3 | 4 | 5:07.0-5:27.0 (5:07.5) | postable | test2_v4_15s, 5:06.5-5:21.5 (5:07.5) |
-| test2 | v3 | 5 | 2:59.5-3:19.5 (3:07.0) | postable | test2_v4_15s, 3:04.5-3:19.5 (3:07.0) |
+| test2 | v3 | 5 | 2:59.5-3:19.5 (3:07.0) | postable | test2_v3, the same clip |
 | test2 | v4 | 1 | 0:00.1-0:15.1 (0:07.5) | not postable | test2_v2, 0:00.0-0:20.0 (0:07.5) |
 | test2 | v4 | 2 | 4:40.0-4:56.5 (4:49.5) | postable | test2_v4, the same clip |
 | test2 | v4 | 3 | 0:42.3-0:57.3 (0:47.5) | not postable | test2_v2, 0:39.7-0:59.7 (0:47.5) |
@@ -425,5 +429,5 @@ phone time cut.
 
 - `selftest.py`: PASS. The same three 15.000 s clips as before, 0:34.8-0:49.8, 1:24.8-1:39.8 and 2:14.8-2:29.8.
 - `hudtest.py`: PASS (5 required checks and 4 calibration frames).
-- `evaltest.py` (new): PASS, 17 checks on made-up clips, ranges and ratings. Each group was run before its change:
-  4 of the 6 range checks, 7 of the 8 rating checks and all 3 Postable@5 checks failed then.
+- `evaltest.py` (new): PASS, 20 checks on made-up clips, ranges and ratings. Each group was run before its change:
+  4 of the 6 range checks, 7 of the 8 rating checks, all 3 Postable@5 checks and all 3 same-clip checks failed then.

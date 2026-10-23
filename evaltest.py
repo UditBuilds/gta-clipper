@@ -91,10 +91,10 @@ def shorter_cut_of_same_peak_takes_the_rating():
 
 @check
 def peaks_4_s_apart_match_4_5_s_do_not():
-    """peaks 4.0 s apart: the rating applies; 4.5 s apart: unrated, even for the exact same time range"""
+    """peaks 4.0 s apart: the rating applies; 4.5 s apart: unrated (clips 1 s apart, so not the same clip)"""
     near, far = rating(90, 110, 104.0), rating(90, 110, 104.5)
-    return (ev.rating_for(clip(90, 110, peak=100), [near])[0] is near
-            and ev.rating_for(clip(90, 110, peak=100), [far])[0] is None)
+    return (ev.rating_for(clip(91, 110, peak=100), [near])[0] is near
+            and ev.rating_for(clip(91, 110, peak=100), [far])[0] is None)
 
 
 @check
@@ -118,10 +118,34 @@ def newest_rating_wins():
     new = rating(105, 120, 112, postable=False, rated="2026-10-23", run="t/20261023-100000")
     later_run = rating(100, 120, 113, postable=True, rated="2026-10-23", run="t/20261023-200000")
     nearer = rating(101, 121, 110.5, postable=False, rated="2026-10-23", run="t/20261023-200000")
-    c = clip(100, 120, peak=110)
+    c = clip(102, 118, peak=110)  # not the same clip as any of them
     return (ev.rating_for(c, [old, new])[0] is new and ev.rating_for(c, [new, old])[0] is new
             and ev.rating_for(c, [old, new, later_run])[0] is later_run
             and ev.rating_for(c, [later_run, nearer])[0] is nearer)
+
+
+@check
+def same_clip_rating_beats_a_newer_peak_match():
+    """a rating of the exact same clip (start and end within 0.01 s) beats a newer rating matched by peak"""
+    own = rating(146.0, 166.0, 155.0, postable=False, rated="2026-10-22", run="t/20261022-120429")
+    other_cut = rating(136.0, 166.0, 155.0, postable=True, rated="2026-10-23", run="t/20261023-205413")
+    c = clip(146.0, 166.0, peak=155.0)
+    return ev.rating_for(c, [own, other_cut]) == (own, 20.0) and ev.rating_for(c, [other_cut, own])[0] is own
+
+
+@check
+def same_clip_rating_applies_even_if_peaks_drift():
+    """a rating of the exact same clip applies even when the peaks are over 4 s apart; the length rules still hold"""
+    r, short = rating(100.0, 120.0, 101.0), rating(100.0, 110.0, 101.0)
+    return (ev.rating_for(clip(100.0, 120.0, peak=118.0), [r])[0] is r
+            and ev.rating_for(clip(100.0, 110.0, peak=101.0), [short])[0] is None)
+
+
+@check
+def test1_v3_clip_4_keeps_its_own_rating():
+    """test1 v3 2:26.0-2:46.0 keeps its own v2 rating (not postable), not v4 2:16.0-2:46.0's newer one (same peak)"""
+    g, _ = ev.rating_for(clip(146.0, 166.0, peak=155.0), ev.load_ratings("test1"))
+    return g is not None and g["file"] == "test1_v2" and not g["postable"]
 
 
 @check
