@@ -5,7 +5,8 @@ instant falls inside a picked clip (start_s <= t < end_s) are outlined in that c
 also shows clip.py's highest combined score in the --every seconds after it (from timeline.csv), so
 loud/busy stretches that were not picked stand out. Images are embedded as base64, so the HTML is a
 single file that opens by double-click. Clicking a tile plays the source video from that time
-(relative link to the source, so that part needs the file to stay where it is).
+(relative link to the source, so that part needs the file to stay where it is). Each clip in the table has a play
+button that plays the clip file itself in the same player.
 
 Thumbnails assume the source is limited range (16-235) with BT.709 colour, which is what PS5 SDR
 captures contain. A truly full-range source would come out with crushed blacks and clipped whites.
@@ -126,7 +127,8 @@ def main():
             f'<td><button class="seek" data-t="{c["start_s"]}">{ts1(c["start_s"])}&ndash;{ts1(c["end_s"])}</button></td>'
             f'<td>{c["duration_s"]:.1f} s</td><td>{ts1(c["peak_time_s"])}</td><td>{c["peak_score"]:.2f}</td>'
             f'<td class="why">{html.escape(c["reason"])}</td>'
-            f'<td><a href="{clip_url}">{html.escape(c["file"])}</a></td></tr>')
+            f'<td><button class="seek" data-clip="{clip_url}">play clip</button> '
+            f'<a href="{clip_url}">{html.escape(c["file"])}</a></td></tr>')
 
     info = scores["input_info"]
     st = scores["settings"]
@@ -193,7 +195,7 @@ button.seek {{ font:inherit; color:var(--text); background:none; border:1px soli
 <p class="legend">{n} thumbnails, one every {every} s; {n_in} fall inside a picked clip (coloured outline).
 "max" under each tile is clip.py's highest combined score (0&ndash;6) in the {every} s after that thumbnail; orange
 means it reaches clip.py's {floor} floor, and the tick on each bar marks that floor. Click a tile or a clip time to play
-the source from there; Esc closes the player.</p>
+the source from there, or "play clip" to watch the clip as cut; Esc closes the player.</p>
 {notes}
 </header>
 <section>
@@ -203,19 +205,25 @@ the source from there; Esc closes the player.</p>
 <section><div class="grid">{tiles}</div></section>
 <div id="player" role="dialog" aria-label="Source video player">
 <video id="vid" controls preload="none"></video>
-<p id="vidmsg">Plays the source file from {video_url}. If nothing plays, the source has been moved.</p>
+<p id="vidmsg"></p>
 <button id="close">Close (Esc)</button>
 </div>
 <script>
-const player = document.getElementById("player"), vid = document.getElementById("vid");
-function openAt(t) {{
-  if (!vid.getAttribute("src")) vid.src = "{video_url}";
+const player = document.getElementById("player"), vid = document.getElementById("vid"),
+  msg = document.getElementById("vidmsg");
+function play(src, t, what) {{
+  msg.textContent = what + " (" + decodeURIComponent(src) + "). If nothing plays, the file has been moved.";
   player.classList.add("open");
   const go = () => {{ vid.currentTime = t; vid.play().catch(() => {{}}); }};
-  if (vid.readyState >= 1) go(); else vid.addEventListener("loadedmetadata", go, {{ once: true }});
+  if (vid.getAttribute("src") === src && vid.readyState >= 1) {{ go(); return; }}
+  vid.addEventListener("loadedmetadata", go, {{ once: true }});
+  vid.src = src;
 }}
 function closePlayer() {{ vid.pause(); player.classList.remove("open"); }}
-document.querySelectorAll("[data-t]").forEach(el => el.addEventListener("click", () => openAt(parseFloat(el.dataset.t))));
+document.querySelectorAll("[data-t]").forEach(el => el.addEventListener("click",
+  () => play("{video_url}", parseFloat(el.dataset.t), "Source video")));
+document.querySelectorAll("[data-clip]").forEach(el => el.addEventListener("click",
+  () => play(el.dataset.clip, 0, "Clip as cut")));
 document.getElementById("close").addEventListener("click", closePlayer);
 player.addEventListener("click", e => {{ if (e.target === player) closePlayer(); }});
 document.addEventListener("keydown", e => {{ if (e.key === "Escape") closePlayer(); }});
