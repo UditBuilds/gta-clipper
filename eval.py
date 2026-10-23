@@ -1,16 +1,17 @@
 """Score one gta-clipper run against a hand-made answer key.
 
 An answer key (eval/answer_keys/<video>.json) lists action ranges a viewer would want clipped, and
-never-pick ranges (pause/map screens, cutscenes, phone calls, menus). Ranges are closed intervals in
-source seconds; a range with start == end is a single moment. A clip "hits" a range if they share
-any time at all (clip start <= range end and range start <= clip end).
+never-pick ranges (pause/map screens, cutscenes, phone calls, menus), in source seconds. A clip "hits" a
+range if they share more than 0 s (clip start < range end and range start < clip end): ranges are half-open,
+so a clip that ends exactly where a range starts does not hit it. Every range must have end > start; a range
+with start == end could never be hit, so eval.py stops with an error on one.
 
 - overlap precision: picked clips that hit at least one action range, out of the clips actually picked
 - strict precision:  picked clips with at least STRICT_SHARE (50 %) of their length inside action ranges
                      (inside the union of the ranges, so overlapping ranges are not counted twice)
 - recall:    action ranges hit by at least one clip, out of all action ranges (each range counts once;
-             any shared time counts, as for overlap precision)
-- bad picks: clips that hit any never-pick range (any shared time)
+             more than 0 s shared counts, as for overlap precision)
+- bad picks: clips that hit any never-pick range (more than 0 s shared)
 - postable:  clips the owner rated postable, out of the clips picked, from eval/ratings/<video>_*.json.
              A rating belongs to a clip time range, not a clip number. A clip reuses a rating only if the
              two ranges share at least RATING_MATCH (80 %) of the LONGER one's length, i.e. each covers 80 %
@@ -50,10 +51,16 @@ def span(r):
 
 
 def hits(clip, ranges):
-    """(index, overlap seconds) for every range the clip shares time with."""
+    """(index, overlap seconds) for every range the clip shares more than 0 s with."""
     s, e = clip["start_s"], clip["end_s"]
-    return [(i, max(0.0, min(e, r["end_s"]) - max(s, r["start_s"])))
-            for i, r in enumerate(ranges) if s <= r["end_s"] and r["start_s"] <= e]
+    shared = ((i, min(e, r["end_s"]) - max(s, r["start_s"])) for i, r in enumerate(ranges))
+    return [(i, ov) for i, ov in shared if ov > 0]
+
+
+def key_errors(key):
+    """One message for each range in the key that doesn't run forwards (end must be > start)."""
+    return [f"{kind} range {i + 1} ({r['start_s']}-{r['end_s']}): end must be after start"
+            for kind in ("action", "never_pick") for i, r in enumerate(key[kind]) if not r["end_s"] > r["start_s"]]
 
 
 def inside(clip, ranges):
@@ -134,6 +141,9 @@ def main():
     if not key_path.is_file():
         sys.exit(f"ERROR: answer key not found: {key_path}")
     key = json.loads(key_path.read_text(encoding="utf-8"))
+    errors = key_errors(key)
+    if errors:
+        sys.exit(f"ERROR: {key_path}: " + "; ".join(errors))
 
     if Path(key["video"]).stem != Path(video).stem:
         print(f"WARNING: run is for {video} but the key is for {key['video']}")
@@ -186,7 +196,7 @@ def main():
     print(f"\nOverlap precision: {ratio(res['n_action_clips'], res['n_clips'])} picked clips touch an action range")
     print(f"Strict precision:  {ratio(res['n_strict'], res['n_clips'])} picked clips are at least "
           f"{STRICT_SHARE:.0%} inside action ranges")
-    print(f"Recall:    {ratio(len(res['ranges_hit']), res['n_ranges'])} action ranges got a clip (any overlap)")
+    print(f"Recall:    {ratio(len(res['ranges_hit']), res['n_ranges'])} action ranges got a clip (more than 0 s shared)")
     print(f"Bad picks: {res['n_bad']} clip(s) hit a never-pick range")
     print(f"Postable:  {res['n_postable']}/{res['n_clips']} ({res['n_unrated']} unrated)")
     total = scores.get("timing_s", {}).get("total")
