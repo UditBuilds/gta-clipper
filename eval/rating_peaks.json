@@ -1,0 +1,39 @@
+{
+  "about": "Peak of each rated clip in the rating files written before PR 5, which store no peak. peak_s is that clip's peak_time_s (the start of its highest-scoring 0.5 s step) in the run its ratings file names, read from C:\\AI\\gta\\output\\<run>\\scores.json on 2026-10-23. Every rated clip matched exactly one clip of its run. The rating files themselves are unchanged. Rating files written since carry peak_s on each clip.",
+  "files": {
+    "test1_v2": [
+      {"start_s": 183.5, "end_s": 213.5, "peak_s": 204.5},
+      {"start_s": 78.0, "end_s": 108.0, "peak_s": 92.5},
+      {"start_s": 228.5, "end_s": 258.5, "peak_s": 241.5},
+      {"start_s": 146.0, "end_s": 166.0, "peak_s": 155.0},
+      {"start_s": 48.0, "end_s": 68.0, "peak_s": 66.5}
+    ],
+    "test1_v3": [
+      {"start_s": 720.2, "end_s": 740.2, "peak_s": 723.5}
+    ],
+    "test1_v4_15s": [
+      {"start_s": 722.3, "end_s": 737.3, "peak_s": 723.5}
+    ],
+    "test2_v2": [
+      {"start_s": 0.0, "end_s": 20.0, "peak_s": 7.5},
+      {"start_s": 276.8, "end_s": 296.8, "peak_s": 289.5},
+      {"start_s": 39.7, "end_s": 59.7, "peak_s": 47.5},
+      {"start_s": 1137.6, "end_s": 1157.6, "peak_s": 1147.5},
+      {"start_s": 306.8, "end_s": 326.8, "peak_s": 307.5}
+    ],
+    "test2_v3": [
+      {"start_s": 179.5, "end_s": 199.5, "peak_s": 187.0}
+    ],
+    "test2_v4": [
+      {"start_s": 2.9, "end_s": 10.9, "peak_s": 7.5},
+      {"start_s": 280.0, "end_s": 296.5, "peak_s": 289.5},
+      {"start_s": 45.1, "end_s": 53.1, "peak_s": 47.5},
+      {"start_s": 306.5, "end_s": 314.5, "peak_s": 307.5},
+      {"start_s": 191.5, "end_s": 199.5, "peak_s": 198.0}
+    ],
+    "test2_v4_15s": [
+      {"start_s": 306.5, "end_s": 321.5, "peak_s": 307.5},
+      {"start_s": 184.5, "end_s": 199.5, "peak_s": 187.0}
+    ]
+  }
+}

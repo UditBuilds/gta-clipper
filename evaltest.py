@@ -74,6 +74,85 @@ def zero_length_range_is_an_error():
             and len(ev.key_errors(key(never=[rng(30, 20)]))) == 1)
 
 
+# --- Ratings (claim 8): a rating belongs to a peak, not to a cut ---
+
+def rating(start, end, peak, postable=True, rated="2026-10-22", run="test1/20261022-120000", file="test1_vx"):
+    """A rated clip as load_ratings() returns it."""
+    return {"start_s": start, "end_s": end, "peak_s": peak, "postable": postable, "reason": "made up",
+            "file": file, "rated": rated, "run": run}
+
+
+@check
+def shorter_cut_of_same_peak_takes_the_rating():
+    """a 15 s clip with the same peak as a rated 30 s clip takes its rating (the 80 % rule left it unrated)"""
+    r = rating(183.5, 213.5, 204.5)
+    return ev.rating_for(clip(190.25, 205.25, peak=204.5), [r])[0] is r
+
+
+@check
+def peaks_4_s_apart_match_4_5_s_do_not():
+    """peaks 4.0 s apart: the rating applies; 4.5 s apart: unrated, even for the exact same time range"""
+    near, far = rating(90, 110, 104.0), rating(90, 110, 104.5)
+    return (ev.rating_for(clip(90, 110, peak=100), [near])[0] is near
+            and ev.rating_for(clip(90, 110, peak=100), [far])[0] is None)
+
+
+@check
+def rated_clips_under_15_s_do_not_count():
+    """a rating of a 14.9 s clip doesn't count, even for a picked clip that covers it with the same peak"""
+    return ev.rating_for(clip(100, 115, peak=105), [rating(100, 114.9, 105)])[0] is None
+
+
+@check
+def picked_clip_must_be_15_to_30_s():
+    """the picked clip must be 15-30 s long: 15 and 30 s take a rating, 31 s does not"""
+    r = rating(90, 120, 105)
+    return (ev.rating_for(clip(98, 113, peak=105), [r])[0] is r and ev.rating_for(clip(90, 120, peak=105), [r])[0] is r
+            and ev.rating_for(clip(90, 121, peak=105), [r])[0] is None)
+
+
+@check
+def newest_rating_wins():
+    """of several ratings within 4 s: latest rated date, then latest run, then nearest peak"""
+    old = rating(100, 120, 110, postable=True, rated="2026-10-22", run="t/20261022-120000")
+    new = rating(105, 120, 112, postable=False, rated="2026-10-23", run="t/20261023-100000")
+    later_run = rating(100, 120, 113, postable=True, rated="2026-10-23", run="t/20261023-200000")
+    nearer = rating(101, 121, 110.5, postable=False, rated="2026-10-23", run="t/20261023-200000")
+    c = clip(100, 120, peak=110)
+    return (ev.rating_for(c, [old, new])[0] is new and ev.rating_for(c, [new, old])[0] is new
+            and ev.rating_for(c, [old, new, later_run])[0] is later_run
+            and ev.rating_for(c, [later_run, nearer])[0] is nearer)
+
+
+@check
+def rating_without_a_peak_is_an_error():
+    """a rated clip gets its peak from its own peak_s or from rating_peaks.json; with neither, eval stops"""
+    data = {"rated": "2026-10-23", "run": "test1/20261023-205413",
+            "clips": [{"start_s": 10.0, "end_s": 30.0, "postable": True, "reason": "made up"}]}
+    from_file = ev.with_peaks("x", data, {"x": [{"start_s": 10.0, "end_s": 30.0, "peak_s": 21.0}]})
+    own = ev.with_peaks("x", dict(data, clips=[dict(data["clips"][0], peak_s=22.0)]), {})
+    try:
+        ev.with_peaks("x", data, {})
+        stopped = False
+    except SystemExit:
+        stopped = True
+    return from_file[0]["peak_s"] == 21.0 and own[0]["peak_s"] == 22.0 and stopped
+
+
+@check
+def every_rating_in_the_repo_has_a_peak():
+    """every rated clip in eval/ratings has a peak (9 for test1, 13 for test2), from its file or rating_peaks.json"""
+    t1, t2 = ev.load_ratings("test1"), ev.load_ratings("test2")
+    return (len(t1), len(t2)) == (9, 13) and all(isinstance(r["peak_s"], float) for r in t1 + t2)
+
+
+@check
+def owner_rating_of_test1_v4_clip_2_wins():
+    """test1 v4 clip 2 (0:57.5-1:27.5, peak 1:08.5) takes its own 2026-10-23 rating, not v2's 0:48-1:08 (peak 1:06.5)"""
+    g, _ = ev.rating_for(clip(57.5, 87.5, peak=68.5), ev.load_ratings("test1"))
+    return g is not None and g["file"] == "test1_v4_15s_b" and g["postable"]
+
+
 def main():
     ok = True
     for fn in CHECKS:

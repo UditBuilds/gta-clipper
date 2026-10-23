@@ -13,11 +13,18 @@ with start == end could never be hit, so eval.py stops with an error on one.
              more than 0 s shared counts, as for overlap precision)
 - bad picks: clips that hit any never-pick range (more than 0 s shared)
 - postable:  clips the owner rated postable, out of the clips picked, from eval/ratings/<video>_*.json.
-             A rating belongs to a clip time range, not a clip number. A clip reuses a rating only if the
-             two ranges share at least RATING_MATCH (80 %) of the LONGER one's length, i.e. each covers 80 %
-             of the other; otherwise it is "unrated". "Bad cut" ratings are about where the clip starts and
-             ends, so a 20 s clip inside a rated 30 s clip stays unrated. If several ratings match, the one
-             with the most shared time wins.
+             A rating belongs to the rated clip's peak (peak_time_s in scores.json: the start of its
+             highest-scoring 0.5 s step), not to its clip number or its cut. It applies to a picked clip when
+               - the picked clip is RATED_MIN_LEN-RATED_MAX_LEN (15-30) s long,
+               - the rated clip is at least RATED_MIN_LEN long (ratings of shorter clips stay in the files as
+                 history but don't count), and
+               - the two peaks are at most RATING_PEAK_TOL (4 s) apart.
+             If several apply, the newest wins: the latest rated date, then the latest run (its folder name is a
+             timestamp; rating dates have no time of day), then the nearest peak, then the most shared time.
+             Otherwise the clip is "unrated", which never counts as postable. Because the cut isn't compared,
+             a rating such as "bad cut" can carry over to a different cut of the same moment.
+             Rating files from before PR 5 store no peak; eval/rating_peaks.json has their peaks. Newer rating
+             files put peak_s on each clip. eval.py stops if a rated clip has neither.
 
 Per-clip overlap seconds are printed too, so a clip that only grazes a range by a second stands out.
 The last line starts with SUMMARY and is meant to be parsed.
@@ -34,9 +41,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 KEY_DIR = HERE / "eval" / "answer_keys"
 RATINGS_DIR = HERE / "eval" / "ratings"
+PEAKS_FILE = HERE / "eval" / "rating_peaks.json"  # peaks of the clips in rating files from before PR 5
 DURATION_TOL = 1.0  # seconds; warn if the run's input and the key disagree by more
 STRICT_SHARE = 0.5  # share of a clip's length that must be inside action ranges for a strict hit
-RATING_MATCH = 0.8  # shared time, as a share of the longer clip, for a rating to carry over
+RATING_PEAK_TOL = 4.0  # seconds between a picked clip's peak and a rated clip's peak for the rating to apply
+RATED_MIN_LEN, RATED_MAX_LEN = 15.0, 30.0  # seconds; picked clips this long can take a rating; rated clips need 15+
+LEN_TOL = 1e-6  # seconds of float slack on those limits
 
 
 def hms(seconds):
@@ -75,24 +85,52 @@ def inside(clip, ranges):
     return sum(max(0.0, min(e, b) - max(s, a)) for a, b in merged)
 
 
+def with_peaks(name, data, peaks):
+    """The clips of one ratings file (name = its stem), each with its peak_s, rated date and run.
+
+    The peak is the clip's own peak_s, else its entry in peaks (rating_peaks.json's "files"); with neither, stop.
+    """
+    out = []
+    for r in data["clips"]:
+        known = [p["peak_s"] for p in peaks.get(name, [])
+                 if abs(p["start_s"] - r["start_s"]) < 0.01 and abs(p["end_s"] - r["end_s"]) < 0.01]
+        peak = r.get("peak_s", known[0] if known else None)
+        if peak is None:
+            sys.exit(f"ERROR: {name}.json: rated clip {hms(r['start_s'])}-{hms(r['end_s'])} has no peak_s and no "
+                     f"entry in {PEAKS_FILE}")
+        out.append(dict(r, file=name, rated=data["rated"], run=data["run"], peak_s=float(peak)))
+    return out
+
+
 def load_ratings(stem):
-    """Every rated clip for this video, from all eval/ratings/<video>_*.json files."""
+    """Every rated clip for this video, from all eval/ratings/<video>_*.json files, each with its peak."""
+    peaks = json.loads(PEAKS_FILE.read_text(encoding="utf-8"))["files"]
     rated = []
     for path in sorted(RATINGS_DIR.glob(f"{stem}_*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        rated += [dict(r, file=path.stem) for r in data["clips"]]
+        rated += with_peaks(path.stem, json.loads(path.read_text(encoding="utf-8")), peaks)
     return rated
 
 
+def counts(rated_clip):
+    """False for ratings of clips under RATED_MIN_LEN: kept as history, never applied."""
+    return rated_clip["end_s"] - rated_clip["start_s"] >= RATED_MIN_LEN - LEN_TOL
+
+
 def rating_for(clip, rated):
-    """(rating, shared seconds) of the best matching rated clip, or (None, 0.0) if none shares RATING_MATCH."""
+    """(rating, shared seconds) of the newest rating that applies to the clip, or (None, 0.0); see the docstring."""
     s, e = clip["start_s"], clip["end_s"]
-    best, best_ov = None, 0.0
+    if not RATED_MIN_LEN - LEN_TOL <= e - s <= RATED_MAX_LEN + LEN_TOL:
+        return None, 0.0
+    best, best_rank = None, None
     for r in rated:
+        apart = abs(r["peak_s"] - clip["peak_time_s"])
+        if not counts(r) or apart > RATING_PEAK_TOL + LEN_TOL:
+            continue
         ov = max(0.0, min(e, r["end_s"]) - max(s, r["start_s"]))
-        if ov >= RATING_MATCH * max(e - s, r["end_s"] - r["start_s"]) and ov > best_ov:
-            best, best_ov = r, ov
-    return best, best_ov
+        rank = (r["rated"], r["run"].split("/")[-1], -apart, ov)  # the run folder is YYYYMMDD-HHMMSS
+        if best_rank is None or rank > best_rank:
+            best, best_rank = r, rank
+    return best, best_rank[3] if best else 0.0
 
 
 def evaluate(scores, key, rated):
@@ -159,7 +197,8 @@ def main():
           f"{len(action)} action ranges, {len(never)} never-pick ranges)")
     files = sorted({r["file"] for r in rated})
     print(f"Ratings: {len(rated)} rated clip(s) from {', '.join(files) if files else 'no ratings file'} "
-          f"in {RATINGS_DIR}")
+          f"in {RATINGS_DIR}; {sum(1 for r in rated if not counts(r))} of them rate clips under "
+          f"{RATED_MIN_LEN:g} s (history, not used)")
     print("\nClips:")
     print(f"  {'#':>3}  {'clip':<17} {'in action':>9}  {'hit':<7} {'bad':<4} postable")
     for r in res["rows"]:
@@ -180,13 +219,17 @@ def main():
         print(f"      action: {a}  ({r['inside_s']:.1f} s inside)")
         if n:
             print(f"      never-pick: {n}")
-        g = r["rating"]
+        g, length = r["rating"], c["end_s"] - c["start_s"]
         if g:
             print(f"      rating: {'postable' if g['postable'] else 'not postable'} - {g['reason']} "
-                  f"[{g['file']}, rated clip {hms(g['start_s'])}-{hms(g['end_s'])}, "
-                  f"{r['rating_overlap_s']:.1f} s shared]")
+                  f"[{g['file']}, rated clip {hms(g['start_s'])}-{hms(g['end_s'])} with peak {hms(g['peak_s'])}; "
+                  f"this clip's peak {hms(c['peak_time_s'])}; {r['rating_overlap_s']:.1f} s shared]")
+        elif not RATED_MIN_LEN - LEN_TOL <= length <= RATED_MAX_LEN + LEN_TOL:
+            print(f"      rating: unrated (the clip is {length:g} s; ratings apply to "
+                  f"{RATED_MIN_LEN:g}-{RATED_MAX_LEN:g} s clips)")
         else:
-            print(f"      rating: unrated (no rated clip shares {RATING_MATCH:.0%} of the longer clip)")
+            print(f"      rating: unrated (no rating of a clip of {RATED_MIN_LEN:g} s or more has its peak within "
+                  f"{RATING_PEAK_TOL:g} s of this clip's peak, {hms(c['peak_time_s'])})")
     print("\nAction ranges:")
     for i, rng in enumerate(action):
         by = [r["clip"]["rank"] for r in res["rows"] if any(j == i for j, _ in r["action"])]
