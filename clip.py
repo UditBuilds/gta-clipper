@@ -537,12 +537,11 @@ def pick_clips(score, smooth, usable_end, count, min_len, max_len, min_gap, wall
             if score[i] >= MIN_PEAK_SCORE:
                 b = i
         act_s, act_e = a * BUCKET, (b + 1) * BUCKET
-        start, end = act_s - LEAD_IN, act_e + TAIL
+        start, end = max(act_s - LEAD_IN, fa), min(act_e + TAIL, fb)
         if end - start > max_len:
             # Long action: keep max_len seconds centred on the peak.
             start = min(max(tp - max_len / 2, start), end - max_len)
             end = start + max_len
-        start, end = max(start, fa), min(end, fb)
         if end - start < min_len:
             # Short action: add the missing time, LEAD_FRAC of it before, and stay inside the free stretch.
             spare = min_len - (end - start)
