@@ -185,6 +185,13 @@ every 0.5 s of both videos; see `eval/BASELINE.md`.
 
 If the footage is missing, it prints SKIP and exits with code 2. It never reports a pass without the footage.
 
+eval.py's rules (half-open ranges, the rating rule, Postable@5) are checked on made-up clips, ranges and ratings. No
+footage or run folder is needed:
+
+```powershell
+.\.venv\Scripts\python.exe evaltest.py
+```
+
 ## Synthetic test results (2026-10-20)
 
 Test machine: HP Omen 15, i7-14650HX, RTX 5060 Laptop GPU (driver 616.56), Windows 11, ffmpeg 9.0 (Gyan full build),
@@ -228,25 +235,48 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 
 Everything else is neutral. Times are seconds in the source.
 
+**test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
+postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them. A held-out video exists and hasn't
+been used.
+
 ```powershell
 .\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>      # key defaults to eval\answer_keys\test1.json
 ```
 
-It lists each clip with the ranges it touches and by how many seconds, then prints:
-- **overlap precision:** picked clips that touch an action range at all, out of the clips picked
-- **strict precision:** picked clips with at least 50 % of their length inside action ranges, out of the clips picked
-- **recall:** action ranges touched by at least one clip, out of all action ranges (any shared time counts)
-- **bad picks:** clips that touch a never-pick range (any shared time counts)
-- **postable:** clips the owner rated postable, out of the clips picked, e.g. `3/5 (0 unrated)`
+It lists each clip with the ranges it shares time with and by how many seconds, then prints:
+- **overlap precision:** picked clips that share more than 0 s with an action range, out of the clips picked
+- **strict precision (hits):** picked clips with at least 50 % of their length inside action ranges, out of the
+  clips picked
+- **Postable@5:** of the first 5 picks by rank, how many the owner rated postable, out of 5 (also out of 5 when a run
+  picks fewer). The unrated picks among them are shown separately and never count as postable.
+- **recall:** action ranges that share more than 0 s with at least one clip, out of all action ranges
+- **bad picks:** clips that share more than 0 s with a never-pick range
+- **postable:** the same as Postable@5 over all picked clips, e.g. `3/5 (0 unrated)`
+
+Ranges are half-open (PR 5): a clip that ends exactly where a range starts shares 0 s and doesn't count. Before
+PR 5 it did, which made test1 v4's 3:50.2-4:19.0 a bad pick. A range whose end isn't after its start stops eval.py
+with an error. (The answer keys' notes still say "closed intervals"; they predate PR 5 and are unchanged.)
 
 Overlap precision counts a clip that only grazes an action range by a second; strict precision doesn't. The last
-line (`SUMMARY ...`) is meant for scripts: `precision=` is overlap precision and `strict=` is strict precision.
+line (`SUMMARY ...`) is meant for scripts: `precision=` is overlap precision, `strict=` is strict precision, and
+`postable_at5=` / `unrated_at5=` are Postable@5.
 
 **Owner ratings** live in `eval/ratings/<video>_<version>.json`. Each rated clip is stored by its time range in the
 source (not its clip number) with `postable` true/false and the owner's reason. eval.py reads every ratings file for
-the video. A clip from any run reuses a rating only if the two time ranges share at least 80 % of the longer one,
-so each covers 80 % of the other. Otherwise it shows as `unrated`. A rating is about the cut as well as the
-content ("bad cut"), so a 20 s clip inside a rated 30 s clip stays unrated.
+the video. Since PR 5 a rating belongs to the rated clip's **peak** (`peak_time_s` in `scores.json`: the start of
+its highest-scoring 0.5 s step). It applies to a picked clip when:
+- the picked clip is 15-30 s long,
+- the rated clip is at least 15 s long (ratings of shorter clips stay in the files as history but don't count), and
+- the two peaks are at most 4 s apart.
+
+A rating of the exact same clip (start and end within 0.01 s) beats every other rating, and applies even if the two
+peaks are more than 4 s apart (the length rules still apply). Otherwise, if several apply, the newest wins: the latest
+`rated` date, then the latest run (its folder name is a timestamp, and dates have no time of day), then the nearest
+peak. If none applies, the clip is `unrated`. Between different cuts the cut isn't compared, so a rating carries over to
+another cut of the same moment, "bad cut" ratings included, unless the clip has a rating of its own. (Before PR 5 a
+rating carried over only when the two clips shared 80 % of the longer one.) The rating files from before PR 5 store no peak and were not
+rewritten: `eval/rating_peaks.json` has their peaks, read from the run each file names. Newer rating files put
+`peak_s` on each clip. eval.py stops if a rated clip has neither.
 
 The keys were drafted from contact sheets, one frame every 10 s, with pause-map, phone-call and cutscene edges
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
@@ -254,19 +284,32 @@ checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revis
 screen, and moved the start of test2's crash range from 19:09 to 19:07.5, where the swerve starts. Each key's
 `revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets are good to about 5 s. The v1 baseline and the v2 and v3 comparisons are in [eval/BASELINE.md](eval/BASELINE.md).
 
-v3 on the two test videos: 0 bad picks in both, postable 4/5 (test1) and 3/5 (test2). With GPU decoding, full runs
-took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was byte-identical either way.
+v3 with GPU decoding: full runs took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was
+byte-identical either way.
 
-v4 on the two test videos (keys at revision 2, 15 s minimum): strict hits 5/5 and 3/5, recall 5/5 and 2/3, average
-clip length 26.8 s and 15.3 s (v3: 26.0 s and 20.0 s). test1 has 1 bad pick that shares 0.0 s with the never-pick
-range (see Known limits). The owner rated the 8 s test2 clips (3/5 postable); most 15 s clips are unrated. Details
-in [eval/BASELINE.md](eval/BASELINE.md).
+v3 and v4 (15 s minimum) on the dev set, scored with PR 5's eval.py (keys at revision 2):
+
+| Video | Version | Hits (strict) | Postable@5 | Unrated | Recall | Bad picks | Average length |
+|---|---|---|---|---|---|---|---|
+| test1 | v3 | 5/5 | 4/5 | 0 | 4/5 | 0 | 26.0 s |
+| test1 | v4 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s |
+| test2 | v3 | 3/5 | 3/5 | 0 | 2/3 | 0 | 20.0 s |
+| test2 | v4 | 3/5 | 3/5 | 0 | 2/3 | 0 | 15.3 s |
+
+test1 v3's 2:26.0-2:46.0 keeps its own rating, "not postable, boring, bad cut", although the owner later rated v4's
+2:16.0-2:46.0 (same peak) postable: a clip's own rating beats a newer rating of another cut. Details and the earlier
+numbers are in [eval/BASELINE.md](eval/BASELINE.md).
 
 ## Known limits
 
 - **The HUD rules only know GTA V's PS5 layout.**
   - The crop boxes were measured on 1920x1088 PS5 captures and scale with the frame, but only 1920x1088 has been
     tested.
+  - They scale by height/1088, but a PS5 `.webm` stores 1088 rows and shows 1080 (the bottom 8 are cropped), so the
+    HUD sits in a 1080-row picture. In a file that really is 1080 or 2160 rows tall, the boxes land about 7 px
+    (in 1080 terms) above the HUD. The 6 px bar box covers rows 1007-1012 instead of about 1014-1019 (2160: rows
+    2013-2024 instead of about 2028-2039). The bars are then never seen, and the 20 % guard turns all HUD rules off
+    with a WARNING. This is worked out from the crop arithmetic, not seen on such footage. Left for a HUD-profile PR.
   - A different in-game safe-zone/HUD-size setting moves the HUD and breaks the boxes. The 20 % guard then turns
     the rules off.
   - GTA 6 will need new boxes and new detectors.
@@ -309,13 +352,22 @@ in [eval/BASELINE.md](eval/BASELINE.md).
 - **A low-speed crash scores like a chase.** test2's two rejected clips (0:00.1-0:15.1 and 0:42.3-0:57.3, "boring"
   and "clumsy crash") peak on camera jolts from bumping a car and a gate. Their picture-change score is at the cap,
   like the chase and the house pull the owner liked, and test2 has no wanted stars, so nothing in the score tells
-  them apart. Planned for PR 5.
-- **eval.py counts a clip that only touches a never-pick range as a bad pick.** Ranges are closed intervals, and a
-  never-pick range starts at the last gameplay frame before it. v4's test1 3:50.2-4:19.0 ends at 4:19.0, where the
-  minimap wall starts and the key's safehouse cutscene range starts too: 0.0 s shared, counted as 1 bad pick.
-  eval.py is unchanged.
-- **Ratings rarely carry over to v4 clips.** A rating needs 80 % of the longer clip shared, so shorter or shifted
-  v4 clips show as unrated until the owner rates them.
+  them apart. Planned for a later PR.
+- **A rating follows the moment, not the cut (PR 5).** A rating applies to any 15-30 s clip whose peak is within 4 s
+  of the rated clip's, so a "bad cut" rating carries over to a different cut of the same moment. Only a clip's own
+  rating (the exact same clip) beats that: test1 v3's 2:26.0-2:46.0 stays "not postable, boring, bad cut" although
+  v4's 2:16.0-2:46.0 (same peak, 2:35.0) was rated postable later. A clip with no rating of its own takes the newest
+  rating of its moment, for clips of older runs too.
+- **Rated peaks are fixed; new peaks follow the current scoring.** A rated clip's peak is the one its own run found.
+  If a later scoring change (such as the low-speed-crash item above) moves a clip's best step by more than 4 s, its
+  old ratings stop applying, or apply to a different moment. Not tested.
+- **The phone cut keeps the piece with the best step, even a short one.** If cutting the phone out splits a clip, the
+  piece with the highest-scoring step is kept. If that piece is under 15 s, the candidate is dropped, even when
+  another piece would make a valid clip. Seen in a synthetic check (a 1 s piece with a 5.0 step beat a 7 s piece of
+  3.0 steps, and no clip came out). No test1/test2 clip has phone time cut, so it changes nothing there.
+- **A silent audio track halves the top score.** With no audio stream, picture change gets all the weight (scores up
+  to 6.0). A silent track keeps half the weight on loudness, which then scores 0, so scores top out at 3.0 (still above
+  the 2.0 floor). Both cases ran without errors on 60 s synthetic videos (2026-10-23).
 - **Strict precision can't see a bad cut.** Both clips the owner rejected in test1 ("boring, bad cut") sit fully
   inside action ranges, so they count as strict hits. Only the owner's ratings catch them.
 - **The minimap check can be fooled.** It reads the three bars under the minimap. A busy cutscene background can
