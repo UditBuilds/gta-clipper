@@ -25,6 +25,8 @@ with start == end could never be hit, so eval.py stops with an error on one.
              a rating such as "bad cut" can carry over to a different cut of the same moment.
              Rating files from before PR 5 store no peak; eval/rating_peaks.json has their peaks. Newer rating
              files put peak_s on each clip. eval.py stops if a rated clip has neither.
+- Postable@5: the same count over the first TOP_K (5) picks by rank only, out of 5 even when the run picked
+             fewer (a missing pick is not postable). Unrated picks among them are counted separately.
 
 Per-clip overlap seconds are printed too, so a clip that only grazes a range by a second stands out.
 The last line starts with SUMMARY and is meant to be parsed.
@@ -47,6 +49,7 @@ STRICT_SHARE = 0.5  # share of a clip's length that must be inside action ranges
 RATING_PEAK_TOL = 4.0  # seconds between a picked clip's peak and a rated clip's peak for the rating to apply
 RATED_MIN_LEN, RATED_MAX_LEN = 15.0, 30.0  # seconds; picked clips this long can take a rating; rated clips need 15+
 LEN_TOL = 1e-6  # seconds of float slack on those limits
+TOP_K = 5  # Postable@5 counts the first TOP_K picks by rank, out of TOP_K
 
 
 def hms(seconds):
@@ -156,6 +159,8 @@ def evaluate(scores, key, rated):
         "n_bad": sum(1 for r in rows if r["never"]),
         "n_postable": sum(1 for r in rows if r["rating"] and r["rating"]["postable"]),
         "n_unrated": sum(1 for r in rows if not r["rating"]),
+        "postable_at_k": sum(1 for r in rows[:TOP_K] if r["rating"] and r["rating"]["postable"]),  # rows: rank order
+        "unrated_at_k": sum(1 for r in rows[:TOP_K] if not r["rating"]),
     }
 
 
@@ -242,12 +247,15 @@ def main():
     print(f"Recall:    {ratio(len(res['ranges_hit']), res['n_ranges'])} action ranges got a clip (more than 0 s shared)")
     print(f"Bad picks: {res['n_bad']} clip(s) hit a never-pick range")
     print(f"Postable:  {res['n_postable']}/{res['n_clips']} ({res['n_unrated']} unrated)")
+    print(f"Postable@{TOP_K}: {res['postable_at_k']}/{TOP_K} of the first {TOP_K} picks "
+          f"({res['unrated_at_k']} of them unrated; unrated is never postable)")
     total = scores.get("timing_s", {}).get("total")
     print(f"SUMMARY video={Path(video).stem} run={args.run_dir.name} tool=\"{scores.get('tool', '?')}\" "
           f"clips={res['n_clips']} precision={res['n_action_clips']}/{res['n_clips']} "
           f"strict={res['n_strict']}/{res['n_clips']} "
           f"recall={len(res['ranges_hit'])}/{res['n_ranges']} bad={res['n_bad']} "
           f"postable={res['n_postable']}/{res['n_clips']} unrated={res['n_unrated']} "
+          f"postable_at{TOP_K}={res['postable_at_k']}/{TOP_K} unrated_at{TOP_K}={res['unrated_at_k']} "
           f"runtime_s={total if total is not None else 'na'}")
 
 

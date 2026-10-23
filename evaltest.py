@@ -153,6 +153,44 @@ def owner_rating_of_test1_v4_clip_2_wins():
     return g is not None and g["file"] == "test1_v4_15s_b" and g["postable"]
 
 
+# --- Postable@5: the first 5 picks by rank ---
+
+def run_of(ranks_and_ratings):
+    """scores.json clips (deliberately not in rank order) and their ratings: [(rank, True/False/None)], None = unrated."""
+    clips, rated = [], []
+    for rank, postable in ranks_and_ratings:
+        t = rank * 100.0
+        clips.append(clip(t, t + 20, rank=rank, peak=t + 10))
+        if postable is not None:
+            rated.append(rating(t, t + 20, t + 10, postable=postable))
+    return {"clips": clips[::-1]}, rated
+
+
+@check
+def postable_at5_counts_the_first_five_ranks():
+    """6 picks: ranks 1-3 postable, 4 not, 5 unrated, 6 postable -> Postable@5 3/5, 1 unrated; all picks 4/6"""
+    scores, rated = run_of([(1, True), (2, True), (3, True), (4, False), (5, None), (6, True)])
+    res = ev.evaluate(scores, key(), rated)
+    return (ev.TOP_K == 5 and (res["postable_at_k"], res["unrated_at_k"]) == (3, 1)
+            and (res["n_postable"], res["n_unrated"], res["n_clips"]) == (4, 1, 6))
+
+
+@check
+def fewer_than_five_picks_count_out_of_five():
+    """3 picks, all postable: Postable@5 is 3 (of 5, since a missing pick is not postable), 0 unrated"""
+    scores, rated = run_of([(1, True), (2, True), (3, True)])
+    res = ev.evaluate(scores, key(), rated)
+    return (res["postable_at_k"], res["unrated_at_k"]) == (3, 0)
+
+
+@check
+def unrated_is_never_postable():
+    """5 unrated picks: Postable@5 0, unrated 5"""
+    scores, rated = run_of([(r, None) for r in range(1, 6)])
+    res = ev.evaluate(scores, key(), rated)
+    return (res["postable_at_k"], res["unrated_at_k"]) == (0, 5)
+
+
 def main():
     ok = True
     for fn in CHECKS:
