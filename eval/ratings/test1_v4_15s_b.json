@@ -1,0 +1,13 @@
+{
+  "video": "test1.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-23",
+  "run": "test1/20261023-205413",
+  "tool": "gta-clipper v4 (15 s minimum)",
+  "method": "The owner rated clips 2 and 4 of the 15 s v4 run directly, so they no longer take the ratings of v2 clips with the same peak. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "A second batch for the same run as test1_v4_15s.json, in its own file so earlier rating files stay unchanged. No reason was given. peak_s is the clip's peak_time_s in that run's scores.json.",
+  "clips": [
+    {"start_s": 57.5, "end_s": 87.5, "span": "0:57.5-1:27.5", "peak_s": 68.5, "postable": true, "reason": "no reason given"},
+    {"start_s": 136.0, "end_s": 166.0, "span": "2:16.0-2:46.0", "peak_s": 155.0, "postable": true, "reason": "no reason given"}
+  ]
+}
