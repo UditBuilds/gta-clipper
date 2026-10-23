@@ -1,3 +1,9 @@
+test1 and test2 are the **dev set (rules were tuned on these)**: every number in this file is on them. A held-out
+video exists and hasn't been used.
+
+Each section below was scored with the eval.py of its day. PR 5 (last section) changed how ranges and ratings are
+counted; its table rescores the latest v3 and v4 runs under the new rules. The older tables are left as they were.
+
 # v1 baseline (2026-10-22)
 
 Fresh runs of `clip.py` v1 (main at df572bd) with default flags (5 clips, 20-30 s, 10 s gap), scored by
@@ -321,3 +327,103 @@ main. Runs: v3 `test1\20261023-205249`, `test2\20261023-205553`; v4 (15 s) `test
 - **The lamp-post crash still gets no clip.** What is left after the phone cut is 2.2 s, under 15 s.
 - **Postable** for the 15 s clips is mostly unrated: the 8 s ratings don't carry over to them (8 s is under 80 % of
   15 s).
+
+# PR 5: eval fixes and Postable@5 (2026-10-23)
+
+clip.py is unchanged, so no pick, clip edge or `timeline.csv` column changed. The table rescores the runs of the
+section above with PR 5's eval.py (keys at revision 2): v3 `test1\20261023-205249`, `test2\20261023-205553`; v4
+(15 s) `test1\20261023-205413`, `test2\20261023-205723`. clip.py's last change (20:51) predates both v4 runs.
+
+## What changed in eval.py
+
+- **Half-open ranges.** A clip hits a range only if they share more than 0 s. Before, a clip that only touched a range
+  at its edge (0.0 s shared) counted. A range whose end isn't after its start now stops eval.py with an error; no key
+  has one.
+- **Ratings follow the peak.** A rating applies to a picked clip when the picked clip is 15-30 s long, the rated clip
+  is at least 15 s long, and the two peaks (`peak_time_s`) are at most 4 s apart. Ratings of clips under 15 s stay in
+  the files as history but don't count. Of several, the newest wins: rated date, then run timestamp, then nearest peak.
+  The old rule needed 80 % of the longer clip shared.
+- **Peaks of old ratings.** The rating files from before PR 5 store no peak and were not rewritten.
+  `rating_peaks.json` holds their peaks, read from the run each file names; all 20 rated clips matched exactly one
+  clip there. Newer rating files carry `peak_s` on each clip.
+- **Postable@5.** Of the first 5 picks by rank, how many have a postable rating, out of 5. Unrated picks among them
+  are counted separately and never count as postable.
+
+## Results (dev set)
+
+| Video | Version | Hits (strict) | Postable@5 | Unrated | Recall | Bad picks | Average length |
+|---|---|---|---|---|---|---|---|
+| test1 | v3 | 5/5 | 5/5 | 0 | 4/5 | 0 | 26.0 s |
+| test1 | v4 | 5/5 | 5/5 | 0 | 5/5 | **0** (was 1) | 26.8 s |
+| test2 | v3 | 3/5 | 3/5 | 0 | 2/3 | 0 | 20.0 s |
+| test2 | v4 | 3/5 | 3/5 | 0 | 2/3 | 0 | 15.3 s |
+
+The same runs and rating files under the old rules: test1 v3 postable 4/5 (0 unrated), v4 4/5 (1 unrated) with
+1 bad pick; test2 v3 3/5 (0 unrated), v4 3/5 (2 unrated).
+
+- **Bad picks.** Only test1 v4's 3:50.2-4:19.0 changes (1 → 0): it shares 0.0 s with the safehouse cutscene range,
+  4:19.0-4:38.0. Old and new eval.py were run on all 22 test1/test2 runs (v1-v4). The only other changes are the two
+  earlier v4 runs of test1 (`20261023-202612`, `20261023-203050`): the same clip, the same 1 → 0. No precision,
+  strict or recall number changed in any run.
+- **test1 v3 rises to 5/5 because of newest-wins.** Its clip 4, 2:26.0-2:46.0, has its own v2 rating: not postable,
+  "boring, bad cut". The owner's newer rating of v4's 2:16.0-2:46.0 (postable) has the same peak, 2:35.0, so it wins.
+
+## Which rating each clip takes
+
+| Video | Version | # | Clip (peak) | Rating | From (rated clip, peak) |
+|---|---|---|---|---|---|
+| test1 | v3 | 1 | 3:03.5-3:33.5 (3:24.5) | postable | test1_v2, the same clip |
+| test1 | v3 | 2 | 1:18.0-1:48.0 (1:32.5) | postable | test1_v2, the same clip |
+| test1 | v3 | 3 | 3:48.5-4:18.5 (4:01.5) | postable | test1_v2, the same clip |
+| test1 | v3 | 4 | 2:26.0-2:46.0 (2:35.0) | postable | test1_v4_15s_b, 2:16.0-2:46.0 (2:35.0) |
+| test1 | v3 | 5 | 12:00.2-12:20.2 (12:03.5) | postable | test1_v4_15s, 12:02.3-12:17.3 (12:03.5) |
+| test1 | v4 | 1 | 3:10.2-3:40.2 (3:24.5) | postable | test1_v2, 3:03.5-3:33.5 (3:24.5) |
+| test1 | v4 | 2 | 0:57.5-1:27.5 (1:08.5) | postable | test1_v4_15s_b, the same clip |
+| test1 | v4 | 3 | 3:50.2-4:19.0 (4:01.5) | postable | test1_v2, 3:48.5-4:18.5 (4:01.5) |
+| test1 | v4 | 4 | 2:16.0-2:46.0 (2:35.0) | postable | test1_v4_15s_b, the same clip |
+| test1 | v4 | 5 | 12:02.3-12:17.3 (12:03.5) | postable | test1_v4_15s, the same clip |
+| test2 | v3 | 1 | 0:00.0-0:20.0 (0:07.5) | not postable | test2_v2, the same clip |
+| test2 | v3 | 2 | 4:37.0-4:57.0 (4:49.5) | postable | test2_v4, 4:40.0-4:56.5 (4:49.5) |
+| test2 | v3 | 3 | 0:39.7-0:59.7 (0:47.5) | not postable | test2_v2, the same clip |
+| test2 | v3 | 4 | 5:07.0-5:27.0 (5:07.5) | postable | test2_v4_15s, 5:06.5-5:21.5 (5:07.5) |
+| test2 | v3 | 5 | 2:59.5-3:19.5 (3:07.0) | postable | test2_v4_15s, 3:04.5-3:19.5 (3:07.0) |
+| test2 | v4 | 1 | 0:00.1-0:15.1 (0:07.5) | not postable | test2_v2, 0:00.0-0:20.0 (0:07.5) |
+| test2 | v4 | 2 | 4:40.0-4:56.5 (4:49.5) | postable | test2_v4, the same clip |
+| test2 | v4 | 3 | 0:42.3-0:57.3 (0:47.5) | not postable | test2_v2, 0:39.7-0:59.7 (0:47.5) |
+| test2 | v4 | 4 | 5:06.5-5:21.5 (5:07.5) | postable | test2_v4_15s, the same clip |
+| test2 | v4 | 5 | 3:04.5-3:19.5 (3:07.0) | postable | test2_v4_15s, the same clip |
+
+- test2 v4 clips 1 and 3 take v2's "clumsy crashes" ratings (same peaks); the owner confirmed that is right.
+- The four 8 s ratings in `test2_v4.json` (0:02.9, 0:45.1, 5:06.5 and 3:11.5) are history and not used. Its 16.5 s
+  clip, 4:40.0-4:56.5, counts.
+
+## Owner ratings of test1 v4 clips 2 and 4
+
+Rated on 2026-10-23 against `test1\20261023-205413` and stored in `ratings/test1_v4_15s_b.json`, a new file, so
+`test1_v4_15s.json` is unchanged: 0:57.5-1:27.5 postable and 2:16.0-2:46.0 postable, no reason given. Without these,
+the new rule gave both clips a v2 rating with the same peak: 0:48.0-1:08.0 (peak 1:06.5) and 2:26.0-2:46.0
+(peak 2:35.0), both "not postable, boring, bad cut", given for other cuts.
+
+## Outside review (Argon), checked against the code and data
+
+| # | Claim | Verdict | Evidence |
+|---|---|---|---|
+| 1 | eval's `hits()` counts a 0.0 s touch | true; fixed | `eval.py` used `<=` both ways; test1 v4 3:50.2-4:19.0 was a bad pick with 0.0 s shared |
+| 2 | v4 doesn't extend clips to 15 s and still makes 8 s clips | false | `clip.py` extends to `--min-len` (default 15) and drops shorter; the 15 s runs' lengths are 15-30 s. The reviewer read `ratings/test2_v4.json`, which rates the 8 s run |
+| 3 | HUD boxes scale by height/1088, so 1080/2160 footage turns HUD detection off silently | partly | The arithmetic is right (see README Known limits), but the 20 % guard prints a WARNING and `scores.json` records the HUD state. Not seen on such footage. Left for a HUD-profile PR |
+| 4 | The phone-cut loop skips active steps after a short phone blip | false | `s` only moves on a phone step, to that step's end, which is where the next step starts. A synthetic check through `pick_clips` kept action that starts right after a phone stretch |
+| 5 | `steps(a, b)` is off by one at exact 0.5 s multiples | false | The end is exclusive, and dividing by 0.5 is exact: `steps(0, 10)` is steps 0-19. A piece ending at 47.0 s did not count a 9.0 step at 47.0-47.5 |
+| 6 | Muted or missing audio crashes or divides by zero | false | 60 s synthetic videos with no audio stream and with a silent track both ran to the end (exit 0, 2 clips). Silence reads -163.5 LUFS, floored to -70; the 1.0 LU scale floor prevents the division by zero |
+| 7 | `ratings/test1_v4.json` is missing | partly | It never existed: test1's 8 s clips were never rated. Nothing to fix |
+| 8 | The 80 % rule drops ratings when the clip length changes | true; replaced | Not silent: such clips printed "unrated". Replaced by the peak rule above |
+
+Found while checking claim 4, not changed: when cutting the phone out splits a clip, the piece with the best step is
+kept even if it is under 15 s, and then the candidate is dropped (README, Known limits). No test1/test2 clip has
+phone time cut.
+
+## Tests
+
+- `selftest.py`: PASS. The same three 15.000 s clips as before, 0:34.8-0:49.8, 1:24.8-1:39.8 and 2:14.8-2:29.8.
+- `hudtest.py`: PASS (5 required checks and 4 calibration frames).
+- `evaltest.py` (new): PASS, 17 checks on made-up clips, ranges and ratings. Each group was run before its change:
+  4 of the 6 range checks, 7 of the 8 rating checks and all 3 Postable@5 checks failed then.
