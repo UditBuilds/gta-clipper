@@ -1,5 +1,5 @@
-test1 and test2 are the **dev set (rules were tuned on these)**: every number in this file is on them. A held-out
-video exists and hasn't been used.
+test1 and test2 are the **dev set (rules were tuned on these)**: every eval result in this file (precision, recall,
+bad picks, postable) is on them. A held-out video exists and hasn't been used.
 
 Each section below was scored with the eval.py of its day. PR 5 (last section) changed how ranges and ratings are
 counted; its table rescores the latest v3 and v4 runs under the new rules. The older tables are left as they were.

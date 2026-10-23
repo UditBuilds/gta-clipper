@@ -235,8 +235,9 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 
 Everything else is neutral. Times are seconds in the source.
 
-**test1 and test2 are the dev set (rules were tuned on these).** Every result in this README and in
-[eval/BASELINE.md](eval/BASELINE.md) is on them. A held-out video exists and hasn't been used.
+**test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
+postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them. A held-out video exists and hasn't
+been used.
 
 ```powershell
 .\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>      # key defaults to eval\answer_keys\test1.json
@@ -355,6 +356,9 @@ are in [eval/BASELINE.md](eval/BASELINE.md).
   carries over to a different cut, and a newer rating can overrule a clip's own: test1 v3's 2:26.0-2:46.0 was rated
   "not postable, boring, bad cut", but counts as postable since the owner rated v4's 2:16.0-2:46.0 (same peak, 2:35.0)
   postable.
+- **Rated peaks are fixed; new peaks follow the current scoring.** A rated clip's peak is the one its own run found.
+  If a later scoring change (such as the low-speed-crash item above) moves a clip's best step by more than 4 s, its
+  old ratings stop applying, or apply to a different moment. Not tested.
 - **The phone cut keeps the piece with the best step, even a short one.** If cutting the phone out splits a clip, the
   piece with the highest-scoring step is kept. If that piece is under 15 s, the candidate is dropped, even when
   another piece would make a valid clip. Seen in a synthetic check (a 1 s piece with a 5.0 step beat a 7 s piece of
