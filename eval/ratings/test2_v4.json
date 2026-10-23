@@ -1,0 +1,16 @@
+{
+  "video": "test2.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-23",
+  "run": "test2/20261023-203232",
+  "tool": "gta-clipper v4 (8 s minimum)",
+  "method": "The owner watched the five v4 clips with the review page's play-clip button and said which are postable. Clips are identified by their time range in the source, in seconds, not by clip number (here clips 1-5 in rank order).",
+  "note": "Clip 4 (5:06.5-5:14.5) was rated 'kinda postable - too short'. It is stored as postable: true, with the owner's words as the reason. Clips 4 and 5 were both called too short; that led to the 15 s minimum.",
+  "clips": [
+    {"start_s": 2.9, "end_s": 10.9, "span": "0:02.9-0:10.9", "postable": false, "reason": "boring"},
+    {"start_s": 280.0, "end_s": 296.5, "span": "4:40.0-4:56.5", "postable": true, "reason": "good action sequence"},
+    {"start_s": 45.1, "end_s": 53.1, "span": "0:45.1-0:53.1", "postable": false, "reason": "clumsy crash, same problem as clip 1"},
+    {"start_s": 306.5, "end_s": 314.5, "span": "5:06.5-5:14.5", "postable": true, "reason": "kinda postable - too short"},
+    {"start_s": 191.5, "end_s": 199.5, "span": "3:11.5-3:19.5", "postable": true, "reason": "most enjoyable - but too short"}
+  ]
+}
