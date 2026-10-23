@@ -1,7 +1,7 @@
 # gta-clipper (v4)
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
-1080x1920 Shorts clips (8-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
+1080x1920 Shorts clips (15-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
 
 No AI model is needed for the analysis. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
 for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required.
@@ -39,16 +39,20 @@ for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't requi
      gap, or a stretch with no minimap, ends it. 2.5 s is the lead-in plus the tail: a gap that short would be
      covered by the tail of one burst and the lead-in of the next anyway.
    - The clip starts **1.0 s** before the action's first active step and ends **1.5 s** after its last.
-   - Clips are **8-30 s** (`--min-len`, `--max-len`). A shorter clip gets the missing time added, 40 % of it before
+   - Clips are **15-30 s** (`--min-len`, `--max-len`). A shorter clip gets the missing time added, 40 % of it before
      the action. If the action runs longer than 30 s, the clip is the 30 s centred on the peak.
    - **Phone at frame level.** The phone's call screen is not a wall. Its steps keep their score, so action during
      a call is found, but the phone stretch is cut out of the clip afterwards. If that splits the clip, the piece
-     with the highest-scoring step is kept. What is left must still be 8 s long and contain a step scoring 2.0 or
-     more; otherwise there is no clip there.
+     with the highest-scoring step is kept. What is left must still be 15 s long and contain a step scoring 2.0
+     or more; otherwise there is no clip there.
 
-   The 8 s minimum is above the up-to-5 s false stretches the minimap check can leave inside cutscenes (see Known
-   limits), so such a stretch is never long enough for a clip. The lead-in, tail and 8 s were set by the owner
-   before any v4 run; nothing was tuned to the test videos.
+   - A clip that can't reach 15 s (walls, other clips, file ends, the phone cut) is dropped, and the next
+     candidate is taken. A shorter clip is never made.
+
+   The lead-in, tail and gap were set by the owner before any v4 run. The minimum was first 8 s (above the up-to-5 s
+   false stretches the minimap check can leave inside cutscenes, see Known limits). The owner raised it to 15 s
+   after rating the 8 s test2 clips: two were "too short". That is the owner's judgement of a postable length, not
+   a score; no other number changed.
 6. Picking is greedy: best moment first, then the next best that doesn't overlap.
    `--min-gap` is the minimum distance from the end of one clip to the start of the next.
    Stretches with no minimap are hard walls (no gap needed).
@@ -57,7 +61,7 @@ for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't requi
    (step 7). Shorter lulls, like a straight stretch in a chase, stay inside the sequence. A clip belongs to the
    sequence of its highest-scoring step (v4: of the part left after the phone is cut out). Both numbers were
    chosen before looking at any eval result: 20 s was then the default shortest clip, so a lull that long held
-   nothing worth a clip. v4 keeps them unchanged although the shortest clip is now 8 s. Phone stretches still end
+   nothing worth a clip. v4 keeps them unchanged although the shortest clip is now 15 s. Phone stretches still end
    a sequence, as in v3.
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
@@ -84,7 +88,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--count` | 5 | how many clips to make (fewer if there aren't enough loud/busy moments) |
-| `--min-len` | 8 | shortest clip, seconds |
+| `--min-len` | 15 | shortest clip, seconds |
 | `--max-len` | 30 | longest clip, seconds |
 | `--min-gap` | 10 | seconds between the end of one clip and the start of the next |
 | `--crop` | off | plain centre crop instead of the full frame over a blurred background (cuts off the minimap) |
@@ -158,7 +162,7 @@ It builds `C:\AI\gta\test\synthetic_test_3min.mp4`. That is 3 minutes of static 
 fake minimap and a timecode, a quiet noise bed, and loud bursts plus white flashes at 0:40, 1:30 and
 2:20. It runs `clip.py` on that file and passes if:
 - each planted time falls inside a clip whose peak is within 5 s of it,
-- every clip is 1080x1920, has audio, and is 8-30 s long (0.1 s tolerance), and
+- every clip is 1080x1920, has audio, and is 15-30 s long (0.1 s tolerance), and
 - the HUD rules switched themselves off, since the synthetic video has no GTA V HUD.
 
 It also saves one frame per clip in the run's `frames\` folder, so you can check the layout.
@@ -209,9 +213,10 @@ Python 3.14.7. The encoder chosen was `h264_nvenc`. The test video is 1920x1080,
   - input with no audio
   - the HDR warning
 
-**v4 (2026-10-23): PASS** with default flags (8-30 s). Each planted burst gives an 8.000 s clip with its peak exactly
-on the planted time: 0:37.6-0:45.6, 1:27.6-1:35.6 and 2:17.6-2:25.6. All three are 1080x1920 h264 with AAC stereo.
-The 1.5 s bursts are found as about 2 s of action, so 1.4 s of the missing time goes before and 2.1 s after.
+**v4 (2026-10-23): PASS** with default flags (15-30 s). Each planted burst gives a 15.000 s clip with its peak exactly
+on the planted time: 0:34.8-0:49.8, 1:24.8-1:39.8 and 2:14.8-2:29.8. All three are 1080x1920 h264 with AAC stereo.
+The 1.5 s bursts are found as about 2 s of action, so 4.2 s of the missing time goes before and 6.3 s after.
+(With the first 8 s minimum the clips were 8.000 s, 0:37.6-0:45.6 and so on.)
 
 ## Evaluation
 
@@ -252,10 +257,10 @@ screen, and moved the start of test2's crash range from 19:09 to 19:07.5, where 
 v3 on the two test videos: 0 bad picks in both, postable 4/5 (test1) and 3/5 (test2). With GPU decoding, full runs
 took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was byte-identical either way.
 
-v4 on the two test videos (keys at revision 2): strict hits 5/5 and 3/5, recall 5/5 and 2/3, average clip length
-25.4 s and 9.7 s (v3: 26.0 s and 20.0 s). test1 has 1 bad pick that shares 0.0 s with the never-pick range
-(see Known limits). Most v4 clips are unrated until the owner rates them. Details in
-[eval/BASELINE.md](eval/BASELINE.md).
+v4 on the two test videos (keys at revision 2, 15 s minimum): strict hits 5/5 and 3/5, recall 5/5 and 2/3, average
+clip length 26.8 s and 15.3 s (v3: 26.0 s and 20.0 s). test1 has 1 bad pick that shares 0.0 s with the never-pick
+range (see Known limits). The owner rated the 8 s test2 clips (3/5 postable); most 15 s clips are unrated. Details
+in [eval/BASELINE.md](eval/BASELINE.md).
 
 ## Known limits
 
@@ -285,7 +290,7 @@ v4 on the two test videos (keys at revision 2): strict hits 5/5 and 3/5, recall 
   - a 5 s camera shot in the yacht chase (test1 11:10-11:15)
 
   Those moments can't be clipped, even though they're action. In v2 this cost test2's house-pull range. v3 clips
-  the pull up to 3:19.5, cut half a second before the house falls, and so does v4 (3:11.5-3:19.5).
+  the pull up to 3:19.5, cut half a second before the house falls, and so does v4 (3:04.5-3:19.5).
 - **The +3.0 wanted-star boost (kept by decision) outweighs most other action.**
   - Any step with stars outranks almost everything without them.
   - 4 of the 8 action ranges in the answer keys never show stars: the yacht chase, the house pull, the gang chase,
@@ -298,9 +303,13 @@ v4 on the two test videos (keys at revision 2): strict hits 5/5 and 3/5, recall 
   active, so the action runs as long as the stars do: 54-76 s in test1. Those clips are the 30 s centred on the
   peak, so their edges come from the 30 s cap, the 10 s gap to another clip or a wall, not from where something
   starts or stops. test1's 3:50.2-4:19.0 starts where the 10 s gap after 3:10.2-3:40.2 ends.
-- **Short bursts give 8 s clips (v4).** Four of test2's five actions last 1-4.5 s, so those clips are the 8 s
-  minimum. A burst can be a camera cut or a flash: test1's 12:05.1-12:13.1 peaks on a cut to Franklin on the boom
-  (12:08), test2's 5:06.5-5:14.5 on a green flash (5:07.5).
+- **Short bursts give minimum-length clips (v4).** Four of test2's five actions last 1-4.5 s, so those clips are
+  the 15 s minimum, mostly calm time added around the burst. A burst can be a camera cut or a flash: test1's
+  12:02.3-12:17.3 peaks on a cut to Franklin on the boom (12:08), test2's 5:06.5-5:21.5 on a green flash (5:07.5).
+- **A low-speed crash scores like a chase.** test2's two rejected clips (0:00.1-0:15.1 and 0:42.3-0:57.3, "boring"
+  and "clumsy crash") peak on camera jolts from bumping a car and a gate. Their picture-change score is at the cap,
+  like the chase and the house pull the owner liked, and test2 has no wanted stars, so nothing in the score tells
+  them apart. Planned for PR 5.
 - **eval.py counts a clip that only touches a never-pick range as a bad pick.** Ranges are closed intervals, and a
   never-pick range starts at the last gameplay frame before it. v4's test1 3:50.2-4:19.0 ends at 4:19.0, where the
   minimap wall starts and the key's safehouse cutscene range starts too: 0.0 s shared, counted as 1 bad pick.
@@ -311,7 +320,7 @@ v4 on the two test videos (keys at revision 2): strict hits 5/5 and 3/5, recall 
   inside action ranges, so they count as strict hits. Only the owner's ratings catch them.
 - **The minimap check can be fooled.** It reads the three bars under the minimap. A busy cutscene background can
   look like them for a few seconds, which leaves short gaps in an exclusion. In the two test videos those gaps
-  were 5 s or less. That is why the shortest clip is 8 s, not 6 s: such a gap can never hold a clip.
+  were 5 s or less, far shorter than the 15 s minimum clip.
 - **The review sheet's score bar** assumes 0-6. With the star boost, `combined` reaches 9, so the bar just shows full.
 - ffmpeg's scene score is built to flag *sudden* change (cuts, flashes). Steady fast motion,
   such as a long high-speed drive, probably scores low. That is not yet checked on real footage,

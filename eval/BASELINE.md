@@ -176,7 +176,7 @@ Bad picks are 0 in both videos.
     hard_changes, visual_z, star_score, stars and minimap.
   - combined, smoothed and excluded differ only at steps within 0.5 s of a phone step.
 
-# v4 (clips cut to the action edges) compared with v3 (2026-10-23)
+# v4 (clips cut to the action edges, first with an 8 s minimum) compared with v3 (2026-10-23)
 
 Same machine, default flags, GPU decoding, run one at a time. v3 was run again from a separate checkout of main
 (dd64c62) so both versions ran on the same day. Scored against the answer keys at **revision 2** (phone-call ranges
@@ -266,3 +266,58 @@ except `clip`, which marks the picked clips. v4 appends `pick_score`, `pick_smoo
 - **One order was fixed after the first v4 run of test1.** The 30 s cap was applied before the window was held
   inside the walls, so test1's 2:17.5-2:46.0 came out 28.5 s. Now walls first, then the cap: 2:16.0-2:46.0,
   30 s. Only that clip changed. The table above is from the fixed code.
+
+# v4 with a 15 s minimum (2026-10-23)
+
+## Owner ratings of the 8 s test2 clips
+
+Rated with the review page's play-clip button against `test2\20261023-203232` (`ratings/test2_v4.json`):
+
+| # | Clip | Owner |
+|---|---|---|
+| 1 | 0:02.9-0:10.9 | not postable: "boring" |
+| 2 | 4:40.0-4:56.5 | postable: "good action sequence" |
+| 3 | 0:45.1-0:53.1 | not postable: "clumsy crash, same problem as clip 1" |
+| 4 | 5:06.5-5:14.5 | "kinda postable - too short" (stored as postable) |
+| 5 | 3:11.5-3:19.5 | postable: "most enjoyable - but too short" |
+
+With these ratings the 8 s run scores postable 3/5 (0 unrated). For clip 2, eval shows the v2 rating of
+4:36.8-4:56.8 instead: both ratings share all 16.5 s, and eval.py keeps the first file on a tie. Both say postable.
+
+## The change
+
+The owner set the shortest clip to **15 s** (from 8 s): "too short" was the owner's judgement of a postable length,
+not a score. It applies to the extension of short actions and to the piece left after the phone cut. A clip that
+can't reach 15 s is dropped and the next candidate taken. No other rule or number changed.
+
+## Results
+
+Same machine, default flags, GPU, run one at a time, keys at revision 2. v3 was run again from a separate checkout of
+main. Runs: v3 `test1\20261023-205249`, `test2\20261023-205553`; v4 (15 s) `test1\20261023-205413`,
+`test2\20261023-205723`.
+
+| Video | Version | Hits (strict) | Recall | Bad picks | Average length | Lengths (s) | Postable | Run time |
+|---|---|---|---|---|---|---|---|---|
+| test1 | v3 | 5/5 | 4/5 | 0 | 26.0 s | 30, 30, 30, 20, 20 | 4/5 (0 unrated) | 84.2 s |
+| test1 | v4, 8 s | 5/5 | 5/5 | 1 | 25.4 s | 30, 30, 28.75, 30, 8 | 1/5 (4 unrated) | 84.4 s |
+| test1 | v4, 15 s | 5/5 | 5/5 | 1 | 26.8 s | 30, 30, 28.75, 30, 15 | 1/5 (4 unrated) | 83.7 s |
+| test2 | v3 | 3/5 | 2/3 | 0 | 20.0 s | 20, 20, 20, 20, 20 | 3/5 (0 unrated) | 90.1 s |
+| test2 | v4, 8 s | 3/5 | 2/3 | 0 | 9.7 s | 8, 16.5, 8, 8, 8 | 3/5 (0 unrated) | 79.4 s |
+| test2 | v4, 15 s | 3/5 | 2/3 | 0 | 15.3 s | 15, 16.5, 15, 15, 15 | 1/5 (4 unrated) | 83.9 s |
+
+- **No new picks.** At 15 s, v4 picks the same five moments as at 8 s in both videos (and as v3). The clips
+  that were shorter than 15 s are longer now; the others are unchanged:
+  - test1 5: 12:05.1-12:13.1 → 12:02.3-12:17.3.
+  - test2 1: 0:02.9-0:10.9 → 0:00.1-0:15.1.
+  - test2 3: 0:45.1-0:53.1 → 0:42.3-0:57.3.
+  - test2 4: 5:06.5-5:14.5 → 5:06.5-5:21.5.
+  - test2 5: 3:11.5-3:19.5 → 3:04.5-3:19.5. It still ends at the house-collapse wall, so all 7 s were added
+    before the action.
+  - Unchanged: test1 1-4 and test2 2 (4:40.0-4:56.5).
+- **The bad pick is the same.** test1's 3:50.2-4:19.0 touches the safehouse cutscene range at 4:19.0 with 0.0 s
+  shared.
+- **The fresh v3 runs reproduce v3.** Their `timeline.csv` is byte-identical to the 2026-10-22 v3 runs, and v4's
+  15 v3 columns match them in every row except `clip`.
+- **The lamp-post crash still gets no clip.** What is left after the phone cut is 2.2 s, under 15 s.
+- **Postable** for the 15 s clips is mostly unrated: the 8 s ratings don't carry over to them (8 s is under 80 % of
+  15 s).
