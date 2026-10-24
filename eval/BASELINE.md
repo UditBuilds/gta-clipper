@@ -670,6 +670,11 @@ Step 1 of eval/HELDOUT_PLAN.md, applied now because none of the seven configs' p
 So the rule gives **4b v3 + star rule**. It is written into HELDOUT_PLAN.md as the final config, with the commit hash,
 only after this PR is merged and before the owner says go.
 
+This is an in-sample result. The star rule was proposed after the 4b's three dev mistakes were known, and it targets
+exactly them; the owner fixed the 5.0 s before it ran, but its 0 / 0 / 12 on the dev candidates is not evidence that it
+works on new footage. The 5.0 s itself was never tested either: every dev candidate has 0 s or at least 27.5 s of
+stars. That is what the held-out test is for.
+
 ## GPU memory and timing
 
 | Runs | Peak GPU memory (nvidia-smi) | Peak temperature | Shared GPU memory, NVIDIA adapter | Run time | Model time |

@@ -580,8 +580,8 @@ Every pick of these runs has an owner rating.
   - Both models have also written "wanted stars" for test2 clips, which have none.
   - With prompt v3 such a mistake can only keep a clip: stars mean "not boring".
 - **Telling the model the measured stars doesn't make it use them (v7).** With both stars prompts the 4b called
-  clips with 27.5-30 s of measured stars boring, and with stars_v2 the 8b did once. Only the code rule
-  (`--vlm-rule stars`) reliably keeps them.
+  clips with 27.5-30 s of measured stars boring, and with stars_v2 the 8b did once. The code rule
+  (`--vlm-rule stars`) keeps them by construction, as far as the star detector is right (seen on 4 candidates).
 - **The star rule only knows police chases (v7).** It cancels a boring veto only when the clip has 5.0 s or more of
   stars. A gang chase, a getaway or a fight has no stars, so a costly veto of one is not caught. None of the 12 rated
   candidates was such a case with the 4b and v3, but the 4b made such vetoes with stars_v1 (test2 4:40.0, 5:06.5).
@@ -591,9 +591,12 @@ Every pick of these runs has an owner rating.
 - **The measured stars and `stars_s` differ (v7).** `stars_s` in scores.json counts whole 0.5 s steps (30.5 s in a
   30.0 s clip); the hint and the rule use the stars cut at the clip's edges. `stars_s` was left as it is so that
   `--vlm off` output doesn't change.
-- **12 rated candidates (v7).** All configs and both stars prompts were judged on the same 12 candidates (test1 1-7,
-  test2 1-5). That can show a gross failure, not an accuracy, and the star rule's 0 mistakes there is not a
-  measured accuracy.
+- **12 rated candidates, and the star rule is in-sample (v7).** All configs and both stars prompts were judged on the
+  same 12 candidates (test1 1-7, test2 1-5). That can show a gross failure, not an accuracy. The star rule was proposed
+  after the 4b's three dev mistakes were known, and it targets exactly them; the owner fixed the 5.0 s before it ran,
+  but its 0 mistakes on these candidates is an in-sample result. The held-out test is what can check it.
+- **The 5.0 s threshold was never tested (v7).** Every dev candidate has either 0 s or 27.5 s or more of stars, so
+  any threshold from 0.5 s to 27.5 s would have given the same results.
 - **Evenly spaced frames can still miss a short event (v6).** Frames are 1.9 s apart in a 15 s clip and 3.75 s apart
   in a 30 s clip. The peak frame guarantees one frame on the picker's best moment, not on every event.
 - **The model-as-judge numbers rest on 10 rated candidates (v6; 12 since PR 7).**
