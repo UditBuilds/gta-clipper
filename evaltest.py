@@ -165,9 +165,18 @@ def rating_without_a_peak_is_an_error():
 
 @check
 def every_rating_in_the_repo_has_a_peak():
-    """every rated clip in eval/ratings has a peak (9 for test1, 13 for test2), from its file or rating_peaks.json"""
+    """every rated clip in eval/ratings has a peak (11 for test1, 13 for test2), from its file or rating_peaks.json"""
     t1, t2 = ev.load_ratings("test1"), ev.load_ratings("test2")
-    return (len(t1), len(t2)) == (9, 13) and all(isinstance(r["peak_s"], float) for r in t1 + t2)
+    return (len(t1), len(t2)) == (11, 13) and all(isinstance(r["peak_s"], float) for r in t1 + t2)
+
+
+@check
+def owner_ratings_of_test1_4b_v6_picks():
+    """test1 4b v6 picks 10:20.3-10:35.3 (peak 10:25.5) and 12:30.9-12:45.9 (peak 12:37.0) take their 2026-10-24
+    ratings, both postable"""
+    rated = ev.load_ratings("test1")
+    got = [ev.rating_for(clip(s, s + 15.0, peak=p), rated)[0] for s, p in ((620.3, 625.5), (750.9, 757.0))]
+    return all(g is not None and g["file"] == "test1_v6_4b" and g["postable"] for g in got)
 
 
 @check
