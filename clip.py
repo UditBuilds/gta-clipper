@@ -9,11 +9,14 @@ v3 splits the video into action sequences and takes at most MAX_PER_SEQ clips fr
 phone's call screen like a missing minimap: stretches with it can't be picked.
 v4 cuts each clip to the action around its peak (LEAD_IN before it starts, TAIL after it ends), and cuts the
 phone's call screen out of a clip instead of ruling out everything around it.
+v6 (--vlm MODEL) adds a veto: the picker makes 2 x --count candidates as before, a local Ollama vision model
+labels each from a contact sheet, and the first --count candidates it doesn't veto become the clips (vlm.py).
+With --vlm off (the default) nothing changes.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
-                       [--cpu-decode]
+                       [--cpu-decode] [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
 """
 
 import argparse
@@ -29,6 +32,8 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+
+import vlm
 
 DEFAULT_OUT = Path(r"C:\AI\gta\output")
 
@@ -657,6 +662,92 @@ def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio, range_fix):
     run(cmd)
 
 
+def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, range_fix):
+    """Stage 2 (v6): the model judges every candidate, then the first `count` it doesn't veto become the clips.
+
+    Runs after the signals and before any clip is rendered: contact sheets (ffmpeg, CPU), model calls, then the
+    model is unloaded (keep_alive 0) so NVENC has the GPU to itself. Returns (clips, the scores.json vlm block,
+    timings). Each clip keeps its candidate_rank and gets a vlm entry; fillers are marked.
+    """
+    prompt = vlm.load_prompt()
+    sheet_dir = run_dir / "candidates"
+    sheet_dir.mkdir(exist_ok=True)
+    paths = [sheet_dir / f"cand_{i:02d}_{int(c['start_s']) // 60}m{int(c['start_s']) % 60:02d}s.jpg"
+             for i, c in enumerate(candidates, 1)]
+    print(f"Stage 2: {model} judges {len(candidates)} candidate(s) (prompt {vlm.PROMPT_VERSION}, "
+          f"sheet version {vlm.SHEET_VERSION}, cache {vlm.DEFAULT_CACHE})")
+    t_sheets, memory = [0.0], []
+
+    def sheet_fn(c, path):
+        t = time.perf_counter()
+        out = vlm.make_sheet(ffmpeg, video, c, path, range_fix)
+        t_sheets[0] += time.perf_counter() - t
+        return out
+
+    def ask_fn(body):
+        rec = vlm.ask(body)
+        if not memory:  # the model is loaded now: how much of it is on the GPU
+            try:
+                memory.append(vlm.model_memory(model))
+            except (OSError, ValueError):
+                memory.append(None)
+        return rec
+
+    t0 = time.perf_counter()
+    try:
+        results = vlm.judge(candidates, video, model, model_info, prompt, paths, vlm.DEFAULT_CACHE, sheet_fn, ask_fn)
+    except RuntimeError as e:
+        results = None
+        err = str(e)
+    t_judge = time.perf_counter() - t0
+    t_unload, gone = vlm.unload(model) if memory else (0.0, True)
+    if results is None:
+        fail(err)
+    if not gone:
+        print(f"WARNING: Ollama still lists {model} {t_unload:g} s after asking it to unload; rendering anyway.")
+    if any(r["thinking_chars"] for r in results):
+        print("WARNING: the model returned thinking text although thinking was turned off (stored in the cache).")
+
+    picks = vlm.choose([r["vetoed"] for r in results], count)
+    final_rank = {i: k for k, (i, _) in enumerate(picks, 1)}
+    fillers = {i for i, f in picks if f}
+    verdicts, records = [], []
+    for i, (c, r, path) in enumerate(zip(candidates, results, paths)):
+        status = ("model error, kept" if r["error"] else "vetoed, used as filler" if i in fillers
+                  else "vetoed" if r["vetoed"] else "kept")
+        verdict = {k: r[k] for k in ("category", "player_stalled", "reason", "vetoed", "error", "cached")}
+        verdict.update(filler=i in fillers, status=status)
+        verdicts.append(verdict)
+        records.append({"candidate_rank": i + 1, "final_rank": final_rank.get(i),
+                        "sheet": path.relative_to(run_dir).as_posix(),
+                        **{k: c[k] for k in ("start_s", "end_s", "duration_s", "peak_time_s", "peak_score",
+                                             "smoothed_peak_score", "sequence", "reason")},
+                        "vlm": dict(verdict, sheet_times_s=r["sheet_times_s"], sheet_peak_frame=r["sheet_peak_frame"],
+                                    thinking_chars=r["thinking_chars"], call=r["call"])})
+    clips = [dict(candidates[i], candidate_rank=i + 1, vlm=verdicts[i]) for i, _ in picks]
+    calls = [r for r in results if not r["cached"]]
+    t_model = t_judge - t_sheets[0]
+    print(f"Stage 2: {sum(r['vetoed'] for r in results)} of {len(results)} vetoed, {len(fillers)} used as filler, "
+          f"{sum(1 for r in results if r['error'])} model error(s); {len(calls)} model call(s), "
+          f"{len(results) - len(calls)} cached; sheets {t_sheets[0]:.1f} s, model {t_model:.1f} s, "
+          f"unload {t_unload:.1f} s")
+    block = {"model": model, "model_digest": model_info["digest"], "prompt_version": vlm.PROMPT_VERSION,
+             "prompt_file": f"prompts/{vlm.PROMPT_VERSION}.txt", "prompt_sha256": prompt[1],
+             "think": False if "thinking" in model_info["capabilities"] else None,
+             "options": vlm.OPTIONS, "keep_alive": vlm.KEEP_ALIVE, "schema": vlm.SCHEMA,
+             "categories": vlm.CATEGORIES, "veto_categories": vlm.VETO,
+             "sheet_version": vlm.SHEET_VERSION,
+             "sheet": {"frames": vlm.SHEET_FRAMES, "columns": vlm.SHEET_COLS, "frame_size": [vlm.FRAME_W, vlm.FRAME_H],
+                       "label_height": vlm.LABEL_H, "peak_frame": "the frame nearest peak_time_s is moved onto it"},
+             "candidates_asked": 2 * count, "candidates_found": len(candidates), "cache_dir": str(vlm.DEFAULT_CACHE),
+             "model_calls": len(calls), "cache_hits": len(results) - len(calls),
+             "model_errors": sum(1 for r in results if r["error"]),
+             "thinking_returned": any(r["thinking_chars"] for r in results),
+             "memory": memory[0] if memory else None, "unloaded": gone, "candidates": records}
+    return clips, block, {"vlm_sheets": round(t_sheets[0], 2), "vlm_model": round(t_model, 2),
+                          "vlm_unload": round(t_unload, 2)}
+
+
 def main():
     ap = argparse.ArgumentParser(description="Cut the most action-heavy moments of a gameplay video "
                                              "into vertical 1080x1920 clips.")
@@ -672,6 +763,9 @@ def main():
     ap.add_argument("--cpu-decode", action="store_true",
                     help="decode on the CPU even if the GPU can (the scores are the same; for comparisons)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output root (default {DEFAULT_OUT})")
+    ap.add_argument("--vlm", choices=("off",) + vlm.MODELS, default="off",
+                    help="v6 veto: a local Ollama vision model checks 2 x --count candidates and vetoes clumsy, "
+                         "boring and menu/cutscene clips (default off: picks exactly as v4/v5)")
     args = ap.parse_args()
 
     if not args.video.is_file():
@@ -681,6 +775,21 @@ def main():
     ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         fail("ffmpeg/ffprobe not found on PATH (install: winget install Gyan.FFmpeg)")
+    model_info = None
+    if args.vlm != "off":
+        # Checked before the slow analysis, so a missing Ollama or model stops the run at once.
+        try:
+            model_info = vlm.check_ollama(args.vlm)
+            vlm.load_prompt()
+        except vlm.VlmError as e:
+            fail(str(e))
+        except OSError as e:
+            fail(f"prompt file for {vlm.PROMPT_VERSION} not readable: {e}")
+        others = [m for m in model_info["loaded"] if m != args.vlm]
+        print(f"Stage 2 (v6) on: {args.vlm} via Ollama, {2 * args.count} candidates, prompt {vlm.PROMPT_VERSION}")
+        if others:
+            print(f"WARNING: Ollama already has {', '.join(others)} loaded; with 8 GB of VRAM the vision model "
+                  f"may not fit on the GPU.")
 
     t_start = time.perf_counter()
     info = probe(ffprobe, args.video)
@@ -768,7 +877,9 @@ def main():
     print(f"Action sequences: {len(seq_spans)} (split at {SEQ_QUIET:g} s quiet gaps and excluded stretches); "
           f"at most {MAX_PER_SEQ} clips each")
 
-    clips, baseline, notes = pick_clips(pick, pick_smooth, usable_end, args.count,
+    # v6: with --vlm the picker makes 2 x --count candidates. The greedy picker only uses the count to stop, so
+    # the first --count of them are exactly the clips it makes without --vlm.
+    clips, baseline, notes = pick_clips(pick, pick_smooth, usable_end, args.count * (2 if model_info else 1),
                                         args.min_len, args.max_len, args.min_gap, walls, phone_cut, seq)
     stats = {"has_audio": info["has_audio"], "audio_median": a_med, "visual_median": v_med, "hud": hud_on,
              "sequences": seq_spans}
@@ -780,6 +891,14 @@ def main():
 
     run_dir = args.out / args.video.stem / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
+    vlm_block, t_vlm = None, {}
+    if model_info:
+        notes = ["candidates: " + n for n in notes]
+        clips, vlm_block, t_vlm = veto_step(ffmpeg, args.video, args.vlm, model_info, clips, args.count, run_dir,
+                                            range_fix)
+        if len(clips) < args.count:
+            notes.append(f"asked for {args.count} clips, found {len(clips)}: the picker made only "
+                         f"{vlm_block['candidates_found']} candidates")
     encoder, enc_args = pick_encoder(ffmpeg)
     print(f"Encoder: {encoder}. Writing {len(clips)} clip(s) to {run_dir}")
     t0 = time.perf_counter()
@@ -788,7 +907,9 @@ def main():
         name = f"clip_{rank:02d}_{m}m{s:02d}s.mp4"
         clip["rank"], clip["file"] = rank, name
         print(f"  [{rank}] {hms(clip['start_s'])}-{hms(clip['end_s'])} ({clip['duration_s']:.1f} s)  "
-              f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}  sequence {clip['sequence']}")
+              f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}  sequence {clip['sequence']}"
+              + (f"  candidate {clip['candidate_rank']}, {clip['vlm']['category'] or 'model error'}"
+                 f"{' (vetoed, used as filler)' if clip['vlm']['filler'] else ''}" if model_info else ""))
         render(ffmpeg, args.video, clip, run_dir / name, args.crop, enc_args, info["has_audio"], range_fix)
     t_encode = time.perf_counter() - t0
 
@@ -818,13 +939,13 @@ def main():
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v4",
+        "tool": "gta-clipper v6",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
         "settings": {"count": args.count, "min_len": args.min_len, "max_len": args.max_len,
                      "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder,
-                     "decoder": decoder, "decoder_reason": why},
+                     "decoder": decoder, "decoder_reason": why, "vlm": args.vlm},
         "hud": {"state": hud_state, "reference_size": [HUD_REF_W, HUD_REF_H], "samples_per_s": HUD_FPS,
                 "star_box": STAR_BOX, "star_tips_x": STAR_TIPS_X, "star_tip_y": STAR_TIP_Y,
                 "star_radius": STAR_RADIUS, "star_inner": STAR_INNER, "star_min_score": STAR_MIN_SCORE,
@@ -853,10 +974,13 @@ def main():
                     "visual_median": round(v_med, 4), "visual_scale": round(v_scale, 4),
                     "smoothed_baseline": round(baseline, 3)},
         "timing_s": {"audio_analysis": round(t_audio, 2), "video_analysis": round(t_video, 2),
-                     "hud_pixel_work": round(t_hud_px, 2), "encode": round(t_encode, 2), "total": round(total, 2)},
+                     "hud_pixel_work": round(t_hud_px, 2), **t_vlm, "encode": round(t_encode, 2),
+                     "total": round(total, 2)},
         "notes": notes,
         "clips": clips,
     }
+    if vlm_block:
+        scores["vlm"] = vlm_block
     (run_dir / "scores.json").write_text(json.dumps(scores, indent=2), encoding="utf-8")
     print(f"Done in {total:.1f} s (audio {t_audio:.1f}, picture {t_video:.1f} decoded on "
           f"{'GPU' if decoder == 'cuda' else 'CPU'}, encode {t_encode:.1f}). Scores: {run_dir / 'scores.json'}")

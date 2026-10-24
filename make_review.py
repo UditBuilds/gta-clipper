@@ -12,6 +12,11 @@ Thumbnails assume the source is limited range (16-235) with BT.709 colour, which
 captures contain. A truly full-range source would come out with crushed blacks and clipped whites.
 Thumbnails are cached in <out>_thumbs; delete that folder to rebuild them.
 
+For a --vlm run (v6) the page also shows every candidate the model judged, vetoed ones included: the contact sheet
+it saw, its category and reason, whether it was kept, vetoed or used as filler, and the owner's rating if one
+applies (eval.py's rule). Vetoed candidates have no clip file; their button plays the source from the start.
+Picks with no rating are listed at the top so the owner can rate them.
+
 Usage:  python make_review.py <video> <run_dir> <out.html> [--every 10] [--width 384]
   e.g.  python make_review.py C:\\AI\\gta\\input\\test1.webm C:\\AI\\gta\\output\\test1\\<run> C:\\AI\\gta\\review\\test1_review.html
 """
@@ -27,6 +32,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
+
+import eval as ev
 
 CLIP_COLOURS = ["#f5a524", "#22d3ee", "#e879f9", "#a3e635", "#fb7185", "#60a5fa", "#fbbf24", "#34d399"]
 SCORE_MAX = 6.0  # combined score is the weighted mean of two z-scores capped at 6
@@ -59,6 +66,52 @@ def grab(ffmpeg, video, t, width, out):
 
 def rel_url(target, from_dir):
     return quote(Path(os.path.relpath(target, from_dir)).as_posix())
+
+
+def vlm_section(scores, run_dir, out_dir, video_stem):
+    """HTML for a --vlm run: the picks that need a rating, then every candidate with the model's verdict."""
+    v = scores["vlm"]
+    rated = ev.load_ratings(video_stem)
+    clips = sorted(scores["clips"], key=lambda c: c["rank"])
+    need = [c for c in clips if ev.rating_for(c, rated)[0] is None]
+    items = "".join(
+        f'<li style="--clip:{CLIP_COLOURS[(c["rank"] - 1) % len(CLIP_COLOURS)]}"><span class="dot"></span>'
+        f'clip {c["rank"]} <button class="seek" data-t="{c["start_s"]}">{ts1(c["start_s"])}&ndash;{ts1(c["end_s"])}'
+        f'</button> peak {ts1(c["peak_time_s"])}, candidate {c["candidate_rank"]}, '
+        f'{html.escape(c["vlm"]["category"] or "model error")}{" (vetoed, used as filler)" if c["vlm"]["filler"] else ""} '
+        f'<button class="seek" data-clip="{rel_url(run_dir / c["file"], out_dir)}">play clip</button> '
+        f'<code>{html.escape(c["file"])}</code></li>' for c in need)
+    need_html = (f"<h2>Picks that need your rating ({len(need)})</h2><ul class=\"need\">{items}</ul>" if need
+                 else "<h2>Picks that need your rating</h2><p class=\"meta\">None: every pick has a rating.</p>")
+    cards = []
+    for c in v["candidates"]:
+        m = c["vlm"]
+        g, _ = ev.rating_for(c, rated)
+        owner = ("unrated" if g is None else f"{'postable' if g['postable'] else 'not postable'}: "
+                 f"{html.escape(g['reason'])} <span class=\"meta\">({html.escape(g['file'])})</span>")
+        cls = "veto" if m["vetoed"] else "err" if m["error"] else "kept"
+        status = m["status"] + (f" &rarr; clip {c['final_rank']}" if c["final_rank"] else "")
+        b64 = base64.b64encode((run_dir / c["sheet"]).read_bytes()).decode("ascii")
+        what = (f"<b>{html.escape(m['category'])}</b>{' &middot; player stalled' if m['player_stalled'] else ''}"
+                f"<br>{html.escape(m['reason'])}" if m["category"] else f"<b>model error</b><br>{html.escape(m['error'])}")
+        cards.append(
+            f'<div class="cand {cls}"><img src="data:image/jpeg;base64,{b64}" alt="contact sheet of candidate '
+            f'{c["candidate_rank"]}"><div class="info"><div class="cap"><span class="ts">#{c["candidate_rank"]}</span> '
+            f'<button class="seek" data-t="{c["start_s"]}">{ts1(c["start_s"])}&ndash;{ts1(c["end_s"])}</button> '
+            f'{c["duration_s"]:.1f} s, peak {ts1(c["peak_time_s"])} <span class="status">{status}</span></div>'
+            f'<p>{what}</p><p class="meta">Owner: {owner}</p></div></div>')
+    calls = [c["vlm"].get("call") or {} for c in v["candidates"] if not c["vlm"]["cached"]]
+    mem = v.get("memory") or {}
+    mem_txt = (f", model memory {mem['size_bytes'] / 2**30:.2f} GiB ({mem['vram_bytes'] / 2**30:.2f} GiB on the GPU)"
+               if mem.get("size_bytes") else "")
+    meta = (f"{v['model']} &middot; prompt {html.escape(v['prompt_version'])} &middot; sheet version "
+            f"{v['sheet_version']} &middot; {v['model_calls']} model call(s), {v['cache_hits']} cached, "
+            f"{v['model_errors']} error(s) &middot; model step {scores['timing_s'].get('vlm_model', 0):.1f} s"
+            f"{mem_txt}{' &middot; <b>thinking text returned</b>' if v['thinking_returned'] else ''}")
+    return (f"<section>{need_html}<h2>All {len(v['candidates'])} candidates, as the model saw them</h2>"
+            f"<p class=\"meta\">{meta}. Veto categories: {', '.join(v['veto_categories'])}. The model never ranks: "
+            f"the first {scores['settings']['count']} candidates not vetoed are the clips, then vetoed ones fill any "
+            f"gap. {len(calls)} answer(s) are new in this run.</p><div class=\"cands\">{''.join(cards)}</div></section>")
 
 
 def main():
@@ -141,7 +194,8 @@ def main():
                          f"encoder {st['encoder']}"),
         every=f"{args.every:g}", n=len(times), n_in=n_in, floor=f"{floor:.1f}",
         floor_pct=f"{floor / SCORE_MAX * 100:.1f}", notes=notes, rows="".join(rows), tiles="".join(tiles),
-        video_url=video_url)
+        video_url=video_url,
+        vlm=vlm_section(scores, args.run_dir, out_dir, args.video.stem) if "vlm" in scores else "")
     args.out.write_text(page, encoding="utf-8")
     print(f"{args.out}: {len(times)} thumbnails, {n_in} inside clips, {args.out.stat().st_size / 1e6:.1f} MB")
 
@@ -181,6 +235,23 @@ button.seek {{ font:inherit; color:var(--text); background:none; border:1px soli
 .bar i {{ display:block; height:100%; background:#64748b; border-radius:3px; }}
 .bar i.hot {{ background:var(--hot); }}
 .note {{ font-size:12px; color:var(--clip); padding:0 8px 6px; }}
+h2 {{ font-size:16px; margin:8px 0; }}
+ul.need {{ margin:0 0 8px; padding-left:18px; }}
+ul.need li {{ margin:4px 0; }}
+.cands {{ display:flex; flex-direction:column; gap:10px; }}
+.cand {{ display:grid; grid-template-columns:minmax(0, 768px) minmax(220px, 1fr); gap:12px; background:var(--panel);
+  border:1px solid var(--line); border-left:4px solid #64748b; border-radius:6px; padding:8px; --clip:#64748b; }}
+.cand.kept {{ border-left-color:#22c55e; }}
+.cand.veto {{ border-left-color:#ef4444; }}
+.cand.err {{ border-left-color:#fbbf24; }}
+.cand img {{ width:100%; display:block; border-radius:4px; }}
+.cand .cap {{ padding:0 0 4px; flex-wrap:wrap; }}
+.cand p {{ margin:4px 0; }}
+.status {{ margin-left:auto; font-weight:700; }}
+.cand.veto .status {{ color:#f87171; }}
+.cand.kept .status {{ color:#4ade80; }}
+.cand.err .status {{ color:#fbbf24; }}
+@media (max-width:900px) {{ .cand {{ grid-template-columns:1fr; }} }}
 #player {{ position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center;
   justify-content:center; flex-direction:column; gap:8px; z-index:10; padding:16px; }}
 #player.open {{ display:flex; }}
@@ -202,6 +273,7 @@ the source from there, or "play clip" to watch the clip as cut; Esc closes the p
 <table><thead><tr><th>#</th><th>Source time</th><th>Length</th><th>Peak</th><th>Score</th><th>Why picked (scores.json)</th>
 <th>File</th></tr></thead><tbody>{rows}</tbody></table>
 </section>
+{vlm}
 <section><div class="grid">{tiles}</div></section>
 <div id="player" role="dialog" aria-label="Source video player">
 <video id="vid" controls preload="none"></video>
