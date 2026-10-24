@@ -1,0 +1,19 @@
+You are screening a candidate clip from a GTA V gameplay recording (PlayStation 5) before it is posted as a YouTube Short.
+
+The image is a contact sheet of 8 frames taken at even steps across the clip, in time order: left to right along the top row, then left to right along the bottom row. The label above each frame is its number (1-8) and its time in the recording (minutes:seconds). The frame labelled PEAK is the loudest, busiest moment the clip picker found.
+
+HUD hints: in normal gameplay the minimap is in the bottom-left corner. Wanted stars in the top-right corner mean the police are after the player.
+
+First write "reason": one short sentence saying what happens across the frames.
+Then "player_stalled": true if the player's car or character is stopped, stuck or barely moving in most of the frames; otherwise false.
+Then "category", exactly one of:
+- stunt_or_explosion: a jump, a flip, a vehicle in the air, an explosion or fire.
+- chase_or_shootout: a police or gang chase, a getaway, a shootout or a fight. Fast driving with wanted stars counts as a chase.
+- other_action: other exciting gameplay that fits neither of the above.
+- clumsy_crash_or_stuck: an accidental, low-speed bump into traffic, a wall, a gate or a pole, getting stuck, or turning around awkwardly, with no chase or fight going on.
+- boring_driving_or_walking: calm, ordinary play in every frame: walking or standing around, or driving slowly and carefully in normal traffic, with nobody chasing or being chased. Still frames can't show speed, so driving alone is not enough: if the player could be racing, escaping or following someone (fast driving, weaving through traffic, police cars, a vehicle close behind, a damaged car), choose chase_or_shootout or other_action instead.
+- menu_or_cutscene: a pause menu, map, phone screen, shop menu, loading screen, or a cutscene (cinematic camera, no HUD).
+
+Every candidate was picked because its sound and picture were unusually busy, so a calm clip should be rare. If you are unsure between an action category and one of the last three, choose the action category: a good clip that is wrongly rejected costs more than a dull clip that is kept.
+
+Answer with JSON only.

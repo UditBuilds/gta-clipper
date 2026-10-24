@@ -431,3 +431,109 @@ phone time cut.
 - `hudtest.py`: PASS (5 required checks and 4 calibration frames).
 - `evaltest.py` (new): PASS, 20 checks on made-up clips, ranges and ratings. Each group was run before its change:
   4 of the 6 range checks, 7 of the 8 rating checks, all 3 Postable@5 checks and all 3 same-clip checks failed then.
+
+# v6: local vision-model veto (2026-10-24)
+
+Same machine, GPU decoding, default flags plus `--vlm`, every run one at a time with `C:\AI\scripts\gpu_log.ps1`
+logging the GPU once per second. Ollama 0.40.8, `qwen3-vl:4b-instruct` (digest 84f7ed8042fa) and
+`qwen3-vl:8b-instruct` (70e58e37beb1), Q4_K_M, from Ollama's library. Before each run: 12.2-12.5 GB RAM free, about
+410 MiB of VRAM in use, no model loaded in Ollama. After each run Ollama had no model loaded. Keys at revision 2;
+ratings as in PR 5 (no new rating files).
+
+## `--vlm off` is v5
+
+| Video | v6 off run | v5 run | timeline.csv | scores.json |
+|---|---|---|---|---|
+| test1 | 20261024-140327 | 20261023-205413 | byte-identical | identical apart from created, timing, `tool` ("gta-clipper v6") and the new `settings.vlm` ("off") |
+| test2 | 20261024-140514 | 20261023-205723 | byte-identical | the same |
+
+## The candidates
+
+With `--vlm` the picker makes 10 candidates. In both videos candidates 1-5 are the v5 picks, in the same order, so a
+veto can only bring in candidates 6-10:
+- test1: 10:20.3, 12:30.9, 14:27.5, 9:55.3, 11:37.3;
+- test2: 15:57.1, 13:30.6, 13:01.7, 16:49.2, 10:53.0.
+
+None of them has an owner rating. test2's 10:53.0-11:08.0 shares 9 s with the never-pick range 10:38-11:02 (the call
+that carries on with no phone on screen). Both models vetoed it with every prompt version, so it was never picked.
+
+## Table A: the pipeline, frozen prompt v3
+
+| Video | `--vlm` | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time | Run time |
+|---|---|---|---|---|---|---|---|---|---|---|
+| test1 | off | 20261024-140327 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | - | 79.9 s |
+| test1 | 4b-instruct | 20261024-143602 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 45.0 s | 131.8 s |
+| test1 | 8b-instruct | 20261024-144132 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 64.0 s | 158.2 s |
+| test2 | off | 20261024-140514 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | - | 84.9 s |
+| test2 | 4b-instruct | 20261024-143345 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 46.6 s | 140.3 s |
+| test2 | 8b-instruct | 20261024-143856 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s | 161.3 s |
+
+- **Model time** is `vlm_model` + `vlm_unload` on a first run (nothing cached): the model load, 10 calls and the
+  unload. Building the 10 sheets adds 10.2-10.9 s.
+- **A cached re-run makes no call.** Checked by re-running test2 with the 4b (run 20261024-145230):
+  - 10 of 10 answers came from the cache, with 0 calls;
+  - the model was never loaded (peak GPU memory 687 MiB, decoding and encoding only), and there was no unload;
+  - it gave the same five clips in the same order;
+  - the run took 93.2 s against 140.3 s.
+- **test1, 4b.** It vetoed candidates 1, 3, 4 and 8-10.
+  - The clips are 2, 5, 6, 7, then 1 as filler.
+  - Recall drops because the shootout range (2:10-2:57) lost its clip (candidate 4, 2:16.0).
+  - The new pick 12:30.9-12:45.9 is 0 % inside action ranges (after the yacht chase ends at 12:30).
+  - Two picks (10:20.3, 12:30.9) are unrated, so its Postable@5 of 3/5 is provisional.
+- **test2, 4b.** It vetoed both clumsy crashes (candidates 1 and 3) and 6-10.
+  - Only 3 candidates survived, so the crashes came back as fillers.
+  - The clips are v5's five, reordered: 4:40.0, 5:06.5, 3:04.5, then 0:00.1 and 0:42.3 as fillers.
+  - Postable@5 is unchanged, because it counts the first 5 whatever their order.
+- **8b.** It vetoed no candidate in test1, and only 7-10 in test2. Its clips equal v5's in both videos.
+- **Bad picks** stay 0 in every run.
+
+The same numbers for prompts v1 and v2 are in `prompts/LOG.md`.
+
+## Table B: the model as a judge
+
+The 10 candidates with an owner rating are test1 1-5 (all postable) and test2 1-5 (1 and 3 not postable: the clumsy
+crashes). Each candidate's rating is found with eval.py's rule. Counted with `vlmeval.py`, both videos together:
+
+| Prompt | Model | Vetoed but postable (costly) | Kept but not postable | Agreements (vetoed / kept) |
+|---|---|---|---|---|
+| v1 | 4b-instruct | 2 (test1 3:10.2, 3:50.2) | 1 (test2 0:00.1) | 7 (1 / 6) |
+| v1 | 8b-instruct | 2 (test1 3:10.2, test2 4:40.0) | 2 (test2 0:00.1, 0:42.3) | 6 (0 / 6) |
+| v2 | 4b-instruct | 3 (test1 3:10.2, 3:50.2, test2 5:06.5) | 1 (test2 0:42.3) | 6 (1 / 5) |
+| v2 | 8b-instruct | 0 | 2 (test2 0:00.1, 0:42.3) | 8 (0 / 8) |
+| **v3** | **4b-instruct** | **3** (test1 3:10.2, 3:50.2, 2:16.0) | **0** | **7 (2 / 5)** |
+| **v3** | **8b-instruct** | **0** | **2** (test2 0:00.1, 0:42.3) | **8 (0 / 8)** |
+
+The 20 unrated candidates (6-10 of each video) aren't counted. With so few rated candidates, and all three prompt
+versions judged on the same 10, this table can show a gross failure, not an accuracy.
+
+What the costly mistakes have in common:
+- Every costly veto in every version is a stretch of driving, or walking to a car, during a chase: test1's police
+  stretches, test2's gang chase and its getaway after the slow-motion flash.
+- The model called each one boring driving.
+- On the sheets, these clips show the player's car on an ordinary street. There is no police car in frame, and the
+  wanted stars are a row of about 25x6 px.
+
+## GPU memory and timing
+
+| Model | Ollama `/api/ps`: size / on the GPU | Peak GPU memory used (nvidia-smi, whole GPU) | Peak temperature | First call (load) | Other calls |
+|---|---|---|---|---|---|
+| 4b-instruct | 3.33 / 3.33 GiB | 4,876-4,906 MiB | 63 C | 6.5-7.8 s (3.0-4.3 s) | 3.6 s |
+| 8b-instruct | 5.90 / 5.07 GiB (0.83 GiB on the CPU) | 6,942-6,944 MiB | 69 C | 9.7-12.0 s (4.5-6.5 s) | 5.3 s |
+
+- About 410 MiB is in use before a run.
+- Shared GPU memory on the NVIDIA adapter peaked at about 490 MB (4b) and 900 MB (8b). The log doesn't show whether
+  that was at load (pinned memory) or during the calls.
+- No run went above 85 C. The unload took 4.1-4.2 s every time, and nvidia-smi was back to about 430 MiB afterwards.
+- Prompt v3 plus the sheet is 1,632 prompt tokens. Answers are 49-86 tokens, so `num_predict` 300 never cut one off.
+
+## The installed `qwen3-vl:4b` / `:8b` (Thinking builds)
+
+- Probed once before the build, on a sheet of test1 6:00-6:15, a cutscene that is not a candidate.
+- With `think: false`, both still returned about 1,200 characters of thinking.
+- The 4b used all 300 output tokens thinking and returned no JSON. The 8b thought, then returned valid JSON.
+- The owner chose the Instruct builds. Both Thinking builds are still installed.
+
+## Tests
+
+`selftest.py` PASS (the same three 15.000 s clips). `hudtest.py` PASS. `evaltest.py` PASS (20 checks). `vlmtest.py`
+PASS (25 checks).
