@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 OLLAMA_URL = "http://localhost:11434"
 MODELS = ("qwen3-vl:4b-instruct", "qwen3-vl:8b-instruct")  # choices of clip.py --vlm (besides "off")
 PROMPT_DIR = HERE / "prompts"
-PROMPT_VERSION = "veto_v2"  # prompts/<PROMPT_VERSION>.txt; the last version tried on test1/test2 is frozen
+PROMPT_VERSION = "veto_v3"  # prompts/<PROMPT_VERSION>.txt; frozen: the last of 3 versions tried on test1/test2
 DEFAULT_CACHE = Path(r"C:\AI\gta\vlm_cache")
 
 CATEGORIES = ("stunt_or_explosion", "chase_or_shootout", "other_action",
@@ -126,8 +126,9 @@ def make_sheet(ffmpeg, video, clip, out, range_fix):
 
 
 def load_prompt(version=PROMPT_VERSION):
-    """(text, sha256 of the file's bytes) of prompts/<version>.txt."""
-    raw = (PROMPT_DIR / f"{version}.txt").read_bytes()
+    """(text, sha256) of prompts/<version>.txt. Line endings are made LF first, so a checkout that turns them
+    into CRLF (git on Windows) sends the model the same text and gives the same hash."""
+    raw = (PROMPT_DIR / f"{version}.txt").read_bytes().replace(b"\r\n", b"\n")
     return raw.decode("utf-8").strip(), hashlib.sha256(raw).hexdigest()
 
 

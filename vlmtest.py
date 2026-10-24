@@ -317,6 +317,21 @@ def the_prompt_file_exists():
     return all(c in text for c in vlm.CATEGORIES) and len(sha) == 64
 
 
+@check
+def crlf_checkout_gives_the_same_prompt():
+    """a prompt file with CRLF line endings gives the same text (no \\r) and hash as the LF file"""
+    old = vlm.PROMPT_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            vlm.PROMPT_DIR = Path(tmp)
+            (Path(tmp) / "lf.txt").write_bytes(b"line one\nline two\n")
+            (Path(tmp) / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
+            lf, crlf = vlm.load_prompt("lf"), vlm.load_prompt("crlf")
+            return lf == crlf and "\r" not in crlf[0]
+    finally:
+        vlm.PROMPT_DIR = old
+
+
 # --- Table B (vlmeval.py): veto vs the owner's rating ---
 
 @check
