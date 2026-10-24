@@ -1,4 +1,4 @@
-"""Gameplay auto-clipper v4.
+"""Gameplay auto-clipper v6.
 
 Finds the loudest, busiest moments in a gameplay recording and cuts them into
 vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.

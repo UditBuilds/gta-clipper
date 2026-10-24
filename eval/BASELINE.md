@@ -469,7 +469,12 @@ that carries on with no phone on screen). Both models vetoed it with every promp
 | test2 | 8b-instruct | 20261024-143856 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s | 161.3 s |
 
 - **Model time** is `vlm_model` + `vlm_unload` on a first run (nothing cached): the model load, 10 calls and the
-  unload. Building the 10 sheets adds 10.2-10.9 s. A cached re-run makes no call.
+  unload. Building the 10 sheets adds 10.2-10.9 s.
+- **A cached re-run makes no call.** Checked by re-running test2 with the 4b (run 20261024-145230):
+  - 10 of 10 answers came from the cache, with 0 calls;
+  - the model was never loaded (peak GPU memory 687 MiB, decoding and encoding only), and there was no unload;
+  - it gave the same five clips in the same order;
+  - the run took 93.2 s against 140.3 s.
 - **test1, 4b.** It vetoed candidates 1, 3, 4 and 8-10.
   - The clips are 2, 5, 6, 7, then 1 as filler.
   - Recall drops because the shootout range (2:10-2:57) lost its clip (candidate 4, 2:16.0).
