@@ -79,3 +79,43 @@ the PEAK shows plain driving, so it would push toward boring. v3 changes from v2
 - For the 8b's kept clumsy crashes: `clumsy_crash_or_stuck` now starts "at the PEAK the player accidentally bumps
   into ...", since the PEAK frame shows the bump. The PEAK label line adds "the moment the clip was picked for".
 - `boring_driving_or_walking` is v2's text, unchanged.
+
+### v3 results, 2026-10-24 (frozen)
+
+| Model | Run test1 | Run test2 | Vetoed but postable | Kept but not postable | Agreements |
+|---|---|---|---|---|---|
+| qwen3-vl:4b-instruct | 20261024-143602 | 20261024-143345 | **3** (test1 #1 3:10.2, #3 3:50.2, #4 2:16.0) | 0 | 7 (both clumsy crashes vetoed) |
+| qwen3-vl:8b-instruct | 20261024-144132 | 20261024-143856 | 0 | 2 (test2 #1, #3) | 8 |
+
+Result: the stopping rule is not met (the 4b still vetoes postable clips), but v3 is the last version allowed, so it
+is frozen as it is. No v4 was written.
+
+- The 4b now gets all 5 rated test2 candidates right, both clumsy crashes included ("the PEAK frame shows the truck
+  hitting the gate"). On test1 it still calls the police stretches calm driving ("no visible police or wanted
+  stars"), and now also vetoes #4 (2:16.0, the player on foot, then a car) as boring.
+- The 8b vetoes nothing on test1 and only unrated candidates on test2 (#7-#10), so its picks equal v5's in both
+  videos. It wrote "police pursuit indicated by wanted stars" for test2 #2 and #4; test2 has no wanted stars.
+- test2 #10 (10:53.0-11:08.0, which overlaps the never-pick phone-call range 10:38-11:02 by 9 s) was vetoed by both
+  models in all three versions.
+
+## Pipeline results for every version (eval.py)
+
+Postable@5 counts unrated picks as not postable. "Picks" are candidate numbers in final order; f = vetoed, used as
+filler. `--vlm off` is v5 (identical timeline.csv).
+
+| Video | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Picks |
+|---|---|---|---|---|---|---|---|---|
+| test1 | off | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
+| test1 | 4b v1 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 4 5 6 7 |
+| test1 | 8b v1 | 5/5 | 5/5 | 0 | 4/5 | 1 | 23.8 s | 2 3 4 5 6 |
+| test1 | 4b v2 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 4 5 6 7 |
+| test1 | 8b v2 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
+| test1 | 4b v3 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 5 6 7 1f |
+| test1 | 8b v3 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
+| test2 | off | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+| test2 | 4b v1 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 4 5 3f |
+| test2 | 8b v1 | 2/5 | 2/3 | 0 | 2/5 | 1 | 15.0 s | 1 3 4 5 6 |
+| test2 | 4b v2 | 2/5 | 2/3 | 0 | 2/5 | 1 | 15.3 s | 2 3 5 9 1f |
+| test2 | 8b v2 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+| test2 | 4b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 2 4 5 1f 3f |
+| test2 | 8b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |

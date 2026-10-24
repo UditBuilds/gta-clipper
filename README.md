@@ -1,10 +1,11 @@
-# gta-clipper (v4)
+# gta-clipper (v6)
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (15-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
 
-No AI model is needed for the analysis. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
-for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required.
+The analysis needs no AI model. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
+for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required. v6 adds an optional veto by a
+local vision model through Ollama (`--vlm`, off by default): see [Stage 2](#stage-2-vision-model-veto-v6-optional).
 
 ## How it picks moments
 
@@ -95,6 +96,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--no-hud` | off | ignore the GTA V HUD: no exclusions and no star boost, so it scores like v1 |
 | `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
+| `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
 
@@ -151,6 +153,81 @@ This builds one HTML page per run, with one thumbnail every 10 s (`--every`), ea
 - Each clip in the table has a **play clip** button that plays the clip file as cut, in the same player.
 - A clip shorter than the thumbnail spacing may cover no thumbnail; it still shows as a "clip N starts" note.
 - Thumbnails assume a limited-range source, which is what PS5 SDR captures contain.
+- For a `--vlm` run the page also lists the picks that have no owner rating yet, then every candidate the model
+  judged, vetoed ones included: the contact sheet it saw, its category and reason, kept / vetoed / "vetoed, used as
+  filler" / model error, and the owner's rating where one applies (eval.py's rule). Vetoed candidates have no clip
+  file; their time button plays the source from the candidate's start.
+
+## Stage 2: vision-model veto (v6, optional)
+
+The scores can't tell good action from clumsy action: a low-speed bump scores like a chase (see Known limits). With
+`--vlm MODEL`, a local vision model looks at each candidate and may veto it. It never ranks or moves a clip.
+
+```powershell
+.\.venv\Scripts\python.exe clip.py C:\AI\gta\input\my_session.mp4 --vlm qwen3-vl:8b-instruct
+```
+
+1. **Candidates.** The picker makes 2 x `--count` clips (10 by default) exactly as without `--vlm`. It only uses the
+   count to know when to stop, so the first `--count` of them are the clips it makes without `--vlm` (vlmtest.py
+   checks this on made-up scores; on test1 and test2 candidates 1-5 are the v5 picks).
+2. **Contact sheet.** One JPEG per candidate, 8 frames in 4 columns and 2 rows, read left to right, top row first.
+   - The frames sit at the midpoints of 8 equal slices of the clip. The one nearest the clip's peak (`peak_time_s`)
+     is moved exactly onto it and labelled PEAK in yellow. Moving the nearest frame keeps the time order.
+   - Each frame is 384x216 (a fifth of 1080p) under a 24 px black bar with its number and source time, so the label
+     covers no HUD. The sheet is 1536x480, about 190 KB, built by ffmpeg on the CPU in about 1 s.
+   - Why this size: big enough to see cars, people, damage, menus and subtitles; small enough to keep each call at a
+     few seconds on 8 GB. Both sides are multiples of 32 px. Ollama counts the sheet as 1,046 image tokens (measured:
+     1,455 prompt tokens with the v1 prompt, 409 without the sheet).
+   - `SHEET_VERSION` (now 2) is part of the cache key; version 1 was the plan's 8 even frames, never sent to a model.
+3. **The call.** `POST /api/chat` to Ollama at `http://localhost:11434` (urllib; the sheet as base64). The body has
+   the prompt and the sheet, `format` = a JSON schema, temperature 0, seed 42, `num_ctx` 4096, `num_predict` 300.
+   The schema asks for `reason` (one sentence) first, then `player_stalled` (true/false), then `category`, one of
+   `stunt_or_explosion`, `chase_or_shootout`, `other_action`, `clumsy_crash_or_stuck`, `boring_driving_or_walking`,
+   `menu_or_cutscene`. The reason comes first so the model describes the frames before it picks. Thinking is turned
+   off (`think: false`) when a model has a thinking mode; the Instruct builds have none, so the field is left out.
+4. **Veto.** `clumsy_crash_or_stuck`, `boring_driving_or_walking` and `menu_or_cutscene` veto; `player_stalled` is
+   recorded but doesn't veto.
+   - The candidates are walked in rank order: a vetoed one is skipped and the next one moves up. The first `--count`
+     left are the clips.
+   - If fewer survive, the best-ranked vetoed candidates fill the gap, after the survivors, marked "vetoed, used as
+     filler".
+   - An answer that can't be used (the call failed or timed out, bad JSON, unknown category) never vetoes: the
+     candidate counts as kept and is marked as a model error.
+   - Trimming, the 15-30 s length, spread and the phone rule all still hold: the clips are a subset of picks that
+     already met them.
+5. **Order.** Signals (GPU decode), then contact sheets (CPU), then model calls, then the model is unloaded
+   (`keep_alive: 0`, and the run waits until Ollama's `/api/ps` no longer lists it), then the clips are rendered
+   (NVENC). Ollama and the model are checked before the slow analysis: if either is missing the run stops with an
+   error, so `--vlm` never falls back to off without saying so.
+6. **Cache.** Each usable answer is stored in `C:\AI\gta\vlm_cache\<video>\<sha256>.json`. The key is the video's name
+   and size (videos are never hashed), the clip's start, end and peak, the model's name and digest, the prompt
+   version and its sha256, the sheet version, the options and the think setting. A re-run takes the stored answer and
+   makes no call. Failed answers aren't stored, so they are asked again next time. Delete the folder to ask afresh.
+7. **Prompt.** `prompts/veto_v3.txt`, frozen for the held-out test. Line endings are made LF before use and hashing,
+   so a CRLF checkout sends the same text. All three versions tried on test1/test2, the stopping rule and every result
+   are in [prompts/LOG.md](prompts/LOG.md).
+
+**Models.** `qwen3-vl:4b-instruct` (3.3 GB) and `qwen3-vl:8b-instruct` (6.2 GB) from Ollama's official library,
+Apache-2.0. The plain `qwen3-vl:4b` and `qwen3-vl:8b` tags are the Thinking builds. Ollama accepts `think: false` for
+them, but they think anyway: about 1,200 characters per answer, and the 4b ran out of tokens before it answered. So
+they aren't offered.
+
+**Output.**
+- `candidates\cand_NN_<start>.jpg`: every candidate's contact sheet.
+- scores.json gets a `vlm` block with:
+  - every candidate: category, player_stalled, reason, kept/vetoed/filler/error, cached or not, the sheet's frame
+    times and the call's timings;
+  - the model's digest and how much of it was on the GPU;
+  - the prompt's version and sha256.
+- `timing_s` gets `vlm_sheets`, `vlm_model` and `vlm_unload`.
+- `clips` holds only the final clips, each with its `candidate_rank` and the model's verdict, so eval.py works
+  unchanged. `settings.vlm` names the model ("off" by default).
+- With `--vlm off`, timeline.csv and scores.json are v5's apart from `tool` ("gta-clipper v6") and `settings.vlm`:
+  checked on test1 and test2 (see BASELINE).
+
+**The model as a judge.** `vlmeval.py <run_dir> [...]` compares every candidate's veto with the owner's rating, where
+one applies: vetoed but postable (the costly mistake), kept but not postable, and agreements. Runs are added up per
+model.
 
 ## Self-test
 
@@ -191,6 +268,23 @@ footage or run folder is needed:
 ```powershell
 .\.venv\Scripts\python.exe evaltest.py
 ```
+
+The v6 veto is checked on made-up model answers, with no Ollama, footage or ffmpeg:
+
+```powershell
+.\.venv\Scripts\python.exe vlmtest.py
+```
+
+- veto and fill, including fewer survivors and fewer candidates than `--count`;
+- model errors never veto, and bad answers are errors;
+- the request body;
+- the sheet's frame times and filter;
+- the cache: a stored answer makes no call, errors aren't stored, every key part changes the key;
+- unloading;
+- a missing model or Ollama stops the run;
+- CRLF prompts;
+- vlmeval's outcomes;
+- the first 5 of 10 candidates being the 5 picks.
 
 ## Synthetic test results (2026-10-20)
 
@@ -300,6 +394,24 @@ test1 v3's 2:26.0-2:46.0 keeps its own rating, "not postable, boring, bad cut", 
 2:16.0-2:46.0 (same peak) postable: a clip's own rating beats a newer rating of another cut. Details and the earlier
 numbers are in [eval/BASELINE.md](eval/BASELINE.md).
 
+v6 with the frozen prompt v3, on the dev set (2026-10-24). Postable@5 counts unrated picks as not postable, so the 4b's
+test1 row is provisional until the owner rates its two new picks:
+
+| Video | `--vlm` | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time |
+|---|---|---|---|---|---|---|---|---|
+| test1 | off (= v5) | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | - |
+| test1 | 4b-instruct | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 45.0 s |
+| test1 | 8b-instruct | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 64.0 s |
+| test2 | off (= v5) | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | - |
+| test2 | 4b-instruct | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 46.6 s |
+| test2 | 8b-instruct | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s |
+
+- On the 10 candidates with an owner rating, the 4b vetoed 3 postable clips (all in test1) and both clumsy crashes. The
+  8b vetoed no rated candidate, so its picks equal v5's in both videos.
+- In test2 the 4b's picks are v5's five clips, with the two clumsy crashes moved to the end as fillers.
+- Model time is the model step plus unloading, first run (nothing cached); building the sheets adds about 10.5 s.
+- Details, the judge table per prompt version and GPU memory are in [eval/BASELINE.md](eval/BASELINE.md).
+
 ## Known limits
 
 - **The HUD rules only know GTA V's PS5 layout.**
@@ -352,7 +464,7 @@ numbers are in [eval/BASELINE.md](eval/BASELINE.md).
 - **A low-speed crash scores like a chase.** test2's two rejected clips (0:00.1-0:15.1 and 0:42.3-0:57.3, "boring"
   and "clumsy crash") peak on camera jolts from bumping a car and a gate. Their picture-change score is at the cap,
   like the chase and the house pull the owner liked, and test2 has no wanted stars, so nothing in the score tells
-  them apart. Planned for a later PR.
+  them apart. v6's `--vlm` veto is the attempt at this. With prompt v3, the 4b vetoes both; the 8b vetoes neither.
 - **A rating follows the moment, not the cut (PR 5).** A rating applies to any 15-30 s clip whose peak is within 4 s
   of the rated clip's, so a "bad cut" rating carries over to a different cut of the same moment. Only a clip's own
   rating (the exact same clip) beats that: test1 v3's 2:26.0-2:46.0 stays "not postable, boring, bad cut" although
@@ -385,4 +497,31 @@ numbers are in [eval/BASELINE.md](eval/BASELINE.md).
   players that read the flag. When the input is VP9 and its container says limited, `clip.py` now rewrites
   that header bit while cutting (ffmpeg's `vp9_metadata` bitstream filter). Pixel values are not changed.
   `scores.json` records this as `vp9_range_relabel`.
-- No captions, no AI detection, no UI. These are deliberately left for later versions.
+- **A vetoed candidate still blocks its neighbours (v6).** Candidates 6-10 were picked with 1-5 already taken.
+  - A vetoed candidate keeps its 10 s gap and its slot in the spread rule.
+  - So a good moment right next to a vetoed crash can't take its place. The next-ranked candidate moves up instead.
+  - Accepted by the owner (2026-10-24).
+- **Stills can't show motion (v6).** Eight frames show where the car is, not how fast it goes or who is behind it.
+  - A chase without a police car in frame can look like ordinary driving.
+  - The 4b called test1's police stretches (3:10.2 and 3:50.2) "normal driving" with all three prompt versions.
+  - The 8b called test2's gang chase "boring driving" with prompt v1.
+- **Wanted stars are tiny on the sheet (v6).** The star row is about 25x6 px in a 384x216 frame.
+  - Both models have also written "wanted stars" for test2 clips, which have none.
+  - With prompt v3 such a mistake can only keep a clip: stars mean "not boring".
+- **Evenly spaced frames can still miss a short event (v6).** Frames are 1.9 s apart in a 15 s clip and 3.75 s apart
+  in a 30 s clip. The peak frame guarantees one frame on the picker's best moment, not on every event.
+- **The model-as-judge numbers rest on 10 rated candidates (v6).**
+  - test1's five are all postable, so there the only possible mistake is a costly veto.
+  - test2 has 3 postable and 2 not postable (the clumsy crashes).
+  - That can show a gross failure, not an accuracy. The three prompt versions were all judged on those 10.
+- **New picks are unrated (v6).** A veto moves candidates 6-10 up. They count as not postable in Postable@5 until the
+  owner rates them.
+- **Temperature 0 on a GPU isn't guaranteed to repeat exactly (v6).**
+  - Two back-to-back calls with the same sheet gave identical replies.
+  - Calls after the model is reloaded were not compared.
+  - The cache makes re-runs repeat the stored answers.
+- **The 8b doesn't fully fit on the GPU (v6).** Ollama reports 5.07 of its 5.90 GiB on the GPU (num_ctx 4096) and runs
+  the rest on the CPU. It works, about 5 s per candidate against the 4b's 3.5 s. Peak GPU use was 6.9 GB of 8.
+- **The Thinking builds ignore `think: false` (v6).** They write their reasoning anyway, so only the Instruct builds
+  are offered.
+- No captions and no UI. These are deliberately left for later versions.
