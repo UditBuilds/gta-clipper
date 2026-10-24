@@ -9,6 +9,53 @@ local vision model through Ollama (`--vlm`, off by default): see [Stage 2](#stag
 v7 can give that veto the wanted stars the tool measures (`--vlm-hint stars`, `--vlm-rule stars`, both off by
 default): see [v7](#v7-measured-wanted-stars-optional).
 
+## Held-out result (PR 8)
+
+The one-time test on two videos the rules were never tuned on (heldout1, heldout2), run as pre-registered in
+[eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md). The config was frozen before the videos were opened: `--vlm
+qwen3-vl:4b-instruct --vlm-rule stars` ("4b v3 + star rule"), the config the pre-registered rule chose on the dev set.
+
+**The frozen config did not beat `--vlm off`. On both held-out videos it made exactly the same clips as off, in the same
+order, so Postable@5 is 5 of 10 for both** (the owner's blind ratings, given before any model ran). It costs about 69 s
+of model time and 15 s of contact sheets per two videos and changed nothing.
+
+As a judge, it did worse than on the dev set. It vetoed 2 clips the owner rated postable (dev: 0) and kept 4 of the 5
+the owner rated not postable (dev: 0 of 2). The star rule changed 2 of the 4b's verdicts, both from agreeing with the
+owner to disagreeing; on dev it had changed 3, all the other way. No `--vlm` config made 0 costly vetoes on held-out.
+One config did worse than off: **4b + stars scored Postable@5 4 of 10 against off's 5.** It vetoed a postable stunt
+jump with 30 s of measured stars as boring, and a clip the owner rejected moved up. The other five configs equal off.
+
+| | Postable@5 (of 10) | Vetoed but postable | Kept but not postable | Model time |
+|---|---|---|---|---|
+| `--vlm off` | 5 | - | (keeps all 5) | - |
+| **4b v3 + star rule (frozen)** | **5** | **2** | **4** | 69.4 s |
+| 4b v3 (the same answers, no star rule) | 5 | 2 | 2 | 69.4 s |
+
+**This is weak evidence.** The held-out set is small: 14 rated clips from 2 videos, and heldout2 has only about 22.5 s
+of action, which gave 4 candidates. With 4 candidates and `--count 5` no veto can change heldout2's clips, so only
+heldout1 (10 candidates) could tell the configs apart. The held-out answer keys were drafted by Claude from video frames
+and were not checked by the owner frame by frame. **From PR 8 on, heldout1 and heldout2 are dev data;** a later claim
+needs new held-out footage. Every table, the deviations from the plan, and the full lists are in
+[eval/BASELINE.md](eval/BASELINE.md) (v8).
+
+What was observed:
+- The frozen config's clips equal off's on both videos (same start, end and peak; `timeline.csv` byte-identical).
+- Bad picks 0 and recall 4/4 for every config; strict hits 6 of 9.
+- On dev every costly veto was a police chase called boring. On held-out 10 of the 11 costly vetoes (over all configs)
+  were plain drives with no wanted stars that the owner liked.
+- The star rule kept two police clips the 4b had called boring for a wrong reason ("no wanted stars"). They are chases,
+  so not boring, but the owner rejected them anyway ("crashing a lot"; one with no reason).
+- Four of the owner's five rejections are about interest ("repetitive", "nothing much interesting", "crashing a lot",
+  "nothing much happening"). Every config kept the two rejected shootout clips.
+- One held-out candidate with stars between 0 and 27.5 s mattered: 17.0 s, where the 5.0 s threshold cancelled a veto.
+
+Only reasoned about, or not tested:
+- Accuracy on other footage: 14 rated clips can show a gross failure, not an accuracy.
+- The keys' edges beyond what the frames showed; a pause map or phone call under 2.5 s could have been missed.
+- The phone rule (neither held-out video has a phone call), star thresholds between 0 and 10.75 s, and whether
+  temperature 0 repeats after a model reload (the star-rule runs reused cached answers).
+- Why the models call drives boring that the owner likes.
+
 ## How it picks moments
 
 1. **Loudness.** ffmpeg's `ebur128` filter measures momentary loudness (LUFS) every 0.1 s.
@@ -161,6 +208,21 @@ This builds one HTML page per run, with one thumbnail every 10 s (`--every`), ea
   judged, vetoed ones included: the contact sheet it saw, its category and reason, kept / vetoed / "vetoed, used as
   filler" / model error, and the owner's rating where one applies (eval.py's rule). Vetoed candidates have no clip
   file; their time button plays the source from the candidate's start.
+
+### Blind rating page (PR 8)
+
+```powershell
+.\.venv\Scripts\python.exe make_rating_page.py C:\AI\gta\output\heldout1\<run> C:\AI\gta\review\heldout1_rating.html
+```
+
+For rating clips without seeing how they were picked (the held-out test's step 3). The review sheet above shows scores,
+the peak, "why picked" and the rank (also in the clip file names), so it can't be used for that. This page shows:
+- the clips in source-time order as letters A, B, C ...;
+- each clip's source time range, its length and a player;
+- postable / not postable and a reason per clip, and a button that copies all the ratings as text.
+
+The clip files are copied next to the page as `A.mp4`, `B.mp4` ... No score, peak, rank, tool name, run folder, config
+or model verdict is written to the page or the folder. Marks are kept in the browser only.
 
 ## Stage 2: vision-model veto (v6, optional)
 
@@ -371,9 +433,12 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 Everything else is neutral. Times are seconds in the source.
 
 **test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
-postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them. The held-out videos (heldout1,
-heldout2) haven't been used; the one-time test on them is planned, before any of their output exists, in
-[eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md).
+postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them, except the [held-out
+result](#held-out-result-pr-8) of PR 8. That one-time test on heldout1 and heldout2 was planned before any of their
+output existed ([eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md)). **Since PR 8, heldout1 and heldout2 are dev data too.**
+Their answer keys (`eval/answer_keys/heldout1.json`, `heldout2.json`) were drafted by Claude from frames (10 s, 2.5 s,
+and 0.5 s at every edge) and were not checked by the owner frame by frame; the owner answered the policy questions
+and accepted the ranges as drafted.
 
 ```powershell
 .\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>      # key defaults to eval\answer_keys\test1.json
@@ -479,9 +544,8 @@ Every pick of these runs has an owner rating.
 - **Postable@5 is the same for every config,** because vetoed candidates come back as fillers.
 - With `--vlm off` and with the v6 options, v7 gives v6's results (same timelines and picks; v6's cached answers
   used, 0 model calls).
-- Tables A, B and C, and the selection rule of the planned held-out test, are in
-  [eval/BASELINE.md](eval/BASELINE.md). The test itself is planned in
-  [eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md) and not run.
+- Tables A, B and C, and the selection rule of the held-out test, are in [eval/BASELINE.md](eval/BASELINE.md). The
+  test was run in PR 8: see [Held-out result](#held-out-result-pr-8).
 
 ## Known limits
 
@@ -591,18 +655,24 @@ Every pick of these runs has an owner rating.
 - **The measured stars and `stars_s` differ (v7).** `stars_s` in scores.json counts whole 0.5 s steps (30.5 s in a
   30.0 s clip); the hint and the rule use the stars cut at the clip's edges. `stars_s` was left as it is so that
   `--vlm off` output doesn't change.
-- **12 rated candidates, and the star rule is in-sample (v7).** All configs and both stars prompts were judged on the
-  same 12 candidates (test1 1-7, test2 1-5). That can show a gross failure, not an accuracy. The star rule was proposed
-  after the 4b's three dev mistakes were known, and it targets exactly them; the owner fixed the 5.0 s before it ran,
-  but its 0 mistakes on these candidates is an in-sample result. The held-out test is what can check it.
-- **The 5.0 s threshold was never tested (v7).** Every dev candidate has either 0 s or 27.5 s or more of stars, so
-  any threshold from 0.5 s to 27.5 s would have given the same results.
+- **The star rule's dev result didn't hold on held-out (v7, PR 8).** It was proposed after the 4b's three dev mistakes
+  were known and fixed exactly them (0 mistakes on 12 dev candidates, in-sample). On the 14 held-out candidates it
+  cancelled 2 vetoes, both of police chases the owner rated not postable. Stars show the clip is not boring driving,
+  not that it is worth posting.
+- **The 5.0 s threshold is barely tested (v7, PR 8).** Every dev candidate had 0 s or 27.5 s or more of stars. On
+  held-out one case mattered, 17.0 s, where any threshold up to 17.0 s gives the same result. Nothing between 0 and
+  10.75 s has been seen.
+- **The veto calls drives boring that the owner likes (PR 8).** On held-out 10 of the 11 costly vetoes over all
+  configs were drives with no wanted stars, rated postable (heldout2's night drives, heldout1's opening drive).
+- **A veto of one clip at a time can't see repetition (PR 8).** The owner rejected a held-out shootout clip as
+  "repetitive" because other clips showed the same scene. Every config kept it.
 - **Evenly spaced frames can still miss a short event (v6).** Frames are 1.9 s apart in a 15 s clip and 3.75 s apart
   in a 30 s clip. The peak frame guarantees one frame on the picker's best moment, not on every event.
 - **The model-as-judge numbers rest on 10 rated candidates (v6; 12 since PR 7).**
   - test1's five are all postable, so there the only possible mistake is a costly veto.
   - test2 has 3 postable and 2 not postable (the clumsy crashes).
   - That can show a gross failure, not an accuracy. The three prompt versions were all judged on those 10.
+  - PR 8 adds 14 held-out candidates (9 postable, 5 not), rated blind; with them it is 26 rated candidates in all.
 - **New picks are unrated (v6).** A veto moves candidates 6-10 up. They count as not postable in Postable@5 until the
   owner rates them.
 - **Temperature 0 on a GPU isn't guaranteed to repeat exactly (v6).**

@@ -1,5 +1,7 @@
 test1 and test2 are the **dev set (rules were tuned on these)**: every eval result in this file (precision, recall,
-bad picks, postable) is on them. The held-out videos haven't been used (plan: eval/HELDOUT_PLAN.md).
+bad picks, postable) is on them, except the last section. That section is the one-time held-out test (PR 8) on heldout1
+and heldout2, run as pre-registered in eval/HELDOUT_PLAN.md. **Since PR 8, heldout1 and heldout2 count as dev data
+too**: a later claim needs new held-out footage.
 
 Each section below was scored with the eval.py of its day. PR 5 (last section) changed how ranges and ratings are
 counted; its table rescores the latest v3 and v4 runs under the new rules. The older tables are left as they were.
@@ -698,3 +700,283 @@ stars. That is what the held-out test is for.
 - `--vlm-hint stars` and `--vlm-rule stars` on the synthetic video (no GTA V minimap): each stopped with "... needs
   the measured wanted stars, but the HUD rules are off (no GTA V minimap found)", exit code 1. No run folder was
   written and no model was loaded.
+
+# v8: the one-time held-out test (2026-10-24)
+
+Run once, as pre-registered in eval/HELDOUT_PLAN.md (written in PR 7, before any held-out output existed). No code,
+prompt, threshold or rule changed: clip.py, vlm.py, eval.py, vlmeval.py and prompts/ are byte-identical to `d335101`,
+checked before every group of runs.
+
+## The result
+
+**On the held-out videos the frozen config, 4b v3 + star rule, made exactly the clips that `--vlm off` made, on both
+videos, in the same order.** Every clip has the same rank, start, end and peak, and `timeline.csv` is byte-identical.
+**Postable@5 is 5 of 10 for both** (heldout1 3/5, heldout2 2/5). The frozen config costs 69.4 s of model time (its 4b v3
+answers) and 15.0 s of contact sheets over the two videos, and changed no clip.
+
+As a judge of the 14 rated candidates it did worse than on dev:
+- **2 costly vetoes** (dev: 0): heldout2's two night drives, which the owner rated postable. They came back as fillers,
+  because heldout2 has only 4 candidates.
+- **4 of the 5 candidates rated not postable were kept** (dev: 0 of 2).
+- **The star rule changed 2 verdicts, both from agreeing with the owner to disagreeing.** On dev it changed 3, all from
+  disagreeing to agreeing.
+- **No `--vlm` config made 0 costly vetoes on held-out.** Applied to these results, step 1 of the selection rule would
+  leave only `off`. This is an observation, not a new choice: the choice was frozen before the test.
+
+With 14 rated candidates this is neither a gross failure nor a clear win (HELDOUT_PLAN.md, section 6). The model veto
+did not improve the clips on new footage: off is as good on these two videos and costs no model time.
+
+## Commits and runs
+
+| Step | Commit | What |
+|---|---|---|
+| 1 | `6e0a9f3` | final config frozen (4b v3 + star rule), code `d335101`, digests and prompt hashes, before the held-out folder was opened |
+| - | `0c735e9` | `make_rating_page.py`, the blind rating page, tested on dev runs before any held-out run |
+| 2 | `489906e` | answer keys `heldout1.json`, `heldout2.json`, before any clip.py run on them |
+| 3 | `0b87f92` | the owner's blind ratings `heldout1_blind.json`, `heldout2_blind.json`, before any `--vlm` run |
+
+- **Rating runs** (`--count 10 --vlm off`): `heldout1\20261024-165619` (10 clips) and `heldout2\20261024-165743`
+  (4 clips: no other stretch had a step scoring 2.0 or more with room for a 15 s clip).
+- **Phase 3:** 14 runs, one config at a time in the plan's order, each config on heldout1 then heldout2. A pre-flight
+  check ran on its own before each config (11.9-14.6 GB RAM free, 413-532 MiB VRAM in use, no model loaded), and the
+  GPU log ran during each config.
+- **Checks after every run, all passed:**
+  - the model digest and prompt sha256 equal the frozen values;
+  - the candidates equal the rating run's clips (start, end, peak, order and count: 10 and 4);
+  - the off run's picks are the rating run's ranks 1-5 (heldout2: 1-4);
+  - the v3 and stars runs made fresh calls (10 and 4, 0 cached);
+  - the star-rule runs made 0 calls, and their answers equal this PR's v3 run of the same video;
+  - Ollama had no model loaded afterwards;
+  - no sample was above 85 C.
+- No run crashed, none was repeated, and there were 0 model errors.
+
+## Deviations from the plan
+
+- **The held-out folder was listed** (file names only) in Phase 1, after the freeze commit, because the names in the
+  brief didn't exist. Nothing in it was hashed. The brief had lifted only the rule against reading the folder.
+- **The files were renamed** from `heldout1.webm.webm` and `heldout2.webm.webm` to `heldout1.webm` and `heldout2.webm`,
+  with the owner's OK, after the keys were confirmed and before any clip.py run. Contents unchanged.
+- **heldout2 has 4 candidates, not 10,** so there are 14 rated candidates, not 20. With `--count 5` and 4 candidates,
+  no veto can change heldout2's clips: a vetoed candidate comes back as a filler. Every config makes the same 4 clips
+  there, and Postable@5 2/5 is the most any config could get.
+- **The answer keys were drafted by Claude from frames and were not checked by the owner frame by frame.** The owner
+  answered the five policy questions (the end rule, the Ammu-Nation range, the three-way split, the skid start, the
+  Mission passed overlay) and accepted the ranges as drafted. Each key's `confirmation` field says "The owner checked
+  the draft on a review page", which says more than happened. It was left as it is, because no key may change after a
+  held-out clip pick has been seen. The question whether the drives stay neutral got no separate answer.
+- **Model time** of a star-rule config is its own v3 run's in this PR, as the plan says. heldout2's covers only 4 calls,
+  so per-video model times are not comparable with dev.
+
+## Keys and blind ratings
+
+| Video | Action ranges | Never-pick ranges | Rated clips | Postable |
+|---|---|---|---|---|
+| heldout1 (15:18.7, "The Long Stretch") | 3: shootout 5:38-8:09; the same fight after a checkpoint, then the escape, 8:20.5-10:21; police chase 10:31-14:09 (489.5 s in all) | 6: the Ammu-Nation visit, two cutscenes, two Mission failed screens, Mission passed | 10 | 7 |
+| heldout2 (5:59.0) | 1: a skid by a police car, then 1-2 stars, 4:25-4:47.5 (22.5 s) | 4: two pause maps, two cutscenes | 4 | 2 |
+
+The owner's reasons for the 5 not-postable clips:
+
+| Video | Clip | Reason |
+|---|---|---|
+| heldout1 | 8:21.0-8:36.0 | "already a lot clips of this scene so yes got repetitive" |
+| heldout1 | 8:50.8-9:05.8 | "nothing much interesting to watch in this clip" |
+| heldout1 | 12:33.8-13:03.8 | "im crashing a lot in this clip so yes not that fun" |
+| heldout2 | 3:47.0-4:02.0 | "its a start of the mission and nohing much happening or interesting here to watch" |
+| heldout2 | 4:26.5-4:47.0 | none given |
+
+## Table A: the pipeline
+
+Picks are candidate numbers in final order (f = vetoed, used as filler; r = kept by the star rule). Model time is
+`vlm_model` + `vlm_unload` of the first, uncached run; a star-rule config carries its own v3 run's.
+
+| Video | Config | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time | Picks |
+|---|---|---|---|---|---|---|---|---|---|---|
+| heldout1 | off | 20261024-171640 | 5/5 | 3/3 | 0 | 3/5 | 0 | 24.3 s | - | 1 2 3 4 5 |
+| heldout1 | 4b v3 | 20261024-171935 | 5/5 | 3/3 | 0 | 3/5 | 0 | 21.3 s | 46.0 s | 2 3 4 5 6 |
+| heldout1 | 8b v3 | 20261024-172358 | 5/5 | 3/3 | 0 | 3/5 | 0 | 24.3 s | 66.9 s | 1 2 3 4 5 |
+| heldout1 | **4b v3 + star rule (frozen)** | 20261024-172832 | 5/5 | 3/3 | 0 | 3/5 | 0 | 24.3 s | 46.0 s | 1r 2 3 4 5 |
+| heldout1 | 8b v3 + star rule | 20261024-173133 | 5/5 | 3/3 | 0 | 3/5 | 0 | 24.3 s | 66.9 s | 1 2 3 4 5 |
+| heldout1 | 4b + stars | 20261024-173437 | 5/5 | 3/3 | 0 | 2/5 | 0 | 21.3 s | 45.8 s | 1 3 4 5 6 |
+| heldout1 | 8b + stars | 20261024-173845 | 5/5 | 3/3 | 0 | 3/5 | 0 | 24.3 s | 65.5 s | 1 2 3 4 5 |
+| heldout2 | off | 20261024-171740 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | - | 1 2 3 4 |
+| heldout2 | 4b v3 | 20261024-172135 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 23.4 s | 1f 2f 3f 4f |
+| heldout2 | 8b v3 | 20261024-172615 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 31.6 s | 1 3 4 2f |
+| heldout2 | **4b v3 + star rule (frozen)** | 20261024-172944 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 23.4 s | 1r 2f 3f 4f |
+| heldout2 | 8b v3 + star rule | 20261024-173246 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 31.6 s | 1 3 4 2f |
+| heldout2 | 4b + stars | 20261024-173632 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 23.4 s | 1 2f 3f 4f |
+| heldout2 | 8b + stars | 20261024-174104 | 1/4 | 1/1 | 0 | 2/5 | 0 | 16.4 s | 31.8 s | 1 2 4 3f |
+
+Summed over both videos:
+
+| Config | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time |
+|---|---|---|---|---|---|---|---|
+| off | 6/9 | 4/4 | 0 | 5/10 | 0 | 20.8 s | - |
+| 4b v3 | 6/9 | 4/4 | 0 | 5/10 | 0 | 19.1 s | 69.4 s |
+| 8b v3 | 6/9 | 4/4 | 0 | 5/10 | 0 | 20.8 s | 98.4 s |
+| **4b v3 + star rule (frozen)** | 6/9 | 4/4 | 0 | **5/10** | 0 | 20.8 s | 69.4 s |
+| 8b v3 + star rule | 6/9 | 4/4 | 0 | 5/10 | 0 | 20.8 s | 98.4 s |
+| 4b + stars | 6/9 | 4/4 | 0 | 4/10 | 0 | 19.1 s | 69.2 s |
+| 8b + stars | 6/9 | 4/4 | 0 | 5/10 | 0 | 20.8 s | 97.2 s |
+
+- **heldout2's rows are equal by construction,** not because the configs agree: with 4 candidates every config makes
+  the same 4 clips (only their order differs), so hits, recall, bad picks and Postable@5 can't differ there.
+- **On heldout1 only 4b + stars differs:** it vetoed candidates 2 (a postable stunt jump with 30 s of stars) and 10, so
+  candidate 6, rated not postable, moved up.
+- Postable@5 counts the first 5 picks, out of 5; heldout2 has 4 picks, so for every config its 5th counts as not
+  postable.
+
+## Table B: the model as a judge (14 rated candidates)
+
+Counted with `vlmeval.py`'s rule: a filler counts as vetoed, a veto cancelled by the star rule counts as kept.
+
+| Config | Vetoed but postable (costly) | Kept but not postable | Agreements (vetoed / kept) |
+|---|---|---|---|
+| *off, for reference (keeps everything)* | *0* | *5 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5, 3:47.0)* | *9 (0 / 9)* |
+| 4b v3 | 2 (heldout2 0:50.9, 1:29.2) | 2 (heldout1 8:50.8, 8:21.0) | 10 (3 / 7) |
+| 8b v3 | 1 (heldout1 0:00.0) | 4 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5) | 9 (1 / 8) |
+| **4b v3 + star rule (frozen)** | **2** (heldout2 0:50.9, 1:29.2) | **4** (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5) | **8 (1 / 7)** |
+| 8b v3 + star rule | 1 (heldout1 0:00.0) | 4 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5) | 9 (1 / 8) |
+| 4b + stars | 4 (heldout1 11:20.8, 0:00.0; heldout2 0:50.9, 1:29.2) | 4 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5) | 6 (1 / 5) |
+| 8b + stars | 1 (heldout2 0:50.9) | 5 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5, 3:47.0) | 8 (0 / 8) |
+
+Per video, as costly / kept but not postable / agreements (vetoed / kept):
+
+| Config | heldout1 (10 rated: 7 postable, 3 not) | heldout2 (4 rated: 2 postable, 2 not) |
+|---|---|---|
+| *off, for reference* | *0 / 3 / 7 (0 / 7)* | *0 / 2 / 2 (0 / 2)* |
+| 4b v3 | 0 / 2 / 8 (1 / 7) | 2 / 0 / 2 (2 / 0) |
+| 8b v3 | 1 / 3 / 6 (0 / 6) | 0 / 1 / 3 (1 / 2) |
+| **4b v3 + star rule (frozen)** | **0 / 3 / 7 (0 / 7)** | **2 / 1 / 1 (1 / 0)** |
+| 8b v3 + star rule | 1 / 3 / 6 (0 / 6) | 0 / 1 / 3 (1 / 2) |
+| 4b + stars | 2 / 3 / 5 (0 / 5) | 2 / 1 / 1 (1 / 0) |
+| 8b + stars | 0 / 3 / 7 (0 / 7) | 1 / 2 / 1 (0 / 1) |
+
+On heldout1, the only video where a veto could change the clips, the frozen config's row equals off's: the 4b's one
+veto there (candidate 1) was cancelled by the star rule. On heldout2 every veto came back as a filler. That is why its
+clips are off's.
+
+## Dev and held-out side by side
+
+Dev is PR 7's tables (test1 + test2, 12 rated candidates); held-out is this PR's (heldout1 + heldout2, 14 rated
+candidates). Postable@5 and model time are summed over the two videos; Postable@5 is out of 10 on both sides.
+
+| Config | Postable@5 dev / held-out | Costly vetoes dev / held-out | Kept but not postable dev / held-out | Agreements dev / held-out | Model time dev / held-out |
+|---|---|---|---|---|---|
+| *off (reference)* | *8 / 5* | *0 / 0* | *2 of 2 / 5 of 5* | *10 of 12 / 9 of 14* | - |
+| 4b v3 | 8 / 5 | 3 / 2 | 0 / 2 | 9 / 10 | 91.6 / 69.4 s |
+| 8b v3 | 8 / 5 | 0 / 1 | 2 / 4 | 10 / 9 | 130.4 / 98.4 s |
+| **4b v3 + star rule (frozen)** | **8 / 5** | **0 / 2** | **0 / 4** | **12 / 8** | 91.6 / 69.4 s |
+| 8b v3 + star rule | 8 / 5 | 0 / 1 | 2 / 4 | 10 / 9 | 130.4 / 98.4 s |
+| 4b + stars | 8 / 4 | 4 / 4 | 2 / 4 | 6 / 6 | 91.1 / 69.2 s |
+| 8b + stars | 8 / 5 | 1 / 1 | 2 / 5 | 9 / 8 | 127.8 / 97.2 s |
+
+Dev: 12 rated candidates (10 postable, 2 not); held-out: 14 (9 postable, 5 not). The held-out model times cover 14
+calls, the dev ones 20.
+
+## Table C: every candidate and every verdict
+
+Categories: stunt, chase (chase_or_shootout), other (other_action), BORING (boring_driving_or_walking). A veto is marked
+"veto" (and "filler" when it came back to make up the count); bold = a verdict the owner's rating disagrees with.
+"Stars in clip" is `stars_in_clip_s`, the measured stars the rule and the hint use.
+
+| Video | # | Clip | Owner | Stars in clip | 4b v3 | 8b v3 | **4b v3 + star rule (frozen)** | 8b v3 + star rule | 4b + stars | 8b + stars |
+|---|---|---|---|---|---|---|---|---|---|---|
+| heldout1 | 1 | 12:33.8-13:03.8 | no | 30 of 30 s | BORING veto | **chase** | **BORING, kept by the rule** | **chase** | **other** | **other** |
+| heldout1 | 2 | 11:20.8-11:50.8 | yes | 30 of 30 s | stunt | chase | stunt | chase | **BORING veto** | stunt |
+| heldout1 | 3 | 9:15.8-9:45.8 | yes | 30 of 30 s | chase | chase | chase | chase | chase | other |
+| heldout1 | 4 | 8:50.8-9:05.8 | no | 10.75 of 15 s | **chase** | **chase** | **chase** | **chase** | **chase** | **chase** |
+| heldout1 | 5 | 7:52.0-8:08.5 | yes | 14.5 of 16.5 s | chase | chase | chase | chase | chase | chase |
+| heldout1 | 6 | 8:21.0-8:36.0 | no | 0 of 15 s | **chase** | **chase** | **chase** | **chase** | **chase** | **stunt** |
+| heldout1 | 7 | 5:38.5-5:53.5 | yes | 0 of 15 s | chase | chase | chase | chase | chase | chase |
+| heldout1 | 8 | 6:15.9-6:30.9 | yes | 0 of 15 s | chase | chase | chase | chase | chase | chase |
+| heldout1 | 9 | 7:27.0-7:42.0 | yes | 0 of 15 s | chase | chase | chase | chase | chase | chase |
+| heldout1 | 10 | 0:00.0-0:15.0 | yes | 0 of 15 s | other | **BORING veto** | other | **BORING veto** | **BORING veto** | other |
+| heldout2 | 1 | 4:26.5-4:47.0 | no | 17 of 20.5 s | BORING veto, filler | **chase** | **BORING, kept by the rule** | **chase** | **chase** | **chase** |
+| heldout2 | 2 | 3:47.0-4:02.0 | no | 0 of 15 s | BORING veto, filler | BORING veto, filler | BORING veto, filler | BORING veto, filler | BORING veto, filler | **other** |
+| heldout2 | 3 | 0:50.9-1:05.9 | yes | 0 of 15 s | **BORING veto, filler** | other | **BORING veto, filler** | other | **BORING veto, filler** | **BORING veto, filler** |
+| heldout2 | 4 | 1:29.2-1:44.2 | yes | 0 of 15 s | **BORING veto, filler** | other | **BORING veto, filler** | other | **BORING veto, filler** | other |
+
+No config used `clumsy_crash_or_stuck` or `menu_or_cutscene` on held-out: every veto is `boring_driving_or_walking`.
+
+## The star rule on held-out
+
+The rule cancelled the 4b's boring veto of two candidates: heldout1 #1 (12:33.8, 30 s of stars) and heldout2 #1
+(4:26.5, 17 s). Both halves of what happened:
+- **The rule's reading fits the frames.** Both clips are police chases, with stars measured for 30 of 30 s and 17 of
+  20.5 s. The 4b's reasons were wrong: "no police are visible or wanted stars are present" (heldout1 #1) and "no
+  visible police chase or wanted stars ... calm driving" (heldout2 #1).
+- **But "not boring" wasn't "postable".** The owner rejected #1 of heldout1 for "crashing a lot" and #1 of heldout2
+  with no reason given. So the 4b's veto agreed with the owner for a wrong reason, and the rule turned two agreements
+  into two kept-but-not-postable.
+- On dev the rule cancelled 3 vetoes, all of police clips the owner rated postable. On held-out it cancelled 2, both of
+  police clips the owner rated not postable. All 5 were police chases, so "not boring driving" fits each of them;
+  whether the clip was postable did not follow from that.
+- **The 5.0 s threshold,** never exercised on dev (every dev candidate had 0 s or at least 27.5 s), now has one case
+  that mattered: 17.0 s (heldout2 #1). Any threshold up to 17.0 s gives the same result; one above it would have left
+  that veto in place. The 10.75 s and 14.5 s candidates (heldout1 #4, #5) got no boring veto, so the threshold played
+  no part there.
+
+## GPU memory and timing
+
+| Runs | Peak GPU memory (nvidia-smi) | Peak temperature | Shared GPU memory, NVIDIA adapter | Run time heldout1 / heldout2 |
+|---|---|---|---|---|
+| rating runs, `--count 10` (2) | 721 MiB | 54 C | up to 322 MB | 100.0 / 36.6 s |
+| off (2) | 705 MiB | 54 C | up to 320 MB | 92.3 / 40.7 s |
+| 4b v3 (2) | 4,888 MiB | 63 C | up to 473 MB | 143.1 / 69.0 s |
+| 8b v3 (2) | 6,967 MiB | 67 C | up to 901 MB | 164.7 / 71.1 s |
+| star rule, cached (4) | 811 MiB | 54 C | up to 323 MB | 87.9-90.4 / 41.3-41.4 s |
+| 4b + stars (2) | 4,912 MiB | 64 C | up to 493 MB | 132.3 / 64.8 s |
+| 8b + stars (2) | 6,978 MiB | 69 C | up to 882 MB | 156.8 / 73.4 s |
+
+- Ollama 0.40.8. It reported the 4b fully on the GPU (3.33 GiB) and 5.07 of the 8b's 5.90 GiB, as on dev.
+- Contact sheets took 10.7-11.4 s on heldout1 and 4.1-4.2 s on heldout2. The unload took 4.1-4.2 s every time.
+- The NVIDIA adapter's luid was `0x00017d8d`, as in PR 7. No run went above 85 C.
+
+## What was observed
+
+- **The frozen config's clips are off's,** on both videos (same rank, start, end and peak; `timeline.csv`
+  byte-identical). Postable@5 5 of 10 for both; recall 4/4, bad picks 0 and strict hits 6/9 for every config.
+- **As a judge the frozen config made 2 costly vetoes and kept 4 of the 5 not-postable candidates** (dev: 0 and 0).
+- **No `--vlm` config had 0 costly vetoes on held-out.**
+- **The star rule changed 2 verdicts, both to disagree with the owner** (above). It made no model call and reused this
+  PR's 4b v3 answers, which the checks confirm.
+- **The costly vetoes moved from police chases to plain drives.** On dev every costly veto was a police chase called
+  boring. On held-out 10 of the 11 costly vetoes (over all configs) are drives with 0 s of stars that the owner rated
+  postable (heldout2's two night drives, heldout1's opening drive with dialogue). The 11th is 4b + stars calling a stunt
+  jump with 30 s of stars boring, as the 4b did with the hint on dev.
+- **Four of the owner's five rejections are about interest, not about the kind of clip:** "repetitive" (a judgement
+  about the whole set of clips, which a judge of one clip at a time can't make), "nothing much interesting", "crashing a
+  lot" and "start of the mission, nothing much happening". The two rejected shootout clips (heldout1 #4, #6) were kept by
+  every config (as chases; once as a stunt).
+- **The ratings and the keys measure different things.** heldout2's only clip inside an action range (4:26.5) is not
+  postable; its two clips in a neutral drive are postable, and so is heldout1's opening drive (neutral).
+- **heldout2 can't separate the configs:** 4 candidates, `--count 5`, so every config makes the same 4 clips.
+- **Bad picks are 0 in all 16 runs:** no clip touched a never-pick range. clip.py excluded 11 stretches with no
+  minimap in heldout1 (163 s) and 4 in heldout2 (162 s). The keys' never-pick ranges are 234 s and 160 s: heldout1's
+  include the walking inside the Ammu-Nation shop and the Mission passed overlay, where the minimap shows, so clip.py
+  did not exclude them; no clip went there.
+- **The models' memory, speed and temperature match dev** (table above).
+
+## What was only reasoned about, or not tested
+
+- **Accuracy.** 14 rated candidates (9 postable) from 2 videos, and heldout2 has 22.5 s of action. That can show a gross
+  failure, not an accuracy, and no claim about other footage follows.
+- **The keys.** Drafted by Claude from frames; the owner accepted them without checking them frame by frame. A pause
+  map or phone call shorter than 2.5 s could have been missed.
+- **The phone rule.** Neither held-out video has a phone call (0 % phone samples), so it was not exercised.
+- **Star thresholds between 0 and 10.75 s,** including 5.0 s as a boundary: no candidate had that much.
+- **Whether temperature 0 repeats after a reload:** the star-rule runs reused the cached v3 answers; no answer was
+  asked twice.
+- **The HUD rules on other resolutions, games or phones** (heldout1 is Franklin, heldout2 Michael; neither shows a
+  phone).
+- **Why the models call drives boring that the owner likes,** and whether a different prompt would change it: reasoned
+  about only.
+
+## Ideas the results suggest (not tried; each would be a new version and need new held-out footage)
+
+- A judgement over the whole set of clips, for rejections such as "repetitive".
+- Letting the star rule keep a clip only when another signal also says it is good, since stars alone didn't make a clip
+  postable.
+- Treating the veto as off by default for drives, where the held-out costly vetoes were.
+
+Nothing in the code, the prompts, the thresholds, the rules or the keys was changed because of these results.

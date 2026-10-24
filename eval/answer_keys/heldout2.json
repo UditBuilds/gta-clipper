@@ -1,0 +1,29 @@
+{
+  "video": "heldout2.webm",
+  "duration_s": 358.975,
+  "drafted": "2026-10-24",
+  "confirmed": "2026-10-24",
+  "confirmation": "The owner checked the draft on a review page of 0.5 s edge frames and, on 2026-10-24, before any clip.py run on this video, answered: action ranges end at the last 0.5 s frame that shows the action; the whole Ammu-Nation visit is one never-pick range (heldout1); heldout1's action is three ranges split at the two Mission failed screens; heldout2's range starts at the skid (4:25.0); the Mission passed overlay is never-pick (heldout1). No range was corrected. The question whether the drives stay neutral got no separate answer; they are neutral as drafted. The owner then said to continue to the clip.py runs.",
+  "method": "Drafted in PR 8, before any clip.py run on this video and after the final config was frozen (HELDOUT_PLAN.md, commit 6e0a9f3). Read by eye from ffmpeg frames only: one frame every 10 s, the whole video at 2.5 s, the drive at 1 s, and every edge at 0.5 s (wanted stars on crops of the top-right corner). Every neutral stretch (0:00-0:08, 0:14-2:09, 2:17-2:24, 3:42-4:24) was also swept at 1 s on crops of the top-right corner: no wanted stars, only the ammo counter. No clip.py, hudtest or other detector was run on the video.",
+  "note": "Times are seconds in the source. Ranges are half-open (eval.py since PR 5): a clip that ends where a range starts shares 0 s with it. Anything in neither list is neutral: walking to the car (0:00-0:09), the drive to Lester's (0:14-2:10, with a radio wheel at 0:18-0:19 and weaving through traffic at 1:19-1:22, no crash), walking in (2:16.5-2:25) and walking and driving after the cutscene (3:42-4:25). Every edge below was checked at 0.5 s; see each range's evidence. Not seen at 2.5 s: any phone call (one shorter than 2.5 s could have been missed).",
+  "rule": "A never-pick range runs from the last gameplay frame before it to the first gameplay frame after it, sampled at 0.5 s, so it can only be too wide (revision 1 of test1/test2). An action range runs from the first 0.5 s frame that shows the action to the last 0.5 s frame that shows it (the start is revision 2's rule; the end rule was set by the owner in PR 8).",
+  "action": [
+    {"start_s": 265.0, "end_s": 287.5, "note": "4:25.0-4:47.5 skid and spin across a junction next to a police car (4:25-4:27.5), 1 wanted star from 4:28.0 ('Lose the Cops'), 2 from about 4:39, driving away until the pause map opens",
+     "evidence": {"start": "4:24.5 driving straight; 4:25.0 braking hard with tyre smoke; 4:26.0 sideways in the junction; 4:27.0 spun round; 4:28.0 a police car alongside and the first star (top-right crop: none at 4:27.5)",
+                  "end": "4:47.5 driving into a tunnel with 2 stars; 4:48.0 the pause map"}}
+  ],
+  "never_pick": [
+    {"start_s": 9.0, "end_s": 14.0, "kind": "pause_map", "note": "0:09.0-0:14.0 the pause-menu map, opened from the car",
+     "evidence": {"start": "0:09.0 gameplay, in the car (minimap); 0:09.5 the map",
+                  "end": "0:13.5 the map closing ('Grand Theft Auto V' header); 0:14.0 gameplay"}},
+    {"start_s": 130.0, "end_s": 136.5, "kind": "cutscene", "note": "2:10.0-2:16.5 the 'Darnell Bros' factory shown from outside on a scripted camera, no HUD",
+     "evidence": {"start": "2:10.0 gameplay, Michael on the steps (minimap); 2:10.5 the factory from outside, no HUD",
+                  "end": "2:16.0 still the outside shot; 2:16.5 gameplay on the stairs inside (minimap)"}},
+    {"start_s": 145.0, "end_s": 222.0, "kind": "cutscene", "note": "2:25.0-3:42.0 Lester in his office ('Casing the Jewel Store'), then outside by the car",
+     "evidence": {"start": "2:25.0 gameplay, following Lester to the office door (minimap); 2:25.5 cutscene close-up, no HUD",
+                  "end": "3:41.5 cutscene, Michael by the wall, no HUD; 3:42.0 gameplay with minimap"}},
+    {"start_s": 287.5, "end_s": 358.975, "kind": "pause_map", "note": "4:47.5-end the pause menu (map tab) stays open until the video ends",
+     "evidence": {"start": "4:47.5 gameplay in the tunnel; 4:48.0 the pause menu map",
+                  "end": "the end of the video (5:59.0); the menu is still open at 5:57.5"}}
+  ]
+}

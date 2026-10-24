@@ -50,6 +50,40 @@ the rule gives **4b v3 + star rule** (eval/BASELINE.md, v7):
 
 It becomes final, with the commit hash, digests and prompt hashes, in a commit after PR 7 is merged.
 
+**Final config (frozen in PR 8, 2026-10-24, before any file in `C:\AI\gta\heldout\` was read).** The rule above,
+recomputed from the committed PR 7 dev runs (eval.py and vlmeval.py on the 14 runs of eval/BASELINE.md v7 Table A;
+model time from the first, uncached runs):
+
+| Config | Costly vetoes | Postable@5, test1 + test2 | Kept but not postable | Model time (both videos) | Unrated picks |
+|---|---|---|---|---|---|
+| off | 0 | 8 of 10 | 2 | - | 0 |
+| 4b v3 | 3 | 8 of 10 | 0 | 91.6 s | 0 |
+| 8b v3 | 0 | 8 of 10 | 2 | 130.4 s | 0 |
+| **4b v3 + star rule** | **0** | **8 of 10** | **0** | 91.6 s | 0 |
+| 8b v3 + star rule | 0 | 8 of 10 | 2 | 130.4 s | 0 |
+| 4b + stars | 4 | 8 of 10 | 2 | 91.1 s | 0 |
+| 8b + stars | 1 | 8 of 10 | 2 | 127.8 s | 0 |
+
+Step 1 leaves off, 8b v3, 4b v3 + star rule and 8b v3 + star rule; step 2 ties them at 8; step 3 leaves only
+**4b v3 + star rule** (0 kept but not postable; the other three keep both clumsy crashes). Steps 4 and 5 aren't needed.
+
+- **Chosen config:** 4b v3 + star rule, `clip.py <video> --vlm qwen3-vl:4b-instruct --vlm-rule stars`, all other
+  flags default.
+- **Code:** commit `d335101` (main after PR 7 was merged). This commit changes only this file. Before the runs of
+  step 4, `git diff d335101 HEAD -- clip.py vlm.py eval.py vlmeval.py prompts/` must print nothing.
+- **Ollama:** 0.40.8.
+- **Model digests** (Ollama `/api/tags`, the same in the dev runs' scores.json):
+  - `qwen3-vl:4b-instruct` 84f7ed8042fa7cdbd902f7dcb7d0370e032095047cc3244179f263b77b5bc318
+  - `qwen3-vl:8b-instruct` 70e58e37beb15464e19aa903dedb2cba828b89c0fb186f75ff2738c7347b96eb
+- **Prompt hashes.** vlm.py turns CRLF into LF before hashing, and records that sha256 in scores.json
+  (`vlm.prompt_sha256`) and in the cache key. It is also the sha256 of the file as committed (LF):
+  - `prompts/veto_v3.txt` 66c0f0af0d91b14de7997f8c9c255247f89604258bec5a0c2435376b752ccc8c (the v3 and star-rule
+    configs)
+  - `prompts/stars_v2.txt` 095fa39fdc85147f39b5cf0163f8e3c582e403fb4377a7a9e047aa6b5c67cb56 (the + stars configs)
+
+  A Windows checkout with `core.autocrlf` has CRLF files, so `sha256sum` on them gives other values (50ee1217... and
+  700cadfb...). Those are not the prompt hashes.
+
 ## 2. Answer keys (before any clip.py run on held-out)
 
 With the owner's go, Claude drafts `eval/answer_keys/heldout1.json` and `heldout2.json` the same way as test1/test2:
@@ -102,3 +136,18 @@ One run per video, `clip.py <video> --count 10` (`--vlm off`). Its 10 clips are 
 - Any idea that held-out results suggest is a new version. After the test, heldout1 and heldout2 are dev data, and a
   later claim needs new held-out footage.
 - With 10 candidates per video, the held-out test can show a gross failure or a clear win, not an accuracy.
+
+## Run (PR 8, 2026-10-24)
+
+Done once, in this order; each step's result was committed before the next started.
+
+| Step | Commit | Result |
+|---|---|---|
+| 1. Freeze | `6e0a9f3` | 4b v3 + star rule, code `d335101` (above) |
+| - | `0c735e9` | `make_rating_page.py`: the blind rating page, written and tested on dev runs before any held-out run |
+| 2. Keys | `489906e` | `heldout1.json` (3 action, 6 never-pick ranges), `heldout2.json` (1 action, 4 never-pick) |
+| 3. Blind ratings | `0b87f92` | 14 clips: heldout1 10 (7 postable), heldout2 4 (2 postable) |
+| 4. Runs | - | 14 runs, all checks passed, no crash, no repeat (eval/BASELINE.md, v8) |
+
+The result, the tables and the deviations from this plan (the folder listing, the rename, heldout2's 4 candidates, the
+keys' provenance) are in eval/BASELINE.md, section v8. **From now on heldout1 and heldout2 are dev data.**

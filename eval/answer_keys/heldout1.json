@@ -1,0 +1,41 @@
+{
+  "video": "heldout1.webm",
+  "duration_s": 918.684,
+  "drafted": "2026-10-24",
+  "confirmed": "2026-10-24",
+  "confirmation": "The owner checked the draft on a review page of 0.5 s edge frames and, on 2026-10-24, before any clip.py run on this video, answered: action ranges end at the last 0.5 s frame that shows the action; the whole Ammu-Nation visit is one never-pick range (heldout1); heldout1's action is three ranges split at the two Mission failed screens; heldout2's range starts at the skid (4:25.0); the Mission passed overlay is never-pick (heldout1). No range was corrected. The question whether the drives stay neutral got no separate answer; they are neutral as drafted. The owner then said to continue to the clip.py runs.",
+  "method": "Drafted in PR 8, before any clip.py run on this video and after the final config was frozen (HELDOUT_PLAN.md, commit 6e0a9f3). Read by eye from ffmpeg frames only: one frame every 10 s, the whole video at 2.5 s, and every edge at 0.5 s (wanted stars on crops of the top-right corner). Every neutral stretch (0:00-0:53, 3:10-4:50, 14:10-14:49) was also swept at 1 s on crops of the top-right corner: no wanted stars, only the ammo counter. No clip.py, hudtest or other detector was run on the video.",
+  "note": "Times are seconds in the source. Ranges are half-open (eval.py since PR 5): a clip that ends where a range starts shares 0 s with it. Anything in neither list (the drives with dialogue at 0:00-0:53.5, 3:10-4:50.5 and 14:09-14:50) is neutral. Every edge below was checked at 0.5 s; see each range's evidence. Not seen at 2.5 s: any phone call or pause map (one shorter than 2.5 s could have been missed).",
+  "rule": "A never-pick range runs from the last gameplay frame before it to the first gameplay frame after it, sampled at 0.5 s, so it can only be too wide (revision 1 of test1/test2). An action range runs from the first 0.5 s frame that shows the action to the last 0.5 s frame that shows it (the start is revision 2's rule; the end rule was set by the owner in PR 8).",
+  "action": [
+    {"start_s": 338.0, "end_s": 489.0, "note": "5:38.0-8:09.0 shootout in the recycling plant, first try: Franklin aiming at the fire door as the ambush cutscene ends, 'Escape the recycling plant', fires and grenades from 7:45, 3 wanted stars from about 7:55; ends when Franklin dies",
+     "evidence": {"start": "5:37.5 cutscene (Lamar and Stretch at the fire door, no HUD); 5:38.0 gameplay: minimap and ammo counter, Franklin aiming at the door",
+                  "end": "8:09.0 gameplay, shooting down a corridor (minimap red, 3 stars); 8:09.5 dark green death camera, no HUD; 8:11.5 'Mission failed, Franklin died'"}},
+    {"start_s": 500.5, "end_s": 621.0, "note": "8:20.5-10:21.0 the same fight again from the checkpoint: warehouse firefight with fires, out of the exit 9:10, shooting at the police helicopter 9:30-9:35, 'Escape the junkyard' over the roofs and down a ladder with 3 stars, onto the street 10:10, a police car 10:15-10:21; ends when Stretch dies",
+     "evidence": {"start": "8:20.0 fading in from black, HUD faint; 8:20.5 gameplay, Franklin crouched behind cover with a shotgun, minimap and ammo ('Man, it's on in here. Get behind something.' at 8:22.5)",
+                  "end": "10:21.0 gameplay: minimap, 3 stars, the police car and a van, 'Lose the Cops'; 10:21.5 green-tinted death camera, no HUD; 10:23.5 'Mission failed, Stretch died'"}},
+    {"start_s": 631.0, "end_s": 849.0, "note": "10:31.0-14:09.0 police chase by car, 3 wanted stars throughout: from the checkpoint by a car ('We got to cool this shit off', 'Lose the Cops'), through traffic, a slow-motion stunt jump 11:45-12:20 ('Stunt jump completed' 12:22.5), swerves and a kerb hit 13:02-13:10; ends when the stars go ('That's it! We lost 'em')",
+     "evidence": {"start": "10:30.5 near black, the stars faint; 10:31.0 gameplay: minimap and 3 stars, Franklin by a car",
+                  "end": "14:09.0 three stars (top-right crop); 14:09.5 no stars; 14:10 subtitle 'That's it! We lost 'em'"}}
+  ],
+  "never_pick": [
+    {"start_s": 53.5, "end_s": 190.0, "kind": "menu", "note": "0:53.5-3:10.0 Ammu-Nation visit: the shop's intro camera from 0:54.0 ('Welcome to Ammu-Nation'), then weapon and armour menus with the HUD hidden (about 1:17.5-1:35, 1:45-1:47.5, 2:12.5, 2:30-2:37.5, 2:42.5-2:45, 2:52.5-2:55) and walking around the shop between them. One range, as the owner made test2's clothes shop (17:15-18:35)",
+     "evidence": {"start": "0:53.5 outside, minimap visible, walking to the door; 0:54.0 the shop's intro camera, no minimap",
+                  "end": "3:09.5 Franklin pushing the shop door open from inside (minimap); 3:10.0 outside"}},
+    {"start_s": 290.5, "end_s": 338.0, "kind": "cutscene", "note": "4:50.5-5:38.0 the meeting at the recycling plant: the Ballas, Stretch's set-up and the first shots",
+     "evidence": {"start": "4:50.5 gameplay, walking to the reception door (minimap); 4:51.0 the fire door on a cutscene camera, no HUD",
+                  "end": "5:37.5 cutscene, no HUD; 5:38.0 gameplay with minimap"}},
+    {"start_s": 489.0, "end_s": 500.5, "kind": "menu", "note": "8:09.0-8:20.5 Franklin dies: death camera, 'Mission failed' 8:11.5-8:16.5, black 8:17.0-8:19.5, then the checkpoint reload",
+     "evidence": {"start": "8:09.0 gameplay (minimap, 3 stars); 8:09.5 death camera, no HUD",
+                  "end": "8:20.0 fading in, HUD faint; 8:20.5 gameplay. 8:20.5 is used, the first clear frame, so the range can only be too wide"}},
+    {"start_s": 621.0, "end_s": 631.0, "kind": "menu", "note": "10:21.0-10:31.0 Stretch dies: death camera, 'Mission failed' 10:23.5-10:28.5, black 10:29.0-10:30.0, then the checkpoint reload",
+     "evidence": {"start": "10:21.0 gameplay (minimap, 3 stars); 10:21.5 death camera, no HUD",
+                  "end": "10:30.5 near black; 10:31.0 gameplay with minimap and stars"}},
+    {"start_s": 890.0, "end_s": 907.5, "kind": "cutscene", "note": "14:50.0-15:07.5 arriving at Franklin's house: Franklin and Lamar walk off, cinematic camera, no HUD",
+     "evidence": {"start": "14:50.0 gameplay, the car parked outside the house (minimap); 14:50.5 cutscene, no HUD",
+                  "end": "15:07.0 cutscene, no HUD; 15:07.5 gameplay with minimap"}},
+    {"start_s": 907.5, "end_s": 918.684, "kind": "menu", "note": "15:07.5-end 'Mission passed: The Long Stretch' over gameplay: the unlock list from 15:08.0, the title 15:09.0-15:13.5, then the autosave notice to the end. The minimap stays visible",
+     "evidence": {"start": "15:07.5 gameplay with no overlay; 15:08.0 the unlock list appears on the left",
+                  "end": "the end of the video (15:18.7); the overlay is still up at 15:18.5"}}
+  ]
+}
