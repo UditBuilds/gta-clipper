@@ -436,11 +436,11 @@ def fill_prompt_needs_the_placeholder_once():
 
 @check
 def the_stars_prompt_file():
-    """--vlm-hint stars uses prompts/stars_v1.txt: one placeholder, every category, no CR; hint none still uses
+    """--vlm-hint stars uses prompts/stars_v2.txt (final): one placeholder, every category, no CR; hint none uses
     veto_v3, which has no placeholder"""
     text, sha = vlm.load_prompt(vlm.prompt_version("stars"))
     v3, _ = vlm.load_prompt(vlm.prompt_version("none"))
-    return (vlm.prompt_version("stars") == vlm.STARS_PROMPT_VERSION == "stars_v1"
+    return (vlm.prompt_version("stars") == vlm.STARS_PROMPT_VERSION == "stars_v2"
             and vlm.prompt_version("none") == vlm.PROMPT_VERSION == "veto_v3"
             and text.count(vlm.HINT_PLACEHOLDER) == 1 and vlm.HINT_PLACEHOLDER not in v3
             and all(c in text for c in vlm.CATEGORIES) and "\r" not in text and len(sha) == 64)
@@ -626,12 +626,12 @@ def veto_step_star_rule_and_v6_shape():
 
 @check
 def veto_step_hint_lines():
-    """veto_step with --vlm-hint stars: prompt stars_v1, each candidate's line from its measured stars and length,
+    """veto_step with --vlm-hint stars: prompt stars_v2, each candidate's line from its measured stars and length,
     recorded per candidate, and the vlm block marked with the hint"""
     steps = [200 <= i < 225 for i in range(800)]  # 12.5 s of stars inside candidate 2 (100-120 s)
     with tempfile.TemporaryDirectory() as tmp:
         clips, block, _ = run_veto_step(tmp, "stars", "none", ["other_action"] * 3, steps)
-    return (block["prompt_version"] == "stars_v1" and block["hint"] == "stars" and "star_rule" not in block
+    return (block["prompt_version"] == "stars_v2" and block["hint"] == "stars" and "star_rule" not in block
             and [c["vlm"]["hint_text"] for c in block["candidates"]] == [vlm.stars_line(0.0, 20.0),
                                                                         vlm.stars_line(12.5, 20.0),
                                                                         vlm.stars_line(0.0, 20.0)]

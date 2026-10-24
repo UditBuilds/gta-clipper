@@ -106,11 +106,11 @@ filler. `--vlm off` is v5 (identical timeline.csv).
 | Video | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Picks |
 |---|---|---|---|---|---|---|---|---|
 | test1 | off | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
-| test1 | 4b v1 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 4 5 6 7 |
-| test1 | 8b v1 | 5/5 | 5/5 | 0 | 4/5 | 1 | 23.8 s | 2 3 4 5 6 |
-| test1 | 4b v2 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 4 5 6 7 |
+| test1 | 4b v1 | 4/5 | 4/5 | 0 | 5/5\* | 0\* | 21.0 s | 2 4 5 6 7 |
+| test1 | 8b v1 | 5/5 | 5/5 | 0 | 5/5\* | 0\* | 23.8 s | 2 3 4 5 6 |
+| test1 | 4b v2 | 4/5 | 4/5 | 0 | 5/5\* | 0\* | 21.0 s | 2 4 5 6 7 |
 | test1 | 8b v2 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
-| test1 | 4b v3 | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 2 5 6 7 1f |
+| test1 | 4b v3 | 4/5 | 4/5 | 0 | 5/5\* | 0\* | 21.0 s | 2 5 6 7 1f |
 | test1 | 8b v3 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
 | test2 | off | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
 | test2 | 4b v1 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 4 5 3f |
@@ -119,6 +119,15 @@ filler. `--vlm off` is v5 (identical timeline.csv).
 | test2 | 8b v2 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
 | test2 | 4b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 2 4 5 1f 3f |
 | test2 | 8b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+
+\* Updated in PR 7. The owner rated test1 candidates 6 (10:20.3-10:35.3) and 7 (12:30.9-12:45.9) postable
+(`eval/ratings/test1_v6_4b.json`, 2026-10-24). Before that these rows read 3/5 with 2 unrated (4b v1-v3) and 4/5 with
+1 unrated (8b v1). No other row changes.
+
+The judge tables above were computed on the 10 candidates rated at the time, and the v1-v3 stopping decisions stand.
+With the 12 rated candidates of PR 7 (test1 1-7, test2 1-5) they read, as costly / kept but not postable / agreements:
+v1 4b 2 / 1 / 9, v1 8b 2 / 2 / 8, v2 4b 3 / 1 / 8, v2 8b 0 / 2 / 10, v3 4b 3 / 0 / 9, v3 8b 0 / 2 / 10. Both new
+candidates were kept by every model and version, so only agreements change.
 
 # Stars hint prompts (v7, `--vlm-hint stars`)
 
@@ -159,3 +168,44 @@ veto_v3 with these changes, nothing else:
   shootouts, fights and stunts have no stars.
 - The minimap and subtitle hints stay, as their own paragraph (the cutscene category relies on the minimap).
 - `reason`: "Mention police, wanted stars, weapons or damage only if you can clearly see them" loses "wanted stars".
+
+### stars_v1 results, 2026-10-24
+
+| Model | Run test1 | Run test2 | Vetoed but postable | Kept but not postable | Agreements |
+|---|---|---|---|---|---|
+| qwen3-vl:4b-instruct | 20261024-154516 | 20261024-154801 | **4 + 3** (test1 #1 3:10.2, #4 2:16.0, #6 10:20.3, #7 12:30.9; test2 #2 4:40.0, #4 5:06.5, #5 3:04.5) | 0 | 5 |
+| qwen3-vl:8b-instruct | 20261024-155013 | 20261024-155318 | 0 | 1 (test2 #1) | 11 (test2 #3 clumsy crash vetoed) |
+
+Result: fails the stopping rule (the 4b vetoes postable clips), so stars_v2 will be the last version.
+
+What went wrong (the 4b; every one of its mistakes is `boring_driving_or_walking`):
+- It used a positive line once (test1 #3, "wanted stars visible for 27.8 seconds, indicating police pursuit") but not
+  for #1 (30.0 s) or #4 (27.5 s): "no visible police or weapons".
+- With "0.0 of 15.0 s" it called every test2 candidate boring, 10 of 10, including the three postable ones v3 kept
+  (#2, #4, #5), and also test1 #6 and #7, which v3 kept. Its reasons list what is absent: "no visible police, weapons,
+  or damage", "no wanted stars are visible during the clip".
+- Two sheets looked at before writing v2 (4b v1 runs above): test2 #2 (4:40.0) shows the car swerving onto a verge,
+  a green slow-motion PEAK, and subtitles "Lose Madrazo's men" and "We gotta book, man. Go!"; test1 #1 (3:10.2) shows
+  ordinary driving with the star row a few pixels wide in every frame.
+- The 8b made no costly veto, vetoed one clumsy crash (test2 #3) for the first time, and wrote "police cars visible in
+  frame 7" for test2 #4, which has none.
+
+So v1's "Wanted stars mean the police are after the player" together with boring's "nobody chasing or being chased"
+lets a small model reason backwards: 0 s, so nobody is chasing, so boring. And the rule for a positive line sat in a
+paragraph far from where the category is chosen.
+
+## stars_v2 (`stars_v2.txt`), reason logged before running; final whatever its results
+
+Fixes v1's mistakes only (the 4b's boring vetoes). stars_v1 with these changes, nothing else; the line, the code and
+everything else are unchanged:
+- The sentence "Wanted stars mean the police are after the player, so a clip with measured stars is not boring
+  driving." is removed from the stars paragraph, so nothing there links stars to "chasing" in a way that can be read
+  backwards.
+- The 0 s sentence now says that 0 s means neither that the clip is boring nor that nobody is chasing (gang chases,
+  getaways, shootouts, fights and stunts have no wanted stars), and that with 0 s the model decides from the frames and
+  the subtitles exactly as it would without the line. Plain wording, no capitals.
+- The positive rule moves to where the category is chosen: `boring_driving_or_walking` ends "This category is wrong
+  whenever the measured line shows more than 0 s of wanted stars: the police are after the player, so choose
+  chase_or_shootout." `chase_or_shootout`'s "Fast driving with wanted stars counts as a chase" becomes "Driving or
+  running while the measured line shows wanted stars counts as a chase."
+- No draft of v2 was sent to a model before this entry.
