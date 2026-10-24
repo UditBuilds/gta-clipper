@@ -136,3 +136,18 @@ One run per video, `clip.py <video> --count 10` (`--vlm off`). Its 10 clips are 
 - Any idea that held-out results suggest is a new version. After the test, heldout1 and heldout2 are dev data, and a
   later claim needs new held-out footage.
 - With 10 candidates per video, the held-out test can show a gross failure or a clear win, not an accuracy.
+
+## Run (PR 8, 2026-10-24)
+
+Done once, in this order; each step's result was committed before the next started.
+
+| Step | Commit | Result |
+|---|---|---|
+| 1. Freeze | `6e0a9f3` | 4b v3 + star rule, code `d335101` (above) |
+| - | `0c735e9` | `make_rating_page.py`: the blind rating page, written and tested on dev runs before any held-out run |
+| 2. Keys | `489906e` | `heldout1.json` (3 action, 6 never-pick ranges), `heldout2.json` (1 action, 4 never-pick) |
+| 3. Blind ratings | `0b87f92` | 14 clips: heldout1 10 (7 postable), heldout2 4 (2 postable) |
+| 4. Runs | - | 14 runs, all checks passed, no crash, no repeat (eval/BASELINE.md, v8) |
+
+The result, the tables and the deviations from this plan (the folder listing, the rename, heldout2's 4 candidates, the
+keys' provenance) are in eval/BASELINE.md, section v8. **From now on heldout1 and heldout2 are dev data.**
