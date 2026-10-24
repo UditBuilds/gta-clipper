@@ -209,3 +209,41 @@ everything else are unchanged:
   chase_or_shootout." `chase_or_shootout`'s "Fast driving with wanted stars counts as a chase" becomes "Driving or
   running while the measured line shows wanted stars counts as a chase."
 - No draft of v2 was sent to a model before this entry.
+
+### stars_v2 results, 2026-10-24 (final)
+
+| Model | Run test1 | Run test2 | Vetoed but postable | Kept but not postable | Agreements |
+|---|---|---|---|---|---|
+| qwen3-vl:4b-instruct | 20261024-155844 | 20261024-160122 | **4** (test1 #1 3:10.2, #2 0:57.5, #3 3:50.2, #4 2:16.0) | 2 (test2 #1, #3) | 6 |
+| qwen3-vl:8b-instruct | 20261024-160334 | 20261024-160635 | **1** (test1 #3 3:50.2) | 2 (test2 #1, #3) | 9 |
+
+Result: the stopping rule is not met (both models veto postable clips), but stars_v2 is the last version allowed, so
+it is final as it is. No stars_v3 was written.
+
+- The 4b's 0 s problem is gone: in test2 it keeps all five rated candidates and vetoes only 6-10, and it keeps
+  test1 #6 and #7 again. But it now keeps both clumsy crashes too ("other_action"), which v3 vetoed.
+- A positive line still doesn't reach the 4b: it calls all four test1 candidates with stars (27.5-30.0 s) boring,
+  "no visible police, weapons, or damage", although the boring definition now says it is wrong with stars.
+- The 8b vetoes test1 #3 (27.8 of 28.8 s of stars) as boring, "no visible police or chase in any frame". It kept
+  that candidate with v3 and stars_v1.
+- The 8b now keeps test2 #10 (10:53.0, which shares 9 s with a never-pick phone-call range); every earlier version
+  of both prompt series vetoed it. It is candidate 10, so it wasn't picked.
+
+## Pipeline results of the stars prompts (eval.py)
+
+Same columns as the table above; f = vetoed, used as filler. The test1 #6/#7 ratings of PR 7 apply.
+
+| Video | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Picks |
+|---|---|---|---|---|---|---|---|---|
+| test1 | 4b stars_v1 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 2 3 5 1f 4f |
+| test1 | 8b stars_v1 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 1 2 3 4 5 |
+| test1 | 4b stars_v2 | 4/5 | 4/5 | 0 | 5/5 | 0 | 21.0 s | 5 6 7 1f 2f |
+| test1 | 8b stars_v2 | 5/5 | 5/5 | 0 | 5/5 | 0 | 24.0 s | 1 2 4 5 6 |
+| test2 | 4b stars_v1 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1f 2f 3f 4f 5f |
+| test2 | 8b stars_v1 | 3/5 | 2/3 | 0 | 3/5 | 1 | 15.3 s | 1 2 4 5 6 |
+| test2 | 4b stars_v2 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+| test2 | 8b stars_v2 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+
+Postable@5 hides most of these mistakes: when too few candidates survive, the vetoed ones come back as fillers (4b
+stars_v1 on test2 vetoed all 10 and still scores 3/5). The judge table (Table B in eval/BASELINE.md) shows them.
+The only unrated pick is 8b stars_v1's test2 #6 (15:57.1-16:12.1), from a failed version.

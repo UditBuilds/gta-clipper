@@ -1,4 +1,4 @@
-# gta-clipper (v6)
+# gta-clipper (v7)
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (15-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
@@ -6,6 +6,8 @@ Finds the most action-heavy moments in a gameplay recording and cuts them into v
 The analysis needs no AI model. It uses Python's standard library plus ffmpeg. An NVIDIA GPU is used
 for decoding when it can be (see [GPU decoding](#gpu-decoding)), but isn't required. v6 adds an optional veto by a
 local vision model through Ollama (`--vlm`, off by default): see [Stage 2](#stage-2-vision-model-veto-v6-optional).
+v7 can give that veto the wanted stars the tool measures (`--vlm-hint stars`, `--vlm-rule stars`, both off by
+default): see [v7](#v7-measured-wanted-stars-optional).
 
 ## How it picks moments
 
@@ -97,6 +99,8 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
 | `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
+| `--vlm-hint` | `none` | `stars`: the prompt tells the model each candidate's measured seconds of wanted stars ([v7](#v7-measured-wanted-stars-optional)) |
+| `--vlm-rule` | `none` | `stars`: a `boring_driving_or_walking` veto is cancelled when the clip has at least 5.0 s of measured stars ([v7](#v7-measured-wanted-stars-optional)) |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
 
@@ -223,11 +227,44 @@ they aren't offered.
 - `clips` holds only the final clips, each with its `candidate_rank` and the model's verdict, so eval.py works
   unchanged. `settings.vlm` names the model ("off" by default).
 - With `--vlm off`, timeline.csv and scores.json are v5's apart from `tool` ("gta-clipper v6") and `settings.vlm`:
-  checked on test1 and test2 (see BASELINE).
+  checked on test1 and test2 (see BASELINE). v7 adds `settings.vlm_hint` and `settings.vlm_rule` and says
+  "gta-clipper v7"; nothing else changes (checked again on both videos, see BASELINE v7).
 
 **The model as a judge.** `vlmeval.py <run_dir> [...]` compares every candidate's veto with the owner's rating, where
 one applies: vetoed but postable (the costly mistake), kept but not postable, and agreements. Runs are added up per
-model.
+config (model, prompt, star rule). A veto cancelled by v7's star rule counts as kept.
+
+### v7: measured wanted stars (optional)
+
+Every costly veto in v6 was a police chase the model called `boring_driving_or_walking`. On the contact sheet a chase
+looks like ordinary driving, and the wanted stars are a row of about 25x6 px. clip.py already measures the stars on the
+full-size video (step 3 above), so v7 can hand that measurement to the veto in two ways. Both are off by default, and
+both need `--vlm` and the HUD rules.
+
+- **Measured stars.** For each candidate: the seconds of the clip covered by 0.5 s steps with wanted stars. A step at
+  the clip's edge counts only for its part inside the clip, so the value is never longer than the clip. (`stars_s` in
+  scores.json counts every step the clip touches in full, so a 30.0 s clip that starts mid-step can show 30.5 s;
+  `stars_s` is unchanged.)
+- **`--vlm-hint stars`.** The prompt is `prompts/stars_v2.txt`, the final of the two versions allowed (stars_v1 failed
+  the stopping rule; both, and every result, are in [prompts/LOG.md](prompts/LOG.md)). It is veto_v3 with the star
+  sentences replaced. Its `{MEASURED_STARS}` line becomes, per candidate, e.g. "Measured by the tool: wanted stars
+  visible for 27.5 of 30.0 s." The prompt says the line is reliable and the model's own reading of the stars is not;
+  that 0 s of stars means neither boring nor that nobody is chasing (gang chases, getaways, shootouts, fights and
+  stunts have none), so with 0 s the model decides as it would without the line; and, in the category list, that
+  `boring_driving_or_walking` is wrong when the line shows more than 0 s. The hint and the line are part of the cache
+  key. The categories, the veto and fill rules, the sheet and the options are v6's.
+- **`--vlm-rule stars`.** A code rule after the model has answered: a `boring_driving_or_walking` veto is cancelled
+  when the clip has at least 5.0 s of measured stars (`vlm.STAR_RULE_MIN_S`, fixed by the owner before any result).
+  `clumsy_crash_or_stuck` and `menu_or_cutscene` vetoes are never cancelled. The model's answer, and so the cache, is
+  the same as without the rule, so a run after a plain `--vlm` run makes no model call.
+- **HUD off.** With `--no-hud` either option stops the run at once. If the minimap isn't found (the HUD rules switch
+  themselves off), the run stops after the analysis, before any model call or clip.
+- **Output.** `settings.vlm_hint` and `settings.vlm_rule`. With either option on, each candidate's `vlm` entry has
+  `stars_in_clip_s`; with the hint also `hint_text` (the line sent), and the vlm block has `hint`; with the rule also
+  `star_rule_kept`, and the vlm block has `star_rule` (category, 5.0 s, vetoes cancelled). A candidate the rule kept
+  has the status "kept by the star rule". Without the options these keys are absent and the vlm block is v6's.
+- **Review page.** Each candidate card shows the line in the prompt, or the measured stars, and whether the rule
+  cancelled its veto.
 
 ## Self-test
 
@@ -269,7 +306,7 @@ footage or run folder is needed:
 .\.venv\Scripts\python.exe evaltest.py
 ```
 
-The v6 veto is checked on made-up model answers, with no Ollama, footage or ffmpeg:
+The v6 veto and v7's measured stars are checked on made-up model answers, with no Ollama, footage or ffmpeg:
 
 ```powershell
 .\.venv\Scripts\python.exe vlmtest.py
@@ -284,7 +321,11 @@ The v6 veto is checked on made-up model answers, with no Ollama, footage or ffmp
 - a missing model or Ollama stops the run;
 - CRLF prompts;
 - vlmeval's outcomes;
-- the first 5 of 10 candidates being the 5 picks.
+- the first 5 of 10 candidates being the 5 picks;
+- v7: the stars line's text, the stars cut at the clip's edges (never longer than the clip), the placeholder filled
+  exactly once, the cache key without a hint being v6's and with one including the line, each candidate getting its
+  own line, the star rule (5.0 s, boring only), the HUD errors (also through clip.py's command line), and veto_step
+  with the rule, the hint, and neither (v6's shape).
 
 ## Synthetic test results (2026-10-20)
 
@@ -330,8 +371,9 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 Everything else is neutral. Times are seconds in the source.
 
 **test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
-postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them. A held-out video exists and hasn't
-been used.
+postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them. The held-out videos (heldout1,
+heldout2) haven't been used; the one-time test on them is planned, before any of their output exists, in
+[eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md).
 
 ```powershell
 .\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>      # key defaults to eval\answer_keys\test1.json
@@ -394,23 +436,52 @@ test1 v3's 2:26.0-2:46.0 keeps its own rating, "not postable, boring, bad cut", 
 2:16.0-2:46.0 (same peak) postable: a clip's own rating beats a newer rating of another cut. Details and the earlier
 numbers are in [eval/BASELINE.md](eval/BASELINE.md).
 
-v6 with the frozen prompt v3, on the dev set (2026-10-24). Postable@5 counts unrated picks as not postable, so the 4b's
-test1 row is provisional until the owner rates its two new picks:
+v6 with the frozen prompt v3, on the dev set (2026-10-24). Postable@5 counts unrated picks as not postable. The 4b's
+test1 row includes the owner's ratings of its two new picks (both postable, added in PR 7; before that it read 3/5 with
+2 unrated):
 
 | Video | `--vlm` | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time |
 |---|---|---|---|---|---|---|---|---|
 | test1 | off (= v5) | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | - |
-| test1 | 4b-instruct | 4/5 | 4/5 | 0 | 3/5 | 2 | 21.0 s | 45.0 s |
+| test1 | 4b-instruct | 4/5 | 4/5 | 0 | 5/5 | 0 | 21.0 s | 45.0 s |
 | test1 | 8b-instruct | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 64.0 s |
 | test2 | off (= v5) | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | - |
 | test2 | 4b-instruct | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 46.6 s |
 | test2 | 8b-instruct | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s |
 
-- On the 10 candidates with an owner rating, the 4b vetoed 3 postable clips (all in test1) and both clumsy crashes. The
-  8b vetoed no rated candidate, so its picks equal v5's in both videos.
+- On the 12 candidates with an owner rating (10 in v6, plus test1's two new picks), the 4b vetoed 3 postable clips
+  (all in test1) and both clumsy crashes. The 8b vetoed no rated candidate, so its picks equal v5's in both videos.
 - In test2 the 4b's picks are v5's five clips, with the two clumsy crashes moved to the end as fillers.
 - Model time is the model step plus unloading, first run (nothing cached); building the sheets adds about 10.5 s.
 - Details, the judge table per prompt version and GPU memory are in [eval/BASELINE.md](eval/BASELINE.md).
+
+v7 on the dev set (2026-10-24). "+ stars" is `--vlm-hint stars` with the final prompt stars_v2 (stars_v1 failed the
+stopping rule, see [prompts/LOG.md](prompts/LOG.md)). "+ star rule" is `--vlm-rule stars` on the cached v3 answers.
+Every pick of these runs has an owner rating.
+
+| Config | Hits (strict) test1 / test2 | Recall | Bad picks | Postable@5 | Vetoed but postable | Kept but not postable | Model time (per video) |
+|---|---|---|---|---|---|---|---|
+| off (= v5) | 5/5, 3/5 | 5/5, 2/3 | 0 | 5/5, 3/5 | - | - | - |
+| 4b v3 | 4/5, 3/5 | 4/5, 2/3 | 0 | 5/5, 3/5 | 3 | 0 | 45-47 s |
+| 8b v3 | 5/5, 3/5 | 5/5, 2/3 | 0 | 5/5, 3/5 | 0 | 2 | 64-66 s |
+| **4b v3 + star rule** | 5/5, 3/5 | 5/5, 2/3 | 0 | 5/5, 3/5 | **0** | **0** | 45-47 s |
+| 8b v3 + star rule | 5/5, 3/5 | 5/5, 2/3 | 0 | 5/5, 3/5 | 0 | 2 | 64-66 s |
+| 4b + stars | 4/5, 3/5 | 4/5, 2/3 | 0 | 5/5, 3/5 | 4 | 2 | 45-46 s |
+| 8b + stars | 5/5, 3/5 | 5/5, 2/3 | 0 | 5/5, 3/5 | 1 | 2 | 62-66 s |
+
+- The last two columns are the model as a judge on the 12 rated candidates (test1 1-7, test2 1-5).
+- **The stars line in the prompt didn't work.** With either prompt version the 4b still called clips with 27.5-30 s
+  of measured stars boring ("no visible police"). With stars_v2 the 8b did too, once (test1 3:50.2).
+- **The 0 s line.** With stars_v1, "0.0 s" made the 4b veto all ten test2 candidates, three of them postable.
+  stars_v2 fixed that, but the 4b then kept both clumsy crashes.
+- **The star rule** fixes the 4b's three costly vetoes and keeps its correct ones, with no extra model call. On these
+  12 candidates it is the only config with no mistake.
+- **Postable@5 is the same for every config,** because vetoed candidates come back as fillers.
+- With `--vlm off` and with the v6 options, v7 gives v6's results (same timelines and picks; v6's cached answers
+  used, 0 model calls).
+- Tables A, B and C, and the selection rule of the planned held-out test, are in
+  [eval/BASELINE.md](eval/BASELINE.md). The test itself is planned in
+  [eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md) and not run.
 
 ## Known limits
 
@@ -508,9 +579,24 @@ test1 row is provisional until the owner rates its two new picks:
 - **Wanted stars are tiny on the sheet (v6).** The star row is about 25x6 px in a 384x216 frame.
   - Both models have also written "wanted stars" for test2 clips, which have none.
   - With prompt v3 such a mistake can only keep a clip: stars mean "not boring".
+- **Telling the model the measured stars doesn't make it use them (v7).** With both stars prompts the 4b called
+  clips with 27.5-30 s of measured stars boring, and with stars_v2 the 8b did once. Only the code rule
+  (`--vlm-rule stars`) reliably keeps them.
+- **The star rule only knows police chases (v7).** It cancels a boring veto only when the clip has 5.0 s or more of
+  stars. A gang chase, a getaway or a fight has no stars, so a costly veto of one is not caught. None of the 12 rated
+  candidates was such a case with the 4b and v3, but the 4b made such vetoes with stars_v1 (test2 4:40.0, 5:06.5).
+- **The star rule trusts the star detector (v7).** The measure is the detector's per-step result (2 of 3 samples),
+  which was checked on hudtest's frames and lines up with the answer keys' "wanted stars" ranges in test1, and measures 0 s
+  in test2. It was not checked frame by frame over whole videos, and 5.0 s of false stars would cancel a veto.
+- **The measured stars and `stars_s` differ (v7).** `stars_s` in scores.json counts whole 0.5 s steps (30.5 s in a
+  30.0 s clip); the hint and the rule use the stars cut at the clip's edges. `stars_s` was left as it is so that
+  `--vlm off` output doesn't change.
+- **12 rated candidates (v7).** All configs and both stars prompts were judged on the same 12 candidates (test1 1-7,
+  test2 1-5). That can show a gross failure, not an accuracy, and the star rule's 0 mistakes there is not a
+  measured accuracy.
 - **Evenly spaced frames can still miss a short event (v6).** Frames are 1.9 s apart in a 15 s clip and 3.75 s apart
   in a 30 s clip. The peak frame guarantees one frame on the picker's best moment, not on every event.
-- **The model-as-judge numbers rest on 10 rated candidates (v6).**
+- **The model-as-judge numbers rest on 10 rated candidates (v6; 12 since PR 7).**
   - test1's five are all postable, so there the only possible mistake is a costly veto.
   - test2 has 3 postable and 2 not postable (the clumsy crashes).
   - That can show a gross failure, not an accuracy. The three prompt versions were all judged on those 10.
