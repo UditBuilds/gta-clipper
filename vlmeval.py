@@ -9,10 +9,11 @@ is found with eval.py's own rule (a rating belongs to the rated clip's peak; see
 - unrated: listed, not counted
 
 A model error counts as kept (errors never veto). A filler counts as vetoed: the model vetoed it, even though
-it was used to make up the count.
+it was used to make up the count. A veto cancelled by v7's star rule (--vlm-rule stars) counts as kept.
 
 Usage:  python vlmeval.py <run_dir> [<run_dir> ...]
-  Several runs are added up per model at the end. The last line of each run starts with JUDGE (for scripts).
+  Several runs are added up per config (model, prompt, star rule) at the end. The last line of each run starts
+  with JUDGE (for scripts).
 """
 
 import argparse
@@ -44,6 +45,11 @@ def judge_rows(scores, rated):
     return rows
 
 
+def config(v):
+    """A run's config label from its vlm block: model, prompt version, and the star rule if it was on."""
+    return f"{v['model']}, prompt {v['prompt_version']}" + (", star rule" if v.get("star_rule") else "")
+
+
 def tally(rows):
     return {k: sum(1 for _, _, o in rows if o == k) for k in OUTCOMES}
 
@@ -60,27 +66,29 @@ def main():
         video = Path(scores["input"]).stem
         v = scores["vlm"]
         rows = judge_rows(scores, ev.load_ratings(video))
-        print(f"Run: {run_dir}  ({video}, {v['model']}, prompt {v['prompt_version']}, sheet v{v['sheet_version']})")
+        print(f"Run: {run_dir}  ({video}, {config(v)}, sheet v{v['sheet_version']})")
         print(f"  {'#':>3}  {'candidate':<17} {'category':<26} {'veto':<14} {'owner':<8} outcome")
         for c, g, o in rows:
             m = c["vlm"]
-            veto = "error, kept" if m["error"] else ("VETO, filler" if m["filler"] else "VETO" if m["vetoed"] else "-")
+            veto = ("error, kept" if m["error"] else "VETO, filler" if m["filler"] else "VETO" if m["vetoed"]
+                    else "rule, kept" if m.get("star_rule_kept") else "-")
             owner = "-" if g is None else ("yes" if g["postable"] else "no")
             print(f"  [{c['candidate_rank']}]  {ev.hms(c['start_s']) + '-' + ev.hms(c['end_s']):<17} "
                   f"{m['category'] or '-':<26} {veto:<14} {owner:<8} {o}")
         t = tally(rows)
         for k in OUTCOMES:
-            totals.setdefault(v["model"], dict.fromkeys(OUTCOMES, 0))[k] += t[k]
+            totals.setdefault(config(v), dict.fromkeys(OUTCOMES, 0))[k] += t[k]
         print(f"  vetoed but postable (costly): {t['vetoed_postable']}; kept but not postable: {t['kept_not_postable']}; "
               f"agreements: {t['agree_vetoed'] + t['agree_kept']} ({t['agree_vetoed']} vetoed, {t['agree_kept']} kept); "
               f"unrated: {t['unrated']}")
         print(f"JUDGE video={video} run={run_dir.name} model={v['model']} prompt={v['prompt_version']} "
+              f"star_rule={'on' if v.get('star_rule') else 'off'} "
               + " ".join(f"{k}={t[k]}" for k in OUTCOMES) + "\n")
     if len(args.run_dirs) > 1:
-        print("Totals per model:")
-        for model, t in totals.items():
+        print("Totals per config:")
+        for cfg, t in totals.items():
             rated = sum(t[k] for k in OUTCOMES if k != "unrated")
-            print(f"  {model}: {rated} rated candidates; vetoed but postable {t['vetoed_postable']}, kept but not "
+            print(f"  {cfg}: {rated} rated candidates; vetoed but postable {t['vetoed_postable']}, kept but not "
                   f"postable {t['kept_not_postable']}, agreements {t['agree_vetoed'] + t['agree_kept']} "
                   f"({t['agree_vetoed']} vetoed, {t['agree_kept']} kept); unrated {t['unrated']}")
 

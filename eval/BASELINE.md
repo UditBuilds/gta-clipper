@@ -1,5 +1,5 @@
 test1 and test2 are the **dev set (rules were tuned on these)**: every eval result in this file (precision, recall,
-bad picks, postable) is on them. A held-out video exists and hasn't been used.
+bad picks, postable) is on them. The held-out videos haven't been used (plan: eval/HELDOUT_PLAN.md).
 
 Each section below was scored with the eval.py of its day. PR 5 (last section) changed how ranges and ratings are
 counted; its table rescores the latest v3 and v4 runs under the new rules. The older tables are left as they were.
@@ -537,3 +537,164 @@ What the costly mistakes have in common:
 
 `selftest.py` PASS (the same three 15.000 s clips). `hudtest.py` PASS. `evaltest.py` PASS (20 checks). `vlmtest.py`
 PASS (25 checks).
+
+# v7: measured wanted stars for the veto (2026-10-24)
+
+Same machine and setup as v6: GPU decoding, default flags plus the options named, Ollama 0.40.8, the same model
+digests (84f7ed8042fa and 70e58e37beb1). Every run one at a time with `C:\AI\scripts\gpu_log.ps1`. Before each group
+of runs: 11.9-12.8 GB RAM free, 412-497 MiB of VRAM in use, no model loaded in Ollama. Keys at revision 2.
+
+## New owner ratings
+
+`eval/ratings/test1_v6_4b.json` (2026-10-24): test1 10:20.3-10:35.3 and 12:30.9-12:45.9, the two new picks of the
+4b v6 run, are both postable ("good").
+- The 4b v3 test1 row goes from Postable@5 3/5 (2 unrated) to **5/5 (0 unrated)**.
+- The same happens to 4b v1 and v2, and 8b v1 goes from 4/5 (1 unrated) to 5/5 (prompts/LOG.md).
+- Table B now has 12 rated candidates: test1 1-7 (all postable) and test2 1-5 (1 and 3 not postable).
+- evaltest's count of test1 ratings is now 11.
+
+## Unchanged: `--vlm off` and the v6 image-only runs
+
+| Video | Config | v6 run | v7 run | timeline.csv | Picks and verdicts | Model calls | scores.json |
+|---|---|---|---|---|---|---|---|
+| test1 | off | 20261024-140327 | 20261024-152639 | byte-identical | same picks | - | differs only in `tool`, `settings.vlm_hint`, `settings.vlm_rule`, created, timing |
+| test2 | off | 20261024-140514 | 20261024-152828 | byte-identical | same picks | - | the same |
+| test1 | 4b v3 | 20261024-143602 | 20261024-153036 | byte-identical | same | 0 (10 cached) | the same, plus `cached` flags and call counts |
+| test2 | 4b v3 | 20261024-143345 | 20261024-153232 | byte-identical | same | 0 (10 cached) | the same |
+| test1 | 8b v3 | 20261024-144132 | 20261024-153402 | byte-identical | same | 0 (10 cached) | the same |
+| test2 | 8b v3 | 20261024-143856 | 20261024-153606 | byte-identical | same | 0 (10 cached) | the same |
+
+So without the new options the cache key is v6's: all 40 answers came from PR 6's cache, and nothing else moved.
+
+## The measured stars
+
+Seconds of each candidate covered by steps with wanted stars, cut at the clip's edges (`stars_in_clip_s`). Only
+test1's candidates 1-4 have any; every other candidate, and all of test2, has 0.0 s.
+
+| test1 candidate | Clip | Measured stars | `stars_s` (whole steps) |
+|---|---|---|---|
+| 1 | 3:10.2-3:40.2 | 30.0 of 30.0 s | 30.5 |
+| 2 | 0:57.5-1:27.5 | 29.0 of 30.0 s | 29.0 |
+| 3 | 3:50.2-4:19.0 | 27.75 of 28.75 s | 28.0 |
+| 4 | 2:16.0-2:46.0 | 27.5 of 30.0 s | 27.5 |
+
+## Table A: the pipeline
+
+- "4b + stars" and "8b + stars" use prompt stars_v2, the final version. stars_v1 failed the stopping rule; its rows
+  are in prompts/LOG.md.
+- Picks are candidate numbers in final order: f = vetoed, used as filler; r = kept by the star rule.
+- Model time is `vlm_model` + `vlm_unload` of the first, uncached run of those answers. For v3 and the star rule
+  that is PR 6's run, since the rule reuses its answers.
+
+| Video | Config | Run | Hits (strict) | Recall | Bad picks | Postable@5 | Unrated | Average length | Model time | Picks |
+|---|---|---|---|---|---|---|---|---|---|---|
+| test1 | off | 20261024-152639 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | - | 1 2 3 4 5 |
+| test1 | 4b v3 | 20261024-153036 | 4/5 | 4/5 | 0 | 5/5 | 0 | 21.0 s | 45.0 s | 2 5 6 7 1f |
+| test1 | 8b v3 | 20261024-153402 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 64.0 s | 1 2 3 4 5 |
+| test1 | 4b v3 + star rule | 20261024-153808 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 45.0 s | 1r 2 3r 4r 5 |
+| test1 | 8b v3 + star rule | 20261024-154136 | 5/5 | 5/5 | 0 | 5/5 | 0 | 26.8 s | 64.0 s | 1 2 3 4 5 |
+| test1 | 4b + stars | 20261024-155844 | 4/5 | 4/5 | 0 | 5/5 | 0 | 21.0 s | 46.1 s | 5 6 7 1f 2f |
+| test1 | 8b + stars | 20261024-160334 | 5/5 | 5/5 | 0 | 5/5 | 0 | 24.0 s | 66.0 s | 1 2 4 5 6 |
+| test2 | off | 20261024-152828 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | - | 1 2 3 4 5 |
+| test2 | 4b v3 | 20261024-153232 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 46.6 s | 2 4 5 1f 3f |
+| test2 | 8b v3 | 20261024-153606 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s | 1 2 3 4 5 |
+| test2 | 4b v3 + star rule | 20261024-154010 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 46.6 s | 2 4 5 1f 3f |
+| test2 | 8b v3 + star rule | 20261024-154335 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 66.4 s | 1 2 3 4 5 |
+| test2 | 4b + stars | 20261024-160122 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 45.0 s | 1 2 3 4 5 |
+| test2 | 8b + stars | 20261024-160635 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 61.8 s | 1 2 3 4 5 |
+
+- No pick of these 14 runs is unrated, so no new rating is needed.
+- Postable@5 is the same for every config (5/5 on test1, 3/5 on test2). When too few candidates survive, vetoed ones
+  come back as fillers, and the candidates that move up are rated postable. So Postable@5 can't tell these configs
+  apart; Table B can.
+- **4b v3 + star rule:** the rule cancelled the 4b's boring vetoes of test1 1, 3 and 4 (30.0, 27.75 and 27.5 s of
+  stars), so its test1 picks are v5's. test2 has no stars, so there it equals 4b v3 (the clumsy crashes are fillers).
+- **8b v3 + star rule** equals 8b v3: the 8b vetoed no candidate with stars.
+- **4b + stars, test1:** it vetoed 1-4, all with stars. Recall drops (the shootout range loses its clip), and two
+  police clips come back only as fillers.
+
+## Table B: the model as a judge
+
+12 rated candidates (test1 1-7, test2 1-5), both videos, counted with `vlmeval.py`:
+
+| Config | Vetoed but postable (costly) | Kept but not postable | Agreements (vetoed / kept) |
+|---|---|---|---|
+| 4b v3 | 3 (test1 3:10.2, 3:50.2, 2:16.0) | 0 | 9 (2 / 7) |
+| 8b v3 | 0 | 2 (test2 0:00.1, 0:42.3) | 10 (0 / 10) |
+| **4b v3 + star rule** | **0** | **0** | **12 (2 / 10)** |
+| 8b v3 + star rule | 0 | 2 (test2 0:00.1, 0:42.3) | 10 (0 / 10) |
+| 4b + stars (v2) | 4 (test1 3:10.2, 0:57.5, 3:50.2, 2:16.0) | 2 (test2 0:00.1, 0:42.3) | 6 (0 / 6) |
+| 8b + stars (v2) | 1 (test1 3:50.2) | 2 (test2 0:00.1, 0:42.3) | 9 (0 / 9) |
+| 4b + stars_v1 (failed) | 7 (test1 3:10.2, 2:16.0, 10:20.3, 12:30.9; test2 4:40.0, 5:06.5, 3:04.5) | 0 | 5 (2 / 3) |
+| 8b + stars_v1 (failed) | 0 | 1 (test2 0:00.1) | 11 (1 / 10) |
+
+- **The text hint didn't get through to the 4b.**
+  - With either version it called candidates with 27.5-30.0 s of measured stars boring, with reasons like "no
+    visible police, weapons, or damage".
+  - stars_v1 also made it veto all ten test2 candidates.
+  - stars_v2 stopped that, but the 4b then kept both clumsy crashes, which it vetoed with v3.
+- **The 8b** made no costly veto with v3 or stars_v1, but one with stars_v2: test1 3:50.2, with 27.75 s of stars
+  ("no visible police or chase in any frame").
+- **The star rule** needs no model call and keeps every rated candidate with stars. On the 4b's v3 answers it leaves
+  the 4b's correct vetoes (the two clumsy crashes) in place. That makes it the only config with no mistake on the 12
+  rated candidates. Twelve candidates can show a gross failure, not an accuracy.
+
+## Table C: does the 0 s line make the models veto more test2 candidates?
+
+All ten test2 candidates have 0.0 s of stars. Vetoes of the ten:
+
+| Config | Vetoed | Rated postable among them | Candidates (all `boring_driving_or_walking` unless named) |
+|---|---|---|---|
+| 4b v3 | 7 | 0 | 1, 3 (clumsy), 6-10 |
+| 4b + stars_v1 (failed) | **10** | **3** (#2, #4, #5) | 1-10 |
+| 4b + stars (v2) | 5 | 0 | 6-10 |
+| 8b v3 | 4 | 0 | 7-10 |
+| 8b + stars_v1 (failed) | 5 | 0 | 3, 7-10 |
+| 8b + stars (v2) | 3 | 0 | 7-9 |
+| star-rule configs | as v3 | 0 | test2 has no stars, so the rule never applies |
+
+- **stars_v1:** yes for the 4b, from 7 to 10, three of them postable. The 8b's one extra veto was a correct one
+  (clumsy crash #3).
+- **stars_v2:** no, fewer.
+  - The 4b vetoes 5 instead of 7: it lost its two correct vetoes (the clumsy crashes #1 and #3).
+  - The 8b vetoes 3 instead of 4: it now keeps #10, which shares 9 s with a never-pick phone-call range. #10 was not
+    picked, since it is candidate 10.
+
+## The held-out selection rule on these results
+
+Step 1 of eval/HELDOUT_PLAN.md, applied now because none of the seven configs' picks is unrated:
+1. 0 costly vetoes: off, 8b v3, 4b v3 + star rule, 8b v3 + star rule.
+2. Postable@5 summed over test1 and test2: 8 for all four.
+3. Fewest kept but not postable: 4b v3 + star rule has 0; the others have 2 (off keeps both clumsy crashes).
+
+So the rule gives **4b v3 + star rule**. It is written into HELDOUT_PLAN.md as the final config, with the commit hash,
+only after this PR is merged and before the owner says go.
+
+This is an in-sample result. The star rule was proposed after the 4b's three dev mistakes were known, and it targets
+exactly them; the owner fixed the 5.0 s before it ran, but its 0 / 0 / 12 on the dev candidates is not evidence that it
+works on new footage. The 5.0 s itself was never tested either: every dev candidate has 0 s or at least 27.5 s of
+stars. That is what the held-out test is for.
+
+## GPU memory and timing
+
+| Runs | Peak GPU memory (nvidia-smi) | Peak temperature | Shared GPU memory, NVIDIA adapter | Run time | Model time |
+|---|---|---|---|---|---|
+| off (2) | 775 MiB | 53-54 C | up to 317-324 MB | 88-91 s | - |
+| cached v3 and star rule (8) | 733-777 MiB | 52-54 C | up to 299-323 MB | 96-105 s | 0 (no call, no load) |
+| 4b + stars (4, v1 and v2) | 4,877-4,956 MiB | 63-64 C | up to 470-490 MB | 136-146 s | 45.0-46.2 s |
+| 8b + stars (4, v1 and v2) | 6,943-7,008 MiB | 68-69 C | up to 860-898 MB | 162-165 s | 61.8-66.0 s |
+
+- Ollama reports the 4b fully on the GPU (3.33 GiB) and 5.07 of the 8b's 5.90 GiB, as in v6.
+- Prompt tokens per call: 1,632 with veto_v3, 1,714-1,715 with stars_v1, 1,759-1,760 with stars_v2. Answers are
+  43-75 tokens.
+- The unload took 4.1-4.2 s each time. No run went above 85 C.
+- The NVIDIA adapter's Windows luid is now `0x00017d8d`; it was `0x000175f9` on 2026-10-06 (luids change at reboot).
+  So the shared-memory column was read from the adapter with the most dedicated memory in use.
+
+## Tests
+
+- `selftest.py` PASS (the same three 15.000 s clips). `hudtest.py` PASS.
+- `evaltest.py` PASS (21 checks). `vlmtest.py` PASS (39 checks: 25 from v6, 14 new).
+- `--vlm-hint stars` and `--vlm-rule stars` on the synthetic video (no GTA V minimap): each stopped with "... needs
+  the measured wanted stars, but the HUD rules are off (no GTA V minimap found)", exit code 1. No run folder was
+  written and no model was loaded.
