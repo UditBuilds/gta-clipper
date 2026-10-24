@@ -1,0 +1,13 @@
+{
+  "video": "test1.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-24",
+  "run": "test1/20261024-143602",
+  "tool": "gta-clipper v6 (--vlm qwen3-vl:4b-instruct, prompt veto_v3)",
+  "method": "The owner rated the two picks of this run that had no rating: clip 3 (candidate 6) and clip 4 (candidate 7). Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The owner's words were 'postable - good' for both. peak_s is the clip's peak_time_s in that run's scores.json.",
+  "clips": [
+    {"start_s": 620.3, "end_s": 635.3, "span": "10:20.3-10:35.3", "peak_s": 625.5, "postable": true, "reason": "good"},
+    {"start_s": 750.9, "end_s": 765.9, "span": "12:30.9-12:45.9", "peak_s": 757.0, "postable": true, "reason": "good"}
+  ]
+}
