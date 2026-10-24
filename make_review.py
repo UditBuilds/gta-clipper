@@ -15,7 +15,9 @@ Thumbnails are cached in <out>_thumbs; delete that folder to rebuild them.
 For a --vlm run (v6) the page also shows every candidate the model judged, vetoed ones included: the contact sheet
 it saw, its category and reason, whether it was kept, vetoed or used as filler, and the owner's rating if one
 applies (eval.py's rule). Vetoed candidates have no clip file; their button plays the source from the start.
-Picks with no rating are listed at the top so the owner can rate them.
+Picks with no rating are listed at the top so the owner can rate them. For a v7 run with --vlm-hint stars each card
+also shows the line the model was given; with --vlm-rule stars, the measured stars and whether the rule cancelled
+the veto.
 
 Usage:  python make_review.py <video> <run_dir> <out.html> [--every 10] [--width 384]
   e.g.  python make_review.py C:\\AI\\gta\\input\\test1.webm C:\\AI\\gta\\output\\test1\\<run> C:\\AI\\gta\\review\\test1_review.html
@@ -94,6 +96,12 @@ def vlm_section(scores, run_dir, out_dir, video_stem):
         b64 = base64.b64encode((run_dir / c["sheet"]).read_bytes()).decode("ascii")
         what = (f"<b>{html.escape(m['category'])}</b>{' &middot; player stalled' if m['player_stalled'] else ''}"
                 f"<br>{html.escape(m['reason'])}" if m["category"] else f"<b>model error</b><br>{html.escape(m['error'])}")
+        if "hint_text" in m:
+            what += f"<br><span class=\"meta\">Line in the prompt: {html.escape(m['hint_text'])}</span>"
+        elif "stars_in_clip_s" in m:
+            what += f"<br><span class=\"meta\">Measured stars in the clip: {m['stars_in_clip_s']:g} s</span>"
+        if m.get("star_rule_kept"):
+            what += " <span class=\"meta\">(the star rule cancelled this veto)</span>"
         cards.append(
             f'<div class="cand {cls}"><img src="data:image/jpeg;base64,{b64}" alt="contact sheet of candidate '
             f'{c["candidate_rank"]}"><div class="info"><div class="cap"><span class="ts">#{c["candidate_rank"]}</span> '
@@ -104,7 +112,11 @@ def vlm_section(scores, run_dir, out_dir, video_stem):
     mem = v.get("memory") or {}
     mem_txt = (f", model memory {mem['size_bytes'] / 2**30:.2f} GiB ({mem['vram_bytes'] / 2**30:.2f} GiB on the GPU)"
                if mem.get("size_bytes") else "")
-    meta = (f"{v['model']} &middot; prompt {html.escape(v['prompt_version'])} &middot; sheet version "
+    extras = ((" &middot; measured stars in the prompt" if v.get("hint") else "")
+              + (f" &middot; star rule: no {v['star_rule']['category']} veto with at least "
+                 f"{v['star_rule']['min_stars_s']:g} s of stars ({v['star_rule']['vetoes_cancelled']} cancelled)"
+                 if v.get("star_rule") else ""))
+    meta = (f"{v['model']} &middot; prompt {html.escape(v['prompt_version'])}{extras} &middot; sheet version "
             f"{v['sheet_version']} &middot; {v['model_calls']} model call(s), {v['cache_hits']} cached, "
             f"{v['model_errors']} error(s) &middot; model step {scores['timing_s'].get('vlm_model', 0):.1f} s"
             f"{mem_txt}{' &middot; <b>thinking text returned</b>' if v['thinking_returned'] else ''}")

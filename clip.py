@@ -1,4 +1,4 @@
-"""Gameplay auto-clipper v6.
+"""Gameplay auto-clipper v7.
 
 Finds the loudest, busiest moments in a gameplay recording and cuts them into
 vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.
@@ -12,11 +12,15 @@ phone's call screen out of a clip instead of ruling out everything around it.
 v6 (--vlm MODEL) adds a veto: the picker makes 2 x --count candidates as before, a local Ollama vision model
 labels each from a contact sheet, and the first --count candidates it doesn't veto become the clips (vlm.py).
 With --vlm off (the default) nothing changes.
+v7 gives the veto the wanted stars measured above, two ways (both off by default, both need the HUD rules):
+--vlm-hint stars puts each candidate's measured seconds of stars into the prompt, and --vlm-rule stars cancels a
+boring_driving_or_walking veto when the clip has at least vlm.STAR_RULE_MIN_S of stars.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
                        [--cpu-decode] [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
+                       [--vlm-hint none|stars] [--vlm-rule none|stars]
 """
 
 import argparse
@@ -662,19 +666,39 @@ def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio, range_fix):
     run(cmd)
 
 
-def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, range_fix):
+def star_measure_error(hint, rule, hud_on, hud_state):
+    """None, or why --vlm-hint stars / --vlm-rule stars can't run: both use the measured wanted stars, which mean
+    nothing while the HUD rules are off (--no-hud, or no GTA V minimap found)."""
+    used = [f"--vlm-{name} stars" for name, value in (("hint", hint), ("rule", rule)) if value == "stars"]
+    if used and not hud_on:
+        return (f"{' and '.join(used)} {'need' if len(used) > 1 else 'needs'} the measured wanted stars, but the "
+                f"HUD rules are {hud_state}")
+    return None
+
+
+def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, range_fix, hint="none", rule="none",
+              star_steps=None):
     """Stage 2 (v6): the model judges every candidate, then the first `count` it doesn't veto become the clips.
 
     Runs after the signals and before any clip is rendered: contact sheets (ffmpeg, CPU), model calls, then the
     model is unloaded (keep_alive 0) so NVENC has the GPU to itself. Returns (clips, the scores.json vlm block,
     timings). Each clip keeps its candidate_rank and gets a vlm entry; fillers are marked.
+    v7: with hint or rule "stars", star_steps (one bool per timeline step) gives each candidate's measured seconds
+    of stars, cut at the clip's edges. The hint puts them in the prompt; the rule cancels boring vetoes after.
     """
-    prompt = vlm.load_prompt()
+    version = vlm.prompt_version(hint)
+    prompt = vlm.load_prompt(version)
+    measured = ([vlm.stars_in_clip(c["start_s"], c["end_s"], star_steps, BUCKET) for c in candidates]
+                if "stars" in (hint, rule) else None)
+    hints = ([vlm.stars_line(m, c["end_s"] - c["start_s"]) for m, c in zip(measured, candidates)]
+             if hint == "stars" else None)
     sheet_dir = run_dir / "candidates"
     sheet_dir.mkdir(exist_ok=True)
     paths = [sheet_dir / f"cand_{i:02d}_{int(c['start_s']) // 60}m{int(c['start_s']) % 60:02d}s.jpg"
              for i, c in enumerate(candidates, 1)]
-    print(f"Stage 2: {model} judges {len(candidates)} candidate(s) (prompt {vlm.PROMPT_VERSION}, "
+    print(f"Stage 2: {model} judges {len(candidates)} candidate(s) (prompt {version}"
+          f"{', measured stars in the prompt' if hints else ''}"
+          f"{f', star rule {vlm.STAR_RULE_MIN_S:g} s' if rule == 'stars' else ''}, "
           f"sheet version {vlm.SHEET_VERSION}, cache {vlm.DEFAULT_CACHE})")
     t_sheets, memory = [0.0], []
 
@@ -695,7 +719,8 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
 
     t0 = time.perf_counter()
     try:
-        results = vlm.judge(candidates, video, model, model_info, prompt, paths, vlm.DEFAULT_CACHE, sheet_fn, ask_fn)
+        results = vlm.judge(candidates, video, model, model_info, prompt, paths, vlm.DEFAULT_CACHE, sheet_fn, ask_fn,
+                            version=version, hints=hints)
     except RuntimeError as e:
         results = None
         err = str(e)
@@ -707,6 +732,12 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
         print(f"WARNING: Ollama still lists {model} {t_unload:g} s after asking it to unload; rendering anyway.")
     if any(r["thinking_chars"] for r in results):
         print("WARNING: the model returned thinking text although thinking was turned off (stored in the cache).")
+    if rule == "stars":
+        for n, (r, m) in enumerate(zip(results, measured), 1):
+            if r["vetoed"] and vlm.star_rule_keeps(r, m):
+                r["vetoed"], r["star_rule_kept"] = False, True
+                print(f"  star rule: candidate {n} is not vetoed ({r['category']}, but {m:g} s of measured stars, "
+                      f"at least {vlm.STAR_RULE_MIN_S:g} s)")
 
     picks = vlm.choose([r["vetoed"] for r in results], count)
     final_rank = {i: k for k, (i, _) in enumerate(picks, 1)}
@@ -714,9 +745,15 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
     verdicts, records = [], []
     for i, (c, r, path) in enumerate(zip(candidates, results, paths)):
         status = ("model error, kept" if r["error"] else "vetoed, used as filler" if i in fillers
-                  else "vetoed" if r["vetoed"] else "kept")
+                  else "vetoed" if r["vetoed"] else "kept by the star rule" if r.get("star_rule_kept") else "kept")
         verdict = {k: r[k] for k in ("category", "player_stalled", "reason", "vetoed", "error", "cached")}
         verdict.update(filler=i in fillers, status=status)
+        if measured is not None:  # v7 keys only when a stars option is on, so other runs' scores.json are v6's
+            verdict["stars_in_clip_s"] = measured[i]
+        if hints is not None:
+            verdict["hint_text"] = r["hint_text"]
+        if rule == "stars":
+            verdict["star_rule_kept"] = bool(r.get("star_rule_kept"))
         verdicts.append(verdict)
         records.append({"candidate_rank": i + 1, "final_rank": final_rank.get(i),
                         "sheet": path.relative_to(run_dir).as_posix(),
@@ -731,8 +768,10 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
           f"{sum(1 for r in results if r['error'])} model error(s); {len(calls)} model call(s), "
           f"{len(results) - len(calls)} cached; sheets {t_sheets[0]:.1f} s, model {t_model:.1f} s, "
           f"unload {t_unload:.1f} s")
-    block = {"model": model, "model_digest": model_info["digest"], "prompt_version": vlm.PROMPT_VERSION,
-             "prompt_file": f"prompts/{vlm.PROMPT_VERSION}.txt", "prompt_sha256": prompt[1],
+    if rule == "stars":
+        print(f"Stage 2: the star rule cancelled {sum(1 for r in results if r.get('star_rule_kept'))} veto(es)")
+    block = {"model": model, "model_digest": model_info["digest"], "prompt_version": version,
+             "prompt_file": f"prompts/{version}.txt", "prompt_sha256": prompt[1],
              "think": False if "thinking" in model_info["capabilities"] else None,
              "options": vlm.OPTIONS, "keep_alive": vlm.KEEP_ALIVE, "schema": vlm.SCHEMA,
              "categories": vlm.CATEGORIES, "veto_categories": vlm.VETO,
@@ -744,6 +783,11 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
              "model_errors": sum(1 for r in results if r["error"]),
              "thinking_returned": any(r["thinking_chars"] for r in results),
              "memory": memory[0] if memory else None, "unloaded": gone, "candidates": records}
+    if hints is not None:
+        block.update(hint="stars", hint_placeholder=vlm.HINT_PLACEHOLDER)
+    if rule == "stars":
+        block["star_rule"] = {"category": vlm.STAR_RULE_CATEGORY, "min_stars_s": vlm.STAR_RULE_MIN_S,
+                              "vetoes_cancelled": sum(1 for r in results if r.get("star_rule_kept"))}
     return clips, block, {"vlm_sheets": round(t_sheets[0], 2), "vlm_model": round(t_model, 2),
                           "vlm_unload": round(t_unload, 2)}
 
@@ -766,27 +810,45 @@ def main():
     ap.add_argument("--vlm", choices=("off",) + vlm.MODELS, default="off",
                     help="v6 veto: a local Ollama vision model checks 2 x --count candidates and vetoes clumsy, "
                          "boring and menu/cutscene clips (default off: picks exactly as v4/v5)")
+    ap.add_argument("--vlm-hint", choices=vlm.HINTS, default="none",
+                    help="v7: 'stars' tells the model each candidate's measured seconds of wanted stars "
+                         f"(prompt {vlm.STARS_PROMPT_VERSION}; needs --vlm and the HUD rules)")
+    ap.add_argument("--vlm-rule", choices=vlm.RULES, default="none",
+                    help="v7: 'stars' cancels a boring_driving_or_walking veto when the clip has at least "
+                         f"{vlm.STAR_RULE_MIN_S:g} s of measured wanted stars (needs --vlm and the HUD rules)")
     args = ap.parse_args()
 
     if not args.video.is_file():
         fail(f"video not found: {args.video}")
     if args.count < 1 or args.min_len <= 0 or args.min_gap < 0 or args.max_len < args.min_len:
         fail("need --count >= 1, --min-len > 0, --min-gap >= 0 and --max-len >= --min-len")
+    if args.vlm == "off" and "stars" in (args.vlm_hint, args.vlm_rule):
+        fail("--vlm-hint and --vlm-rule only apply with --vlm MODEL")
+    err = star_measure_error(args.vlm_hint, args.vlm_rule, not args.no_hud, "off (--no-hud)")
+    if err:
+        fail(err)
     ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         fail("ffmpeg/ffprobe not found on PATH (install: winget install Gyan.FFmpeg)")
     model_info = None
     if args.vlm != "off":
         # Checked before the slow analysis, so a missing Ollama or model stops the run at once.
+        version = vlm.prompt_version(args.vlm_hint)
         try:
             model_info = vlm.check_ollama(args.vlm)
-            vlm.load_prompt()
+            text, _ = vlm.load_prompt(version)
+            if args.vlm_hint == "stars":
+                vlm.fill_prompt(text, "")
         except vlm.VlmError as e:
             fail(str(e))
         except OSError as e:
-            fail(f"prompt file for {vlm.PROMPT_VERSION} not readable: {e}")
+            fail(f"prompt file for {version} not readable: {e}")
+        except ValueError as e:
+            fail(f"prompts/{version}.txt: {e}")
         others = [m for m in model_info["loaded"] if m != args.vlm]
-        print(f"Stage 2 (v6) on: {args.vlm} via Ollama, {2 * args.count} candidates, prompt {vlm.PROMPT_VERSION}")
+        print(f"Stage 2 (v7) on: {args.vlm} via Ollama, {2 * args.count} candidates, prompt {version}"
+              + (", measured stars in the prompt" if args.vlm_hint == "stars" else "")
+              + (f", star rule {vlm.STAR_RULE_MIN_S:g} s" if args.vlm_rule == "stars" else ""))
         if others:
             print(f"WARNING: Ollama already has {', '.join(others)} loaded; with 8 GB of VRAM the vision model "
                   f"may not fit on the GPU.")
@@ -845,6 +907,9 @@ def main():
               f"{HUD_MIN_SHARE:.0%}). HUD rules are off; scoring falls back to loudness + picture change.")
     else:
         hud_on, hud_state = True, "on"
+    err = star_measure_error(args.vlm_hint, args.vlm_rule, hud_on, hud_state)
+    if err:
+        fail(err)
     if not hud_on:
         excluded = phone_cut = [False] * n
     walls = [e and not c for e, c in zip(excluded, phone_cut)]
@@ -895,7 +960,7 @@ def main():
     if model_info:
         notes = ["candidates: " + n for n in notes]
         clips, vlm_block, t_vlm = veto_step(ffmpeg, args.video, args.vlm, model_info, clips, args.count, run_dir,
-                                            range_fix)
+                                            range_fix, args.vlm_hint, args.vlm_rule, stars)
         if len(clips) < args.count:
             notes.append(f"asked for {args.count} clips, found {len(clips)}: the picker made only "
                          f"{vlm_block['candidates_found']} candidates")
@@ -909,7 +974,8 @@ def main():
         print(f"  [{rank}] {hms(clip['start_s'])}-{hms(clip['end_s'])} ({clip['duration_s']:.1f} s)  "
               f"peak {hms(clip['peak_time_s'])}  score {clip['peak_score']:.2f}  sequence {clip['sequence']}"
               + (f"  candidate {clip['candidate_rank']}, {clip['vlm']['category'] or 'model error'}"
-                 f"{' (vetoed, used as filler)' if clip['vlm']['filler'] else ''}" if model_info else ""))
+                 f"{' (vetoed, used as filler)' if clip['vlm']['filler'] else ''}"
+                 f"{' (kept by the star rule)' if clip['vlm'].get('star_rule_kept') else ''}" if model_info else ""))
         render(ffmpeg, args.video, clip, run_dir / name, args.crop, enc_args, info["has_audio"], range_fix)
     t_encode = time.perf_counter() - t0
 
@@ -939,13 +1005,14 @@ def main():
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v6",
+        "tool": "gta-clipper v7",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
         "settings": {"count": args.count, "min_len": args.min_len, "max_len": args.max_len,
                      "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder,
-                     "decoder": decoder, "decoder_reason": why, "vlm": args.vlm},
+                     "decoder": decoder, "decoder_reason": why, "vlm": args.vlm, "vlm_hint": args.vlm_hint,
+                     "vlm_rule": args.vlm_rule},
         "hud": {"state": hud_state, "reference_size": [HUD_REF_W, HUD_REF_H], "samples_per_s": HUD_FPS,
                 "star_box": STAR_BOX, "star_tips_x": STAR_TIPS_X, "star_tip_y": STAR_TIP_Y,
                 "star_radius": STAR_RADIUS, "star_inner": STAR_INNER, "star_min_score": STAR_MIN_SCORE,

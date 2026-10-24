@@ -1,4 +1,5 @@
-"""Unit checks for the v6 veto (vlm.py) on made-up model answers. No Ollama, no footage and no ffmpeg are used.
+"""Unit checks for the v6 veto (vlm.py) and v7's measured stars (--vlm-hint stars, --vlm-rule stars) on made-up
+model answers. No Ollama, no footage and no ffmpeg are used.
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error), so a
 missing function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL; exit code 0 or 1.
@@ -7,8 +8,11 @@ Usage:  python vlmtest.py
 """
 
 import base64
+import contextlib
+import io
 import json
 import random
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -378,6 +382,260 @@ def first_five_of_ten_candidates_are_the_five_picks():
     five, _, _ = clip.pick_clips(score, smooth, usable, 5, 15.0, 30.0, 10.0, walls, phone, seq)
     ten, _, _ = clip.pick_clips(score, smooth, usable, 10, 15.0, 30.0, 10.0, walls, phone, seq)
     return len(five) == 5 and len(ten) == 10 and ten[:5] == five
+
+
+# --- v7: measured stars (--vlm-hint stars, --vlm-rule stars) ---
+
+@check
+def stars_are_cut_at_the_clip_edges():
+    """stars_in_clip counts only the part of each 0.5 s star step inside the clip: 30.0 s for a 30 s clip that
+    starts mid-step with stars throughout (stars_s says 30.5), the inside of a partial stretch, 0 with no stars"""
+    every = [True] * 1000
+    part = [100 <= i < 125 for i in range(1000)]  # stars 50.0-62.5 s
+    return (vlm.stars_in_clip(190.25, 220.25, every, 0.5) == 30.0
+            and vlm.stars_in_clip(55.3, 70.3, part, 0.5) == 7.2
+            and vlm.stars_in_clip(40.0, 52.25, part, 0.5) == 2.25
+            and vlm.stars_in_clip(0.1, 15.1, [False] * 1000, 0.5) == 0.0
+            and vlm.stars_in_clip(495.0, 510.0, every, 0.5) == 5.0)  # the timeline ends at 500 s
+
+
+@check
+def stars_never_exceed_the_clip():
+    """for 500 random clips over random star steps, the measured stars are between 0 and the clip's length"""
+    rnd = random.Random(11)
+    steps = [rnd.random() < 0.4 for _ in range(4000)]
+    for _ in range(500):
+        s = round(rnd.uniform(0, 1900), 2)
+        e = round(s + rnd.uniform(15, 30), 2)
+        if not 0.0 <= vlm.stars_in_clip(s, e, steps, 0.5) <= round(e - s, 2):
+            return False
+    return True
+
+
+@check
+def stars_line_text():
+    """the line is 'Measured by the tool: wanted stars visible for X of Y s.' with one decimal, 0 s included"""
+    return (vlm.stars_line(12.5, 15.0) == "Measured by the tool: wanted stars visible for 12.5 of 15.0 s."
+            and vlm.stars_line(0.0, 16.5) == "Measured by the tool: wanted stars visible for 0.0 of 16.5 s."
+            and vlm.stars_line(30, 30) == "Measured by the tool: wanted stars visible for 30.0 of 30.0 s.")
+
+
+@check
+def fill_prompt_needs_the_placeholder_once():
+    """the placeholder is replaced by the line; a prompt with no placeholder, or two, is a ValueError"""
+    ph = vlm.HINT_PLACEHOLDER
+    out = [vlm.fill_prompt(f"a\n{ph}\nb", "LINE") == "a\nLINE\nb"]
+    for bad in ("a b", f"{ph} {ph}"):
+        try:
+            vlm.fill_prompt(bad, "LINE")
+            out.append(False)
+        except ValueError:
+            out.append(True)
+    return all(out)
+
+
+@check
+def the_stars_prompt_file():
+    """--vlm-hint stars uses prompts/stars_v1.txt: one placeholder, every category, no CR; hint none still uses
+    veto_v3, which has no placeholder"""
+    text, sha = vlm.load_prompt(vlm.prompt_version("stars"))
+    v3, _ = vlm.load_prompt(vlm.prompt_version("none"))
+    return (vlm.prompt_version("stars") == vlm.STARS_PROMPT_VERSION == "stars_v1"
+            and vlm.prompt_version("none") == vlm.PROMPT_VERSION == "veto_v3"
+            and text.count(vlm.HINT_PLACEHOLDER) == 1 and vlm.HINT_PLACEHOLDER not in v3
+            and all(c in text for c in vlm.CATEGORIES) and "\r" not in text and len(sha) == 64)
+
+
+@check
+def hint_none_cache_key_is_v6s():
+    """without a hint the cache fields are exactly v6's (same keys, same values), so v6's cached answers apply"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"12345")
+        c = {"start_s": 10.0, "end_s": 30.0, "peak_time_s": 21.0}
+        v6 = {"video": "v.webm", "video_bytes": 5, "start_s": 10.0, "end_s": 30.0, "peak_time_s": 21.0,
+              "model": "m", "model_digest": "d1", "prompt_version": "veto_v3", "prompt_sha256": "s1",
+              "sheet_version": vlm.SHEET_VERSION, "options": vlm.OPTIONS, "think": None}
+        f = vlm.cache_fields(video, c, "m", "d1", "veto_v3", "s1", None)
+        return f == v6 and list(f) == list(v6) and vlm.cache_path(tmp, f) == vlm.cache_path(tmp, v6)
+
+
+@check
+def stars_cache_key_includes_the_hint_text():
+    """with --vlm-hint stars the key has the hint and the filled-in line: it differs from the no-hint key, and a
+    different line gives a different file; the same line gives the same file"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"12345")
+        c = {"start_s": 10.0, "end_s": 30.0, "peak_time_s": 21.0}
+
+        def path(*hint):
+            return vlm.cache_path(tmp, vlm.cache_fields(video, c, "m", "d1", "stars_v1", "s1", None, *hint))
+        a = path("stars", vlm.stars_line(12.5, 20.0))
+        return (a == path("stars", vlm.stars_line(12.5, 20.0)) and a != path()
+                and a != path("stars", vlm.stars_line(12.0, 20.0)))
+
+
+def run_judge_hints(tmp, video, hints, calls, text="intro\n" + vlm.HINT_PLACEHOLDER + "\nend"):
+    """judge() like run_judge, every answer other_action, with the given hints (None = no hint)."""
+    def sheet_fn(c, path):
+        Path(path).write_bytes(b"0")
+        return vlm.sheet_times(c["start_s"], c["end_s"], c["peak_time_s"])
+
+    def ask_fn(body):
+        calls.append(body)
+        return {"answer": {"reason": "made up", "player_stalled": False, "category": "other_action"}, "error": None,
+                "raw": "", "thinking": "", "wall_s": 0.1}
+    cands = fake_candidates(2)
+    paths = [Path(tmp) / f"s{i}.jpg" for i in range(2)]
+    return vlm.judge(cands, video, "m", {"digest": "d1", "capabilities": ["vision"]}, (text, "sha"), paths,
+                     Path(tmp) / "cache", sheet_fn, ask_fn, log=lambda *a: None,
+                     version="stars_v1" if hints else "veto_v3", hints=hints)
+
+
+@check
+def judge_sends_each_candidate_its_line():
+    """with hints, each body's prompt has that candidate's line in place of the placeholder, the result records
+    the line, and a re-run with the same lines is cached; changed lines are asked again"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"x")
+        lines = [vlm.stars_line(0.0, 20.0), vlm.stars_line(12.5, 20.0)]
+        c1, c2, c3 = [], [], []
+        r1 = run_judge_hints(tmp, video, lines, c1)
+        run_judge_hints(tmp, video, lines, c2)
+        run_judge_hints(tmp, video, [lines[0], vlm.stars_line(13.0, 20.0)], c3)
+        return ([b["messages"][0]["content"] for b in c1] == [f"intro\n{ln}\nend" for ln in lines]
+                and [r["hint_text"] for r in r1] == lines and len(c2) == 0 and len(c3) == 1)
+
+
+@check
+def judge_without_hint_sends_the_prompt_unchanged():
+    """with no hint the prompt is sent exactly as loaded (v6's body) and results have no hint_text"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"x")
+        calls = []
+        r = run_judge_hints(tmp, video, None, calls, text="plain v3 text")
+        return (len(calls) == 2 and all(b["messages"][0]["content"] == "plain v3 text" for b in calls)
+                and not any("hint_text" in x for x in r))
+
+
+@check
+def star_rule_cancels_only_boring_vetoes():
+    """--vlm-rule stars: a usable boring_driving_or_walking answer with 5.0 s of stars or more is kept; 4.99 s is
+    not; clumsy and menu vetoes stay whatever the stars; an error is not touched"""
+    def res(cat, error=None):
+        return {"category": cat, "error": error}
+    boring = "boring_driving_or_walking"
+    return (vlm.STAR_RULE_MIN_S == 5.0 and vlm.star_rule_keeps(res(boring), 5.0)
+            and vlm.star_rule_keeps(res(boring), 30.0) and not vlm.star_rule_keeps(res(boring), 4.99)
+            and not vlm.star_rule_keeps(res("clumsy_crash_or_stuck"), 30.0)
+            and not vlm.star_rule_keeps(res("menu_or_cutscene"), 30.0)
+            and not vlm.star_rule_keeps(res(boring, error="call failed"), 30.0))
+
+
+@check
+def stars_options_need_the_hud():
+    """star_measure_error: no message with both options off or the HUD on; with the HUD off, a message naming the
+    option(s) and the HUD state"""
+    off = "off (--no-hud)"
+    a = clip.star_measure_error("stars", "none", False, off)
+    b = clip.star_measure_error("none", "stars", False, "off (no GTA V minimap found)")
+    both = clip.star_measure_error("stars", "stars", False, off)
+    return (clip.star_measure_error("none", "none", False, off) is None
+            and clip.star_measure_error("stars", "stars", True, "on") is None
+            and "--vlm-hint stars needs" in a and off in a
+            and "--vlm-rule stars needs" in b and "no GTA V minimap found" in b
+            and "--vlm-hint stars and --vlm-rule stars need" in both)
+
+
+@check
+def stars_options_stop_clip_py_at_once():
+    """clip.py stops with an error, before ffmpeg or Ollama, for --vlm-hint/--vlm-rule stars without --vlm, and
+    for either with --no-hud"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"x")
+        cases = [(["--vlm-hint", "stars"], "only apply with --vlm"),
+                 (["--vlm-rule", "stars"], "only apply with --vlm"),
+                 (["--vlm", vlm.MODELS[0], "--vlm-hint", "stars", "--no-hud"], "--vlm-hint stars needs"),
+                 (["--vlm", vlm.MODELS[0], "--vlm-rule", "stars", "--no-hud"], "--vlm-rule stars needs")]
+        for args, msg in cases:
+            p = subprocess.run([sys.executable, str(Path(clip.__file__)), str(video)] + args,
+                               capture_output=True, text=True, timeout=60)
+            if p.returncode != 1 or msg not in p.stderr:
+                return False
+    return True
+
+
+def run_veto_step(tmp, hint, rule, answers, star_steps):
+    """clip.veto_step with fake sheets, a fake model (answers: one category per candidate) and a temp cache."""
+    saved = {k: getattr(vlm, k) for k in ("make_sheet", "ask", "unload", "model_memory", "DEFAULT_CACHE")}
+
+    def make_sheet(ffmpeg, video, c, out, range_fix):
+        Path(out).write_bytes(str(int(c["start_s"] // 100)).encode("ascii"))
+        times, k = vlm.sheet_times(c["start_s"], c["end_s"], c["peak_time_s"])
+        return times, k
+
+    def ask(body):
+        cat = answers[int(base64.b64decode(body["messages"][0]["images"][0]))]
+        return {"answer": {"reason": "made up", "player_stalled": False, "category": cat}, "error": None,
+                "raw": "", "thinking": "", "wall_s": 0.1}
+    try:
+        vlm.make_sheet, vlm.ask, vlm.unload = make_sheet, ask, lambda model: (0.0, True)
+        vlm.model_memory, vlm.DEFAULT_CACHE = (lambda model: None), Path(tmp) / "cache"
+        video = Path(tmp) / "v.webm"
+        video.write_bytes(b"x")
+        cands = [{"start_s": 100.0 * i, "end_s": 100.0 * i + 20, "duration_s": 20.0, "peak_time_s": 100.0 * i + 10,
+                  "peak_score": 3.0, "smoothed_peak_score": 2.5, "sequence": i + 1, "reason": "made up"}
+                 for i in range(len(answers))]
+        run_dir = Path(tmp) / "run"
+        run_dir.mkdir(exist_ok=True)
+        info = {"digest": "d1", "capabilities": ["vision"]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            return clip.veto_step(None, video, "m", info, cands, 2, run_dir, False, hint, rule, star_steps)
+    finally:
+        for k, v in saved.items():
+            setattr(vlm, k, v)
+
+
+@check
+def veto_step_star_rule_and_v6_shape():
+    """veto_step: with --vlm-rule stars a boring veto with 5+ s of stars is cancelled ("kept by the star rule"),
+    one with less stays vetoed, a clumsy one stays vetoed; with both options off the records and the vlm block have
+    no v7 keys (v6's shape)"""
+    boring, clumsy = "boring_driving_or_walking", "clumsy_crash_or_stuck"
+    answers = [boring, boring, clumsy, "other_action"]
+    steps = [10 <= i < 19 or 200 <= i < 240 or 400 <= i < 440 for i in range(800)]  # 4.5 s, 20 s, 20 s, 0 s
+    with tempfile.TemporaryDirectory() as tmp:
+        clips, block, _ = run_veto_step(tmp, "none", "stars", answers, steps)
+    st = [c["vlm"]["status"] for c in block["candidates"]]
+    with tempfile.TemporaryDirectory() as tmp:
+        clips6, block6, _ = run_veto_step(tmp, "none", "none", answers, None)
+    v7_keys = {"stars_in_clip_s", "hint_text", "star_rule_kept"}
+    return (st == ["vetoed", "kept by the star rule", "vetoed", "kept"]
+            and [c["vlm"]["stars_in_clip_s"] for c in block["candidates"]] == [4.5, 20.0, 20.0, 0.0]
+            and [c["candidate_rank"] for c in clips] == [2, 4]
+            and block["star_rule"] == {"category": boring, "min_stars_s": 5.0, "vetoes_cancelled": 1}
+            and block["prompt_version"] == "veto_v3" and "hint" not in block
+            and [c["candidate_rank"] for c in clips6] == [4, 1]
+            and not any(v7_keys & set(c["vlm"]) for c in block6["candidates"] + clips6)
+            and "star_rule" not in block6 and "hint" not in block6)
+
+
+@check
+def veto_step_hint_lines():
+    """veto_step with --vlm-hint stars: prompt stars_v1, each candidate's line from its measured stars and length,
+    recorded per candidate, and the vlm block marked with the hint"""
+    steps = [200 <= i < 225 for i in range(800)]  # 12.5 s of stars inside candidate 2 (100-120 s)
+    with tempfile.TemporaryDirectory() as tmp:
+        clips, block, _ = run_veto_step(tmp, "stars", "none", ["other_action"] * 3, steps)
+    return (block["prompt_version"] == "stars_v1" and block["hint"] == "stars" and "star_rule" not in block
+            and [c["vlm"]["hint_text"] for c in block["candidates"]] == [vlm.stars_line(0.0, 20.0),
+                                                                        vlm.stars_line(12.5, 20.0),
+                                                                        vlm.stars_line(0.0, 20.0)]
+            and clips[1]["vlm"]["hint_text"] == vlm.stars_line(12.5, 20.0))
 
 
 def main():

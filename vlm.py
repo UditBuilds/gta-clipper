@@ -9,11 +9,18 @@ ranks or moves a clip: choose() walks the candidates in rank order, skips the ve
 An answer the code can't use (call failed, bad JSON, unknown category) never vetoes: the candidate is kept and
 marked as a model error. Usable answers are cached on disk (see cache_fields), so a re-run doesn't call the
 model again. Python standard library + ffmpeg only.
+
+v7 adds two optional uses of the wanted stars clip.py measures (both need its HUD rules on):
+- --vlm-hint stars: the prompt (prompts/<STARS_PROMPT_VERSION>.txt) gets one line per candidate, stars_line(),
+  in place of HINT_PLACEHOLDER. The line is part of the cache key.
+- --vlm-rule stars: after the model has answered, a boring_driving_or_walking veto is dropped when the clip has at
+  least STAR_RULE_MIN_S of measured stars (star_rule_keeps). The answer itself, and so the cache, is unchanged.
 """
 
 import base64
 import hashlib
 import json
+import math
 import subprocess
 import time
 import urllib.error
@@ -25,6 +32,12 @@ OLLAMA_URL = "http://localhost:11434"
 MODELS = ("qwen3-vl:4b-instruct", "qwen3-vl:8b-instruct")  # choices of clip.py --vlm (besides "off")
 PROMPT_DIR = HERE / "prompts"
 PROMPT_VERSION = "veto_v3"  # prompts/<PROMPT_VERSION>.txt; frozen: the last of 3 versions tried on test1/test2
+STARS_PROMPT_VERSION = "stars_v1"  # v7 --vlm-hint stars; at most 2 versions (prompts/LOG.md)
+HINTS = ("none", "stars")  # choices of clip.py --vlm-hint
+RULES = ("none", "stars")  # choices of clip.py --vlm-rule
+HINT_PLACEHOLDER = "{MEASURED_STARS}"  # where a stars prompt takes the candidate's stars_line()
+STAR_RULE_MIN_S = 5.0    # --vlm-rule stars: seconds of measured stars that cancel a boring veto (set before any run)
+STAR_RULE_CATEGORY = "boring_driving_or_walking"
 DEFAULT_CACHE = Path(r"C:\AI\gta\vlm_cache")
 
 CATEGORIES = ("stunt_or_explosion", "chase_or_shootout", "other_action",
@@ -66,6 +79,12 @@ def hms(seconds):
 def is_veto(result):
     """True when a candidate's model result vetoes it. Errors never veto."""
     return result.get("error") is None and result.get("category") in VETO
+
+
+def star_rule_keeps(result, stars_s, min_s=STAR_RULE_MIN_S):
+    """True when --vlm-rule stars cancels this candidate's veto: a usable answer of STAR_RULE_CATEGORY, and at least
+    min_s seconds of measured wanted stars in the clip. Other veto categories are never cancelled."""
+    return result.get("error") is None and result.get("category") == STAR_RULE_CATEGORY and stars_s >= min_s
 
 
 def choose(vetoed, count):
@@ -123,6 +142,35 @@ def make_sheet(ffmpeg, video, clip, out, range_fix):
     if proc.returncode != 0:
         raise RuntimeError("contact sheet failed: " + "\n".join(proc.stderr.strip().splitlines()[-5:]))
     return [round(t, 2) for t in times], k
+
+
+def stars_in_clip(start, end, star_steps, bucket):
+    """Seconds of start..end covered by steps with wanted stars. Step i covers [i * bucket, (i + 1) * bucket); a step
+    at the clip's edge counts only for its part inside the clip, so the result is never longer than the clip.
+    (clip.py's stars_s counts every step the clip touches in full: 30.5 s in a 30.0 s clip that starts mid-step.)"""
+    total = 0.0
+    for i in range(max(0, int(start // bucket)), min(len(star_steps), int(math.ceil(end / bucket)))):
+        if star_steps[i]:
+            total += max(0.0, min(end, (i + 1) * bucket) - max(start, i * bucket))
+    return round(total, 2)
+
+
+def stars_line(stars_s, duration_s):
+    """The candidate's line for --vlm-hint stars."""
+    return f"Measured by the tool: wanted stars visible for {stars_s:.1f} of {duration_s:.1f} s."
+
+
+def prompt_version(hint):
+    """The prompt file for a --vlm-hint value."""
+    return STARS_PROMPT_VERSION if hint == "stars" else PROMPT_VERSION
+
+
+def fill_prompt(text, line):
+    """The prompt with HINT_PLACEHOLDER replaced by line; ValueError unless the placeholder occurs exactly once."""
+    if text.count(HINT_PLACEHOLDER) != 1:
+        raise ValueError(f"the prompt must contain {HINT_PLACEHOLDER} exactly once "
+                         f"(found {text.count(HINT_PLACEHOLDER)})")
+    return text.replace(HINT_PLACEHOLDER, line)
 
 
 def load_prompt(version=PROMPT_VERSION):
@@ -229,13 +277,17 @@ def unload(model, base=OLLAMA_URL, http=http_json, wait=UNLOAD_WAIT, sleep=time.
     return round(time.perf_counter() - t0, 2), False
 
 
-def cache_fields(video, clip, model, digest, prompt_version, prompt_sha, think):
+def cache_fields(video, clip, model, digest, prompt_version, prompt_sha, think, hint=None, hint_text=None):
     """Everything that decides the model's answer for one candidate. The video is identified by its name and size
-    (never hashed: the files are gigabytes)."""
-    return {"video": video.name, "video_bytes": video.stat().st_size if video.exists() else None,
-            "start_s": clip["start_s"], "end_s": clip["end_s"], "peak_time_s": clip["peak_time_s"],
-            "model": model, "model_digest": digest, "prompt_version": prompt_version, "prompt_sha256": prompt_sha,
-            "sheet_version": SHEET_VERSION, "options": OPTIONS, "think": think}
+    (never hashed: the files are gigabytes). With a hint (v7) the hint and the candidate's filled-in line are added;
+    without one the fields are v6's, so v6's cached answers still apply."""
+    fields = {"video": video.name, "video_bytes": video.stat().st_size if video.exists() else None,
+              "start_s": clip["start_s"], "end_s": clip["end_s"], "peak_time_s": clip["peak_time_s"],
+              "model": model, "model_digest": digest, "prompt_version": prompt_version, "prompt_sha256": prompt_sha,
+              "sheet_version": SHEET_VERSION, "options": OPTIONS, "think": think}
+    if hint is not None:
+        fields.update(hint=hint, hint_text=hint_text)
+    return fields
 
 
 def cache_path(cache_dir, fields):
@@ -261,24 +313,29 @@ def cache_save(cache_dir, fields, record):
     tmp.replace(path)
 
 
-def judge(candidates, video, model, info, prompt, sheet_paths, cache_dir, sheet_fn, ask_fn, log=print):
+def judge(candidates, video, model, info, prompt, sheet_paths, cache_dir, sheet_fn, ask_fn, log=print,
+          version=PROMPT_VERSION, hints=None):
     """Model results for the candidates (rank order), one dict each.
 
     sheet_paths[i] is where candidate i's sheet is written (always rebuilt: the run folder shows it). All sheets
     are built first (ffmpeg), then each candidate takes its cached answer or one model call (ask_fn(body)).
     Only usable answers are cached, so a failed call is tried again on the next run.
+    prompt is (text, sha256) of prompts/<version>.txt. hints (v7 --vlm-hint stars) is None, or one line per
+    candidate that fills the prompt's placeholder and goes into the cache key.
     """
     text, sha = prompt
     think = False if "thinking" in info["capabilities"] else None
     sheets = [sheet_fn(c, p) for c, p in zip(candidates, sheet_paths)]
     results = []
     for n, (c, path, (times, k)) in enumerate(zip(candidates, sheet_paths, sheets), 1):
-        fields = cache_fields(video, c, model, info["digest"], PROMPT_VERSION, sha, think)
+        line = hints[n - 1] if hints is not None else None
+        fields = cache_fields(video, c, model, info["digest"], version, sha, think,
+                              hint=None if line is None else "stars", hint_text=line)
         rec, cached = cache_load(cache_dir, fields), True
         if rec is None:
             cached = False
-            body = build_request(model, text, base64.b64encode(Path(path).read_bytes()).decode("ascii"),
-                                 info["capabilities"])
+            body = build_request(model, text if line is None else fill_prompt(text, line),
+                                 base64.b64encode(Path(path).read_bytes()).decode("ascii"), info["capabilities"])
             rec = ask_fn(body)
             if rec["error"] is None:
                 cache_save(cache_dir, fields, rec)
@@ -287,6 +344,8 @@ def judge(candidates, video, model, info, prompt, sheet_paths, cache_dir, sheet_
                "reason": a.get("reason"), "error": rec["error"], "cached": cached,
                "thinking_chars": len(rec.get("thinking", "")), "sheet_times_s": times, "sheet_peak_frame": k + 1}
         res["vetoed"] = is_veto(res)
+        if line is not None:
+            res["hint_text"] = line
         res["call"] = {k2: rec.get(k2) for k2 in ("wall_s", "load_s", "prompt_tokens", "prompt_s",
                                                    "output_tokens", "output_s", "done_reason")}
         results.append(res)
