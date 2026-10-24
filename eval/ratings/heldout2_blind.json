@@ -1,0 +1,15 @@
+{
+  "video": "heldout2.webm",
+  "rated_by": "owner",
+  "rated": "2026-10-24",
+  "run": "heldout2/20261024-165743",
+  "tool": "gta-clipper v7 (--count 10, --vlm off)",
+  "method": "Blind ratings for the held-out test (eval/HELDOUT_PLAN.md step 3). The owner rated every clip of this run on make_rating_page.py's page, which lists the clips in source-time order as letters and shows no score, peak, rank, config or model verdict, before any --vlm run on this video. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The reasons are the owner's words as pasted; 'no reason given' where there was none. The letters on the page were the clips sorted by start_s. peak_s is the clip's peak_time_s in that run's scores.json.",
+  "clips": [
+    {"start_s": 50.9, "end_s": 65.9, "span": "0:50.9-1:05.9", "peak_s": 57.0, "postable": true, "reason": "no reason given"},
+    {"start_s": 89.2, "end_s": 104.2, "span": "1:29.2-1:44.2", "peak_s": 95.0, "postable": true, "reason": "no reason given"},
+    {"start_s": 227.0, "end_s": 242.0, "span": "3:47.0-4:02.0", "peak_s": 234.0, "postable": false, "reason": "its a start of the mission and nohing much happening or interesting here to watch"},
+    {"start_s": 266.5, "end_s": 287.0, "span": "4:26.5-4:47.0", "peak_s": 268.5, "postable": false, "reason": "no reason given"}
+  ]
+}
