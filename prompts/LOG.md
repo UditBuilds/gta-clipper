@@ -119,3 +119,43 @@ filler. `--vlm off` is v5 (identical timeline.csv).
 | test2 | 8b v2 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
 | test2 | 4b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 2 4 5 1f 3f |
 | test2 | 8b v3 | 3/5 | 2/3 | 0 | 3/5 | 0 | 15.3 s | 1 2 3 4 5 |
+
+# Stars hint prompts (v7, `--vlm-hint stars`)
+
+A separate series from the veto prompts above. Everything is veto_v3's (contact sheet version 2, the six categories,
+the veto and fill rules, the two Instruct models, the options); the only new input is one line per candidate with
+the seconds of wanted stars clip.py measured inside the clip, e.g. "Measured by the tool: wanted stars visible for
+27.5 of 30.0 s." The line is computed from the 0.5 s steps clip.py marks as having stars, cut at the clip's edges.
+
+**Stopping rule (set by the owner before any result):** at most two versions, `stars_v1.txt` and `stars_v2.txt`.
+Stop at the first version where neither model vetoes a candidate rated postable; otherwise stars_v2 is final,
+whatever its results. A v2 is written only to fix a mistake v1 made, and its reason is logged here before it runs.
+No version may describe a test1/test2 moment.
+
+**Rated set, fixed before any stars run** (ratings as of commit 4821ae7): 12 candidates, test1 1-7 (all postable)
+and test2 1-5 (1 and 3 not postable, the clumsy crashes). Ratings added after a version's runs don't change whether
+that version passed.
+
+The lines the dev set gives (known before any run, from the v6 runs' timelines): test1 #1 30.0 of 30.0 s, #2 29.0 of
+30.0, #3 27.8 of 28.8, #4 27.5 of 30.0, #5-#10 0.0 of 15.0; test2 every candidate 0.0 s (#2 of 16.5 s, the rest of
+15.0). So the hint can only help test1 1-4, which hold all three of the 4b's costly v3 vetoes; everywhere else it
+says 0 s.
+
+`--vlm-rule stars` (no boring_driving_or_walking veto with 5.0 s or more of measured stars) is a code rule applied to
+the cached veto_v3 answers, not a prompt; it is reported with the other configs in eval/BASELINE.md.
+
+## stars_v1 (`stars_v1.txt`), reason logged before running
+
+What it fixes: every costly veto in PR 6 was a chase the model called `boring_driving_or_walking`. In stills a chase
+looks like ordinary driving, and the stars are a row of about 25x6 px; both models also wrote "wanted stars" for
+test2 clips, which have none. The tool already knows when stars show.
+
+veto_v3 with these changes, nothing else:
+- v3's star sentences in the HUD hints ("Wanted stars are a row of up to five small star shapes at the very top-right
+  corner. If any frame shows them, the police are after the player and the clip is not boring driving.") are
+  replaced by the candidate's line and a paragraph: the line was measured on the full-size video every half second
+  and is reliable; the stars are too small on the frames to read, so trust the line over the frames; measured stars
+  mean the police are after the player, so not boring driving; 0 s of stars does NOT mean boring, since gang chases,
+  shootouts, fights and stunts have no stars.
+- The minimap and subtitle hints stay, as their own paragraph (the cutscene category relies on the minimap).
+- `reason`: "Mention police, wanted stars, weapons or damage only if you can clearly see them" loses "wanted stars".
