@@ -839,6 +839,22 @@ Counted with `vlmeval.py`'s rule: a filler counts as vetoed, a veto cancelled by
 | 4b + stars | 4 (heldout1 11:20.8, 0:00.0; heldout2 0:50.9, 1:29.2) | 4 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5) | 6 (1 / 5) |
 | 8b + stars | 1 (heldout2 0:50.9) | 5 (heldout1 12:33.8, 8:50.8, 8:21.0; heldout2 4:26.5, 3:47.0) | 8 (0 / 8) |
 
+Per video, as costly / kept but not postable / agreements (vetoed / kept):
+
+| Config | heldout1 (10 rated: 7 postable, 3 not) | heldout2 (4 rated: 2 postable, 2 not) |
+|---|---|---|
+| *off, for reference* | *0 / 3 / 7 (0 / 7)* | *0 / 2 / 2 (0 / 2)* |
+| 4b v3 | 0 / 2 / 8 (1 / 7) | 2 / 0 / 2 (2 / 0) |
+| 8b v3 | 1 / 3 / 6 (0 / 6) | 0 / 1 / 3 (1 / 2) |
+| **4b v3 + star rule (frozen)** | **0 / 3 / 7 (0 / 7)** | **2 / 1 / 1 (1 / 0)** |
+| 8b v3 + star rule | 1 / 3 / 6 (0 / 6) | 0 / 1 / 3 (1 / 2) |
+| 4b + stars | 2 / 3 / 5 (0 / 5) | 2 / 1 / 1 (1 / 0) |
+| 8b + stars | 0 / 3 / 7 (0 / 7) | 1 / 2 / 1 (0 / 1) |
+
+On heldout1, the only video where a veto could change the clips, the frozen config's row equals off's: the 4b's one
+veto there (candidate 1) was cancelled by the star rule. On heldout2 every veto came back as a filler. That is why its
+clips are off's.
+
 ## Dev and held-out side by side
 
 Dev is PR 7's tables (test1 + test2, 12 rated candidates); held-out is this PR's (heldout1 + heldout2, 14 rated

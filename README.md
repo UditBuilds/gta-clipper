@@ -22,6 +22,8 @@ of model time and 15 s of contact sheets per two videos and changed nothing.
 As a judge, it did worse than on the dev set. It vetoed 2 clips the owner rated postable (dev: 0) and kept 4 of the 5
 the owner rated not postable (dev: 0 of 2). The star rule changed 2 of the 4b's verdicts, both from agreeing with the
 owner to disagreeing; on dev it had changed 3, all the other way. No `--vlm` config made 0 costly vetoes on held-out.
+One config did worse than off: **4b + stars scored Postable@5 4 of 10 against off's 5.** It vetoed a postable stunt
+jump with 30 s of measured stars as boring, and a clip the owner rejected moved up. The other five configs equal off.
 
 | | Postable@5 (of 10) | Vetoed but postable | Kept but not postable | Model time |
 |---|---|---|---|---|
