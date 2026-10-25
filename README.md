@@ -12,6 +12,8 @@
   and the empty slot counts as a miss). On the two videos the tool was tuned on: 8 of 10.
 
 <!-- Demo video: the MP4 is uploaded with GitHub's web editor; its link goes on the line below this comment. -->
+https://github.com/user-attachments/assets/4c7f8082-6576-4eb1-9233-058405f441fa
+
 
 ![Demo: 6 s of a clip made by gta-clipper](docs/demo.gif)
 
