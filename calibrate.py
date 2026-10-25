@@ -1,9 +1,13 @@
 """Make a HUD profile (profiles/<name>.json) for clip.py from a few labelled frames of a recording (v9).
 
   1. --add grabs one frame of a video at each time you give (as you'd see it, after the container crop).
-  2. A local page (http://127.0.0.1, this machine only) walks you through it in plain English: you tick what each
-     frame shows (HUD shown or hidden, wanted stars or not, phone call screen or not), then draw the star row,
-     the coloured bars by the minimap and the phone on zoomed frames.
+  2. A local page (http://127.0.0.1, this machine only) walks you through it in plain English:
+     - you draw one rough box round the coloured bars by the minimap, and the tool finds the bars in it
+       (find_strips: what most frames share; the scene changes, the HUD doesn't);
+     - the tool guesses what each frame shows (HUD shown or hidden from those bars, black screens, stars and phone
+       "no") and you confirm each picture ("Looks right") or change it. Measure uses confirmed labels only, and
+       the saved profile records how many guesses were kept or changed;
+     - you draw the star row (4 clicks) and the phone on zoomed frames.
   3. "Measure" reads every labelled frame the way clip.py will: its own HUD filter chain on the video itself
      (same range handling), and its own detectors. Each limit is set halfway between the frames that show the
      thing and the nearest frame that doesn't. A limit with no such frame beyond it gets a fixed margin and is
@@ -49,6 +53,18 @@ GREY_CHROMA = 12.0       # a colour whose channels are all within this of each o
 SIN54 = math.sin(math.radians(54))  # a 5-pointed star's lowest tips sit SIN54 * radius below its centre
 COS18 = math.cos(math.radians(18))  # ... and its two side points COS18 * radius left and right of it
 WORKERS = 4              # ffmpeg frame grabs at once
+# Finding the bars inside one rough box (find_strips). Judgement values, not measured on any game; calibtest.py
+# checks them on made-up HUDs (different rows, thicknesses, colours, with and without a see-through edge).
+BAR_CHROMA = 40.0        # a bar pixel's usual colour has its brightest channel at least this far above its darkest
+BAR_SAME_HUE = 0.9       # a frame's colour "agrees" when it points the same way from grey (cosine; about 26 degrees)
+BAR_AGREE = 0.5          # ... on at least half of the frames used
+BAR_ROW_SHARE = 0.5      # bar rows: at least half as many bar pixels as the fullest row
+BAR_COL_SHARE = 0.6      # a column is part of a bar when 60 % of the bar rows are bar pixels there
+BAR_MIN_W = 6            # narrower coloured runs are not bars
+BAR_HUE_SPLIT = 30.0     # a hue change of more than this (degrees) between neighbouring columns starts a new bar
+BAR_MAX_AREA = 160_000   # a bigger rough box is refused (slow, and it picks up more than the bars)
+BLACK_LEVEL, BLACK_SHARE = 20, 0.99  # a black screen: 99 % of a 160x90 copy of the frame darker than 20 (of 255)
+REAL = {"hud": ("shown", "hidden"), "stars": ("yes", "no"), "phone": ("yes", "no")}  # labels Measure uses; "?" = not sure
 
 
 class CalibError(Exception):
@@ -150,6 +166,147 @@ def bar_row(boxes):
         if b[0] < a[1]:
             raise CalibError("two bar boxes overlap side by side: draw one box inside each bar")
     return [xr[0][0], y0, xr[-1][1] - xr[0][0], y1 - y0], xr
+
+
+def from_grey(c):
+    """The colour minus its grey part: which way, and how far, it points from grey."""
+    m = (c[0] + c[1] + c[2]) / 3
+    return c[0] - m, c[1] - m, c[2] - m
+
+
+def same_hue(c, ref_vec, ref_len):
+    """True when colour c is clearly coloured and points the same way from grey as the reference (BAR_SAME_HUE)."""
+    if max(c) - min(c) < BAR_CHROMA / 2:
+        return False
+    v = from_grey(c)
+    return v[0] * ref_vec[0] + v[1] * ref_vec[1] + v[2] * ref_vec[2] >= BAR_SAME_HUE * math.hypot(*v) * ref_len
+
+
+def hue(c):
+    """Hue in degrees: 0 red, 60 yellow, 120 green, 180 cyan, 240 blue, 300 magenta."""
+    return math.degrees(math.atan2(math.sqrt(3) * (c[1] - c[2]), 2 * c[0] - c[1] - c[2])) % 360
+
+
+def hue_name(c):
+    names = ((0, "red"), (30, "orange"), (60, "yellow"), (120, "green"), (180, "cyan"), (240, "blue"),
+             (285, "purple"), (330, "pink"), (360, "red"))
+    h = hue(c)
+    return min(names, key=lambda n: abs(n[0] - h))[1]
+
+
+def find_strips(images, w, h):
+    """The coloured bars inside a rough box, from what most frames share. images: RGB bytes (w x h) of frames with
+    the HUD on screen (mostly). The scene changes from frame to frame and the HUD doesn't, so a bar pixel is one
+    whose usual (median) colour is clearly coloured and which has that same hue on at least half the frames. The
+    bars' rows are the fullest run of such rows, less one antialiased row at each edge when there are 4 or more;
+    a see-through edge round the bars takes the scene's colour, so it isn't part of them. Along those rows, each run
+    of bar columns with one hue is one bar, less its antialiased ends.
+    Returns {"rows": [y0, y1], "bars": [[x0, x1], ...], "colours": [...], "names": [...]} in box pixels (ends
+    excluded), or raises CalibError saying what to do."""
+    n = len(images)
+    if n < 3:
+        raise CalibError("finding the bars needs at least 3 pictures with the HUD on screen: add more with --add")
+    half = n // 2
+    bar = [None] * (w * h)  # the usual colour of each bar pixel
+    for p in range(w * h):
+        i = p * 3
+        med = tuple(sorted(im[i + k] for im in images)[half] for k in range(3))
+        if max(med) - min(med) < BAR_CHROMA:
+            continue
+        ref = from_grey(med)
+        ref_len = math.hypot(*ref)
+        if sum(same_hue((im[i], im[i + 1], im[i + 2]), ref, ref_len) for im in images) >= BAR_AGREE * n:
+            bar[p] = med
+    share = [sum(bar[y * w + x] is not None for x in range(w)) / w for y in range(h)]
+    if max(share) < 0.1:
+        raise CalibError("no coloured bars found in that box. Draw it round the coloured bars under the minimap, on a "
+                         "picture where the HUD is on screen, with a little space round them")
+    runs, y = [], 0
+    while y < h:
+        if share[y] >= BAR_ROW_SHARE * max(share):
+            y0 = y
+            while y < h and share[y] >= BAR_ROW_SHARE * max(share):
+                y += 1
+            runs.append((y0, y))
+        y += 1
+    y0, y1 = max(runs, key=lambda r: (r[1] - r[0], sum(share[r[0]:r[1]])))
+    if y1 - y0 >= 4:
+        y0, y1 = y0 + 1, y1 - 1
+    cols = []  # each column's usual colour, or None when it isn't part of a bar
+    for x in range(w):
+        got = [bar[y * w + x] for y in range(y0, y1) if bar[y * w + x] is not None]
+        cols.append(tuple(sum(c[k] for c in got) / len(got) for k in range(3))
+                    if len(got) >= BAR_COL_SHARE * (y1 - y0) else None)
+    bars, x = [], 0
+    while x < w:
+        if cols[x] is None:
+            x += 1
+            continue
+        x0 = x
+        x += 1
+        while x < w and cols[x] is not None and min(abs(hue(cols[x]) - hue(cols[x - 1])),
+                                                    360 - abs(hue(cols[x]) - hue(cols[x - 1]))) <= BAR_HUE_SPLIT:
+            x += 1
+        if x - x0 >= BAR_MIN_W:
+            trim = 2 if x - x0 >= 12 else 1
+            bars.append([x0 + trim, x - trim])
+    if len(bars) < 2:
+        raise CalibError(f"found {'only one coloured bar' if bars else 'no coloured bars'} in that box; the tool needs "
+                         "at least 2 (for example health and armour). Draw the box round all the bars under the "
+                         "minimap, with a little space round them")
+    colours = [tuple(round(sum(cols[x][k] for x in range(a, b)) / (b - a), 1) for k in range(3)) for a, b in bars]
+    return {"rows": [y0, y1], "bars": bars, "colours": colours, "names": [hue_name(c) for c in colours]}
+
+
+def find_bars_in(images, w, h):
+    """find_strips() twice: on all the frames given, then on those its bars say show the HUD (when that leaves 3 or
+    more and drops some), so frames without the HUD don't blur the bars' edges or split a part-empty bar."""
+    found = find_strips(images, w, h)
+    hud = [im for im in images if hud_guess(im, w, found)[0] == "shown"]
+    if 3 <= len(hud) < len(images):
+        try:
+            found = find_strips(hud, w, h)
+        except CalibError:
+            pass  # keep the first answer
+    return found
+
+
+def area_mean(raw, w, xr, yr):
+    """Mean [r, g, b] of columns xr and rows yr of an RGB image w pixels wide."""
+    acc, n = [0, 0, 0], 0
+    for y in range(*yr):
+        for i in range((y * w + xr[0]) * 3, (y * w + xr[1]) * 3, 3):
+            acc[0] += raw[i]
+            acc[1] += raw[i + 1]
+            acc[2] += raw[i + 2]
+            n += 1
+    return [v / n for v in acc]
+
+
+def hud_guess(raw, w, found):
+    """The tool's guess for one frame: (shown or hidden, why), from whether the found bars have their usual colour
+    there. A bar's colour may change (health turning red), so one bar may be missing and it still counts."""
+    y0, y1 = found["rows"]
+    here = sum(same_hue(area_mean(raw, w, xr, (y0, y1)), from_grey(ref), math.hypot(*from_grey(ref)))
+               for xr, ref in zip(found["bars"], found["colours"]))
+    n = len(found["bars"])
+    if here >= max(2, n - 1):
+        return "shown", f"{here} of {n} minimap bars found"
+    return "hidden", "no minimap bars: map, cutscene or menu?" if here == 0 else f"only {here} of {n} minimap bars found"
+
+
+def label_summary(frames):
+    """How the labels Measure used came about: tool's guess kept, guess changed, not sure, or no guess."""
+    out = {}
+    for k in REAL:
+        s = {"guess_kept": 0, "guess_changed": 0, "not_sure": 0, "no_guess": 0}
+        for f in frames:
+            v, g = f["labels"].get(k), (f.get("suggest") or {}).get(k)
+            if v is None:
+                continue
+            s["not_sure" if v == "?" else "no_guess" if g is None else "guess_kept" if v == g else "guess_changed"] += 1
+        out[k] = s
+    return out
 
 
 # --- Limits ---
@@ -445,7 +602,78 @@ class Session:
                                         "time": clip.hms(t), "w": size[0], "h": size[1],
                                         "labels": {"hud": None, "stars": None, "phone": None}})
             print(f"  {fid}: {video.name} {clip.hms(t)}")
+        self.ensure_guesses()
         self.save()
+
+    def is_black(self, png):
+        out = subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(png), "-vf",
+                              "scale=160:90:flags=area,format=gray", "-f", "rawvideo", "-"], capture_output=True)
+        raw = out.stdout
+        if out.returncode != 0 or not raw:
+            raise CalibError(f"couldn't read {png}: " + out.stderr.decode("utf-8", "replace").strip()[-300:])
+        return sum(v < BLACK_LEVEL for v in raw) >= BLACK_SHARE * len(raw)
+
+    def ensure_guesses(self):
+        """The tool's first guesses for frames that have none: a black screen is HUD hidden, no stars, no phone;
+        otherwise stars and phone start at "no" (most frames show neither) and HUD waits for the bars (find_bars).
+        Guesses are only shown: Measure uses a label once it's confirmed on the page ("Looks right" or a click)."""
+        for f in self.data["frames"]:
+            if "suggest" not in f:
+                f["black"] = self.is_black(self.dir / "frames" / f"{f['id']}.png")
+                f["suggest"] = ({"hud": "hidden", "stars": "no", "phone": "no", "why": "black screen"} if f["black"]
+                                else {"hud": None, "stars": "no", "phone": "no", "why": ""})
+
+    def read_area(self, frames, rect):
+        """rect [x, y, w, h] of each frame, from the video, with the same range handling as clip.py's filter chain."""
+        x, y, w, h = rect
+
+        def one(f):
+            k = (f["id"], "area", tuple(rect))
+            if k not in self.cache:
+                info = self.data["videos"][f["video"]]
+                conv = "in_color_matrix=bt709:in_range=tv:" if range_fix(info) else ""
+                out = subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{f['time_s']:.3f}",
+                                      "-i", f["video"], "-frames:v", "1", "-vf",
+                                      f"crop={w}:{h}:{x}:{y},scale={w}:{h}:{conv}out_range=pc,format=rgb24",
+                                      "-f", "rawvideo", "-"], capture_output=True)
+                if out.returncode != 0 or len(out.stdout) != w * h * 3:
+                    raise CalibError(f"couldn't read frame {f['id']} ({f['video_name']} {f['time']}): "
+                                     + out.stderr.decode("utf-8", "replace").strip()[-300:])
+                self.cache[k] = out.stdout
+            return self.cache[k]
+        with ThreadPoolExecutor(WORKERS) as pool:
+            return dict(zip((f["id"] for f in frames), pool.map(one, frames)))
+
+    def find_bars(self, rect):
+        """Find the bars inside one rough box (find_strips) and guess HUD shown or hidden on every frame.
+        The bars are found from the frames confirmed "HUD shown" when there are 3 or more, else from every frame
+        not black and not confirmed hidden (the HUD must then be on most of them). Returns a message for the page."""
+        fw, fh = self.frame_size() or (1920, 1080)
+        x0, y0 = max(0, round(rect[0])), max(0, round(rect[1]))
+        x1, y1 = min(fw, round(rect[0] + rect[2])), min(fh, round(rect[1] + rect[3]))
+        if x1 - x0 < 12 or y1 - y0 < 3:
+            raise CalibError("that box is too small: draw it round all the coloured bars under the minimap, with a "
+                             "little space round them")
+        if (x1 - x0) * (y1 - y0) > BAR_MAX_AREA:
+            raise CalibError("that box is very big: draw it closer round the coloured bars under the minimap (a "
+                             "little space round them is fine)")
+        area = [x0, y0, x1 - x0, y1 - y0]
+        frames = self.data["frames"]
+        sure = [f for f in frames if f["labels"].get("hud") == "shown"]
+        use = sure if len(sure) >= 3 else [f for f in frames if not f.get("black") and f["labels"].get("hud") != "hidden"]
+        raws = self.read_area(frames, area)
+        found = find_bars_in([raws[f["id"]] for f in use], area[2], area[3])
+        r0, r1 = found["rows"]
+        self.data["drawing"]["bars"] = [{"box": [x0 + a, y0 + r0, b - a, r1 - r0], "auto": True} for a, b in found["bars"]]
+        self.data["drawing"]["bar_area"] = area
+        for f in frames:
+            if not f.get("black"):
+                f["suggest"]["hud"], f["suggest"]["why"] = hud_guess(raws[f["id"]], area[2], found)
+        shown = sum(f["suggest"]["hud"] == "shown" for f in frames)
+        self.event("find_bars", area=area, bars=len(found["bars"]), frames_used=len(use))
+        self.save()
+        return (f"Found {len(found['bars'])} bars ({', '.join(found['names'])}) in one row, from {len(use)} pictures. "
+                f"The tool's guess: HUD shown on {shown} pictures, hidden on {len(frames) - shown}.")
 
     def frame_size(self):
         sizes = {(f["w"], f["h"]) for f in self.data["frames"]}
@@ -481,9 +709,9 @@ class Session:
         if "minimap" in problems:
             raise CalibError("minimap bars: " + problems["minimap"])
         gprof = load(geom, cand / f"{self.name}.json")
-        frames = [f for f in d["frames"] if any(v is not None for v in f["labels"].values())]
+        frames = [f for f in d["frames"] if any(f["labels"].get(k) in v for k, v in REAL.items())]
         if not frames:
-            raise CalibError("tick what at least some frames show (step 1)")
+            raise CalibError("confirm what at least some pictures show (step 2)")
         raws = self.grab(frames, gprof, json.dumps(geom, sort_keys=True))
         ov = d.get("overrides") or {}
         lab = {f["id"]: f["labels"] for f in frames}
@@ -643,7 +871,7 @@ class Session:
     def save_profile(self, force_with_problems):
         report, prof = self.measure()
         if not report["can_save"]:
-            raise CalibError("not ready to save: " + ("type the game's name (step 1); " if not self.data.get("game")
+            raise CalibError("not ready to save: " + ("type the game's name (step 2); " if not self.data.get("game")
                                                        else "") + "fix the rules marked Problem first")
         if not report["clean"] and not force_with_problems:
             raise CalibError("some frames still come out wrong or a limit is one-sided; press 'Save anyway' to keep it")
@@ -651,6 +879,7 @@ class Session:
         if out.exists():
             raise CalibError(f"{out} already exists; calibrate.py never overwrites a profile. Pick another name")
         log = self.data["log"]
+        bars = self.data["drawing"].get("bars") or []
         opened = next((e["time"] for e in log if e["event"] == "page_opened"), None)
         saved = now()
         prof["notes"] = (f"Made by calibrate.py on {saved[:10]} from {len(report['frames'])} labelled frames of "
@@ -661,6 +890,9 @@ class Session:
                                "set_by_hand": sorted(self.data.get("overrides") or {}),
                                "inherited": report["inherited"],
                                "status": {k: v["status"] for k, v in report["rules"].items()},
+                               "bars": ("found by the tool from one rough box" if bars and all(b.get("auto") for b in bars)
+                                        else "drawn by hand"),
+                               "labels": label_summary(self.data["frames"]),
                                "page_opened": opened, "saved": saved}
         clean = json.loads(json.dumps(prof))
         for sec in ("stars", "phone"):
@@ -745,7 +977,7 @@ def serve(session, port, browser):
                 return
             try:
                 with session.lock:
-                    if self.path in ("/state", "/measure", "/save"):
+                    if self.path in ("/state", "/measure", "/save", "/findbars"):
                         for k in ("drawing", "overrides", "game"):
                             if k in body:
                                 session.data[k] = body[k]
@@ -761,6 +993,13 @@ def serve(session, port, browser):
                         session.data["last_report"] = report
                         session.save()
                         self.send(200, report)
+                    elif self.path == "/findbars":
+                        rect = body.get("rect")
+                        if not (isinstance(rect, list) and len(rect) == 4):
+                            raise CalibError("draw a box round the bars first")
+                        message = session.find_bars(rect)
+                        self.send(200, {"message": message, "drawing": session.data["drawing"],
+                                        "frames": session.data["frames"]})
                     elif self.path == "/check":  # the drawing's problems, while drawing (nothing is read or kept)
                         _, notes = geometry_profile(session.name, "", session.frame_size() or (1920, 1080),
                                                     body.get("drawing") or {})
@@ -810,6 +1049,9 @@ def main():
                 raise CalibError("--add needs a video and at least one time")
             print(f"Grabbing frames from {group[0]} ...")
             session.add(group[0], group[1:])
+        if session.data["frames"]:
+            session.ensure_guesses()  # sessions started before the label guesses
+            session.save()
     except CalibError as e:
         sys.exit("ERROR: " + str(e))
     if not session.data["frames"]:

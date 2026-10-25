@@ -1,9 +1,12 @@
-"""Unit checks for calibrate.py on made-up numbers, and one end-to-end run on a made-up video.
+"""Unit checks for calibrate.py on made-up numbers and made-up HUDs, and two end-to-end runs on a made-up video.
 
 No GTA V value is used here: the stars, bars and phone are invented, so these checks can't leak gta5's numbers
-into a re-calibration. The end-to-end check builds a 12 s 640x360 video with ffmpeg (two coloured bars and a
-dark/bright/grey "phone" that come and go over a moving test pattern), labels 8 frames, draws the boxes, measures,
-saves, and loads the result with clip.py. It works in a temporary folder; profiles/ is not touched.
+into a re-calibration. The bar finder is checked on 25 invented HUD layouts (2-4 bars, 3-10 px thick, any
+height and colours, with or without a see-through edge, see-through bars, a bar that drains) mixed with frames
+without the HUD. The end-to-end checks build a 12 s 640x360 video with ffmpeg (two coloured bars and a
+dark/bright/grey "phone" that come and go over random colour blocks that change every frame, then a black
+screen): one draws the bars by hand, the other finds them from one rough box and confirms the tool's guesses;
+both measure, save and load the result with clip.py. They work in a temporary folder; profiles/ is not touched.
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error), so a
 missing function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL; exit code 0 or 1.
@@ -13,6 +16,7 @@ Usage:  python calibtest.py
 
 import json
 import math
+import random
 import shutil
 import subprocess
 import sys
@@ -252,25 +256,192 @@ def rules_switched_off():
     return not notes and not p.stars_on and not p.phone_on
 
 
+def hsv(h, s, v):
+    """RGB 0-255 from hue (degrees), saturation and value (0-1)."""
+    c = v * s
+    x = c * (1 - abs((h / 60) % 2 - 1))
+    r, g, b = [(c, x, 0), (x, c, 0), (0, c, x), (0, x, c), (x, 0, c), (c, 0, x)][int(h // 60) % 6]
+    return [round((t + v - c) * 255) for t in (r, g, b)]
+
+
+def made_up_hud(seed, w=160, h=40, shown=14, hidden=5):
+    """Frames (RGB bytes, w x h) of an invented HUD: 2-4 coloured bars in one row, 3-10 px thick, at a random
+    height, maybe with a see-through dark edge round them, maybe see-through themselves, maybe one bar part-empty
+    on some frames; over a random blocky scene that changes every frame. Plus frames with the scene only.
+    Returns (frames with the HUD, frames without, true rows (y0, y1), true bars [(x0, x1)])."""
+    rng = random.Random(seed)
+    thick = rng.randint(3, 10)
+    y0 = rng.randint(6, h - thick - 6)
+    k = rng.randint(2, 4)
+    hue0 = rng.uniform(0, 360)
+    hues = [(hue0 + i * 360 / k + rng.uniform(-15, 15)) % 360 for i in range(k)]
+    x, bars = rng.randint(4, 14), []
+    for _ in range(k):
+        bw = rng.randint(14, max(15, (w - 30) // k - 6))
+        bars.append((x, x + bw))
+        x += bw + rng.randint(2, 6)
+    colours = [hsv(hu, rng.uniform(0.55, 0.95), rng.uniform(0.5, 0.9)) for hu in hues]
+    edge, alpha, part_empty = rng.random() < 0.6, rng.choice([1.0, 1.0, 0.85]), rng.random() < 0.5
+
+    def frame(with_hud):
+        cell = rng.choice([4, 8, 16])
+        light = rng.uniform(0.15, 1.0)
+        # the first bar drains from the right on 30 % of frames (like health or a special ability running down)
+        fill = rng.uniform(0.3, 0.9) if part_empty and rng.random() < 0.3 else 1.0
+        blocks = {}
+        px = bytearray(w * h * 3)
+        for yy in range(h):
+            for xx in range(w):
+                key = (xx // cell, yy // cell)
+                if key not in blocks:
+                    blocks[key] = hsv(rng.uniform(0, 360), rng.uniform(0, 0.8), rng.uniform(0.1, 1.0) * light)
+                c = [min(255, max(0, v + rng.randint(-6, 6))) for v in blocks[key]]
+                if with_hud:
+                    if edge and bars[0][0] - 2 <= xx < bars[-1][1] + 2 and y0 - 3 <= yy < y0 + thick + 3:
+                        c = [round(v * 0.35) for v in c]
+                    for i, (a, b) in enumerate(bars):
+                        if a <= xx < b and y0 <= yy < y0 + thick:
+                            full = colours[i]
+                            if i == 0 and xx >= a + (b - a) * fill:
+                                full = [round(v * 0.35) for v in full]  # the empty part of a bar
+                            bright = 1 + rng.uniform(-0.08, 0.08)
+                            c = [min(255, round((alpha * f * bright + (1 - alpha) * v))) for f, v in zip(full, c)]
+                px[(yy * w + xx) * 3:(yy * w + xx) * 3 + 3] = bytes(c)
+        return bytes(px)
+    return [frame(True) for _ in range(shown)], [frame(False) for _ in range(hidden)], (y0, y0 + thick), bars
+
+
+@check
+def bars_found_on_made_up_huds():
+    """on 25 invented HUD layouts, mixed with frames without the HUD, find_strips finds every bar, inside the bar,
+    on rows inside the bars (at most an edge row lost each side)"""
+    bad = []
+    for seed in range(25):
+        with_hud, without, (y0, y1), bars = made_up_hud(seed)
+        frames = with_hud + without
+        random.Random(seed).shuffle(frames)
+        try:
+            got = cal.find_bars_in(frames, 160, 40)
+        except cal.CalibError as e:
+            bad.append(f"seed {seed}: {e}")
+            continue
+        r0, r1 = got["rows"]
+        rows_ok = y0 <= r0 < r1 <= y1 and r1 - r0 >= (y1 - y0) - 2
+        bars_ok = len(got["bars"]) == len(bars) and all(a <= c < d <= b for (c, d), (a, b) in zip(got["bars"], bars))
+        if not (rows_ok and bars_ok):
+            bad.append(f"seed {seed}: rows {got['rows']} want inside {(y0, y1)}, bars {got['bars']} want inside {bars}")
+    if bad:
+        print("    " + "\n    ".join(bad))
+    return not bad
+
+
+@check
+def no_bars_or_one_bar_is_refused():
+    """a box with only scene in it, or with a single coloured bar, is refused with a plain message"""
+    with_hud, without, _, _ = made_up_hud(3)
+    one = made_up_hud(4)  # keep only its first bar by painting the others over with scene from a frame without the HUD
+    w, h = 160, 40
+    first_end = one[3][0][1]
+    single = []
+    for fr, bg in zip(one[0], one[1] * 3):
+        px = bytearray(fr)
+        for yy in range(h):
+            px[(yy * w + first_end) * 3:(yy * w + w) * 3] = bg[(yy * w + first_end) * 3:(yy * w + w) * 3]
+        single.append(bytes(px))
+    return ("no coloured bars" in refused_with(cal.find_strips, without * 3, w, h)
+            and "only one coloured bar" in refused_with(cal.find_strips, single, w, h))
+
+
+@check
+def hud_guess_from_the_found_bars():
+    """the tool's guess is 'shown' on frames with the invented HUD and 'hidden' on frames without it"""
+    with_hud, without, _, _ = made_up_hud(7)
+    found = cal.find_bars_in(with_hud + without, 160, 40)
+    return (all(cal.hud_guess(f, 160, found)[0] == "shown" for f in with_hud)
+            and all(cal.hud_guess(f, 160, found)[0] == "hidden" for f in without))
+
+
+@check
+def label_summary_counts_guesses():
+    """kept, changed, not sure and no-guess labels are counted per question"""
+    frames = [{"labels": {"hud": "shown", "stars": "no", "phone": "?"}, "suggest": {"hud": "shown", "stars": "no", "phone": "no"}},
+              {"labels": {"hud": "hidden", "stars": "yes", "phone": None}, "suggest": {"hud": "shown", "stars": "no", "phone": "no"}},
+              {"labels": {"hud": "shown", "stars": None, "phone": None}, "suggest": {"hud": None, "stars": "no", "phone": "no"}}]
+    s = cal.label_summary(frames)
+    return (s["hud"] == {"guess_kept": 1, "guess_changed": 1, "not_sure": 0, "no_guess": 1}
+            and s["stars"] == {"guess_kept": 1, "guess_changed": 1, "not_sure": 0, "no_guess": 0}
+            and s["phone"] == {"guess_kept": 0, "guess_changed": 0, "not_sure": 1, "no_guess": 0})
+
+
 def made_up_video(path):
-    """12 s, 640x360: two bars (green, blue) and a phone (dark face, bright icon, grey panel) over testsrc2.
-    Shown 0-3 s and 6-9 s (phone 0-3 s only); 3-6 s and 9-12 s neither (stands in for a menu)."""
+    """12 s, 640x360: two bars (green, blue) and a phone (dark face, bright icon, grey panel) over a scene of random
+    20 px colour blocks that changes every frame (a still test pattern would have coloured columns that never move,
+    which nothing in a game does). Shown 0-3 s and 6-9 s (phone 0-3 s only); 3-6 s and 9-10.8 s neither (stands in
+    for a menu); 10.8-12 s a black screen."""
     on = "between(t,0,3)+between(t,6,9)"
     ph = "between(t,0,3)"
-    vf = (f"drawbox=x=20:y=298:w=64:h=8:color=0x20c040:t=fill:enable='{on}',"
+    vf = ("scale=640:360:flags=neighbor,"
+          f"drawbox=x=20:y=298:w=64:h=8:color=0x20c040:t=fill:enable='{on}',"
           f"drawbox=x=90:y=298:w=44:h=8:color=0x3070e0:t=fill:enable='{on}',"
           f"drawbox=x=496:y=196:w=112:h=96:color=0x202020:t=fill:enable='{ph}',"
           f"drawbox=x=504:y=200:w=56:h=12:color=0x040404:t=fill:enable='{ph}',"
           f"drawbox=x=560:y=220:w=16:h=8:color=0xe8e8e8:t=fill:enable='{ph}',"
-          f"drawbox=x=504:y=248:w=40:h=24:color=0x5a5a5a:t=fill:enable='{ph}'")
-    subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-                    "testsrc2=size=640x360:rate=30:duration=12", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
-                    "-crf", "16", "-pix_fmt", "yuv420p", str(path)], check=True)
+          f"drawbox=x=504:y=248:w=40:h=24:color=0x5a5a5a:t=fill:enable='{ph}',"
+          "drawbox=x=0:y=0:w=640:h=360:color=black:t=fill:enable='between(t,10.8,12)'")
+    scene = "color=c=gray:s=32x18:r=30:d=12,format=yuv444p,noise=alls=100:allf=t+u"
+    subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", scene,
+                    "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(path)],
+                   check=True)
+
+
+PHONE_DRAWING = {"box": [496, 196, 112, 96], "dark": [506, 202, 50, 8], "bright": [562, 221, 10, 6],
+                 "grey": [[508, 252, 30, 16]]}
+
+
+@check
+def end_to_end_bars_found_and_guesses_confirmed():
+    """made-up video: the black frame is guessed black; one rough box finds both bars on their rows; the HUD guesses
+    match the video; with the guesses confirmed (phone ones changed) Measure gets every frame right, and the saved
+    profile says the bars were found by the tool and how many guesses were kept or changed"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        old = cal.CALIB_ROOT, clip.PROFILE_DIR
+        cal.CALIB_ROOT, clip.PROFILE_DIR = tmp / "calib", tmp / "profiles"
+        try:
+            video = tmp / "made_up.mp4"
+            made_up_video(video)
+            s = cal.Session("made_up")
+            s.add(video, ["0:01", "1.5", "2.5", "4", "5", "7", "8", "10.5", "11.5"])
+            frames = s.data["frames"]
+            black_ok = [f["black"] for f in frames] == [False] * 8 + [True]
+            s.find_bars([10, 284, 140, 34])
+            bars = [b["box"] for b in s.data["drawing"]["bars"]]
+            bars_ok = (len(bars) == 2 and all(298 <= b[1] and b[1] + b[3] <= 306 for b in bars)
+                       and 20 <= bars[0][0] and bars[0][0] + bars[0][2] <= 84
+                       and 90 <= bars[1][0] and bars[1][0] + bars[1][2] <= 134)
+            want = {f["id"]: "shown" if f["time_s"] < 3 or 6 <= f["time_s"] < 9 else "hidden" for f in frames}
+            guesses_ok = all(f["suggest"]["hud"] == want[f["id"]] for f in frames)
+            for f in frames:  # "Looks right" on every picture, then the 3 phone calls changed to "yes"
+                f["labels"] = {k: f["suggest"][k] for k in ("hud", "stars", "phone")}
+                if f["time_s"] < 3:
+                    f["labels"]["phone"] = "yes"
+            s.data["game"] = "Made Up"
+            s.data["drawing"].update({"stars": {"off": True}, "phone": dict(PHONE_DRAWING)})
+            report, _ = s.measure()
+            frames_right = all(x["want"][k] == x["got"][k] for x in report["frames"] for k in ("hud", "phone"))
+            out, _ = s.save_profile(force_with_problems=True)
+            cal_block = json.loads(out.read_text(encoding="utf-8"))["calibration"]
+        finally:
+            cal.CALIB_ROOT, clip.PROFILE_DIR = old
+    labels = cal_block["labels"]
+    return (black_ok and bars_ok and guesses_ok and frames_right and cal_block["bars"].startswith("found by the tool")
+            and labels["hud"]["guess_kept"] == 9 and labels["phone"] == {"guess_kept": 6, "guess_changed": 3,
+                                                                         "not_sure": 0, "no_guess": 0})
 
 
 @check
 def end_to_end_on_a_made_up_video():
-    """add 8 frames, label, draw, measure (bars and phone ready, every frame right), save, clip.py loads it"""
+    """add 8 frames, label, draw the bars by hand, measure (bars and phone ready, every frame right), save, clip.py loads it"""
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         old = cal.CALIB_ROOT, clip.PROFILE_DIR
@@ -286,8 +457,7 @@ def end_to_end_on_a_made_up_video():
                 f["labels"] = {"hud": "shown" if shown else "hidden", "stars": None, "phone": "yes" if t < 3 else "no"}
             s.data["game"] = "Made Up"
             s.data["drawing"] = {"bars": [{"box": [24, 300, 56, 4]}, {"box": [94, 300, 36, 4]}], "stars": {"off": True},
-                                 "phone": {"box": [496, 196, 112, 96], "dark": [506, 202, 50, 8], "bright": [562, 221, 10, 6],
-                                           "grey": [[508, 252, 30, 16]]}}
+                                 "phone": dict(PHONE_DRAWING)}
             report, _ = s.measure()
             frames_right = all(x["want"][k] == x["got"][k] for x in report["frames"] for k in ("hud", "phone"))
             statuses = {k: v["status"] for k, v in report["rules"].items()}

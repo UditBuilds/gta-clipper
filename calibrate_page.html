@@ -37,6 +37,11 @@ input[type=text], input[type=number] { font:inherit; color:var(--text); backgrou
 .seg button:first-child { border-radius:5px 0 0 5px; } .seg button:last-child { border-radius:0 5px 5px 0; }
 .seg button.on.y { background:#14532d; border-color:var(--ok); } .seg button.on.n { background:#3b1515; border-color:var(--bad); }
 .seg button.on.u { background:#262b35; }
+.seg button.guess { border:1px dashed var(--warn); color:#fde68a; }
+.card.todo { border-color:var(--warn); box-shadow:inset 3px 0 0 var(--warn); }
+.card .why { font-size:13px; color:#fde68a; margin:2px 0 4px; }
+.card .done { color:var(--ok); font-size:13px; }
+button.act.small { padding:3px 12px; font-size:14px; }
 .counts { display:flex; flex-wrap:wrap; gap:6px 16px; margin:8px 0 12px; font-size:14px; }
 .counts .need { color:var(--warn); }
 .ws { display:grid; grid-template-columns:minmax(0, 1fr) 300px; gap:14px; align-items:start; }
@@ -73,9 +78,11 @@ label.chk { display:flex; gap:8px; align-items:center; margin:10px 0; }
 <div id="lightbox"><img alt="frame, full size"></div>
 <script>
 "use strict";
-const S = {data:null, step:1, frame:{2:null,3:null,4:null}, view:null, tool:{2:"stars.box",3:"bars.add",4:"phone.box"},
-           img:{}, drag:null, pan:null, report:null, changed:true, busy:false, error:null, saved:null, hint:null, notes:null};
-const STEPS = ["Label the pictures", "Wanted stars", "Minimap bars", "Phone call screen", "Measure", "Save"];
+const S = {data:null, step:1, frame:{1:null,3:null,4:null}, view:null, tool:{1:"bars.area",3:"stars.box",4:"phone.box"},
+           img:{}, drag:null, pan:null, report:null, changed:true, busy:false, error:null, saved:null, hint:null, notes:null,
+           manualBars:false, finding:false, findMsg:null};
+// Bars come first: once they are found, the tool can guess "HUD shown or hidden" for every picture in step 2.
+const STEPS = ["Minimap bars", "Label the pictures", "Wanted stars", "Phone call screen", "Measure", "Save"];
 const SIN54 = Math.sin(54 * Math.PI / 180);
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -115,11 +122,12 @@ function counts() {
   for (const f of S.data.frames) for (const k of ["hud","stars","phone"]) { const v = f.labels[k]; if (v && c[k][v] !== undefined) c[k][v]++; }
   return c;
 }
+const unchecked = f => ["hud","stars","phone"].some(k => f.labels[k] == null);
 function stepDone(n) {
   const d = S.data.drawing, c = counts();
-  if (n === 1) return !!S.data.game && c.hud.shown >= 1 && c.hud.hidden >= 1;
-  if (n === 2) return d.stars.off || (d.stars.box && d.stars.slots && ["top_first","top_last","low","inner"].every(k => d.stars.clicks && d.stars.clicks[k]));
-  if (n === 3) return (d.bars || []).length >= 2;
+  if (n === 1) return (d.bars || []).length >= 2;
+  if (n === 2) return !!S.data.game && c.hud.shown >= 1 && c.hud.hidden >= 1 && !S.data.frames.some(unchecked);
+  if (n === 3) return d.stars.off || (d.stars.box && d.stars.slots && ["top_first","top_last","low","inner"].every(k => d.stars.clicks && d.stars.clicks[k]));
   if (n === 4) return d.phone.off || (d.phone.box && d.phone.dark && d.phone.bright && (d.phone.grey || []).length >= 1);
   if (n === 5) return !!S.report && !S.changed;
   if (n === 6) return !!S.saved || !!S.data.saved;
@@ -130,41 +138,68 @@ function renderNav() {
   for (const b of $("#nav").querySelectorAll("button")) b.onclick = () => { S.step = +b.dataset.step; render(); };
 }
 
-// ---------- step 1 ----------
+// ---------- step 2: labels ----------
+// A label is null until you confirm it; the tool's guess (f.suggest) is only shown, with a dashed outline.
+// "?" means you're not sure: that picture is then left out of that question.
 function seg(f, key, opts) {
-  return `<span class="seg">` + opts.map(([v, txt, cls]) =>
-    `<button class="${cls} ${f.labels[key] === v ? "on" : ""}" data-f="${f.id}" data-k="${key}" data-v="${v === null ? "" : v}">${txt}</button>`).join("") + `</span>`;
+  const v = f.labels[key], g = (f.suggest || {})[key];
+  return `<span class="seg">` + opts.map(([val, txt, cls]) => {
+    const guess = v == null && g === val;
+    return `<button class="${cls} ${v === val ? "on" : ""} ${guess ? "guess" : ""}" data-f="${f.id}" data-k="${key}" data-v="${val}"
+      ${guess ? `title="The tool's guess. Press Looks right, or click it, to confirm."` : ""}>${txt}</button>`;
+  }).join("") + `</span>`;
+}
+function changedGuess(f) {
+  return ["hud","stars","phone"].some(k => f.labels[k] != null && f.labels[k] !== "?" && (f.suggest || {})[k] != null && f.labels[k] !== f.suggest[k]);
+}
+function looksRight(f) {
+  for (const k of ["hud","stars","phone"]) if (f.labels[k] == null && (f.suggest || {})[k] != null) f.labels[k] = f.suggest[k];
 }
 function renderLabels() {
-  const c = counts();
+  const c = counts(), left = S.data.frames.filter(unchecked).length;
   const need = (n, min, txt) => `<span class="${n < min ? "need" : ""}">${txt}: ${n}${n < min ? ` (aim for ${min}+)` : ""}</span>`;
-  $("#main").innerHTML = `<h2>Step 1. Label the pictures</h2>
-  <div class="howto">Each picture is one moment from your video. For each one, tick what you can <b>see</b>.
+  const noHudGuess = !S.data.frames.some(f => !f.black && (f.suggest || {}).hud);
+  $("#main").innerHTML = `<h2>Step 2. Label the pictures</h2>
+  <div class="howto">The tool has <b>guessed</b> what each picture shows. A guess has a <b>dashed yellow</b> outline. Look at each picture (click it to see it big) and:
   <ul>
-   <li><b>HUD: shown</b> when the minimap and the coloured bars next to it are on screen. <b>hidden</b> when they're gone:
-     pause menu, map, cutscene, shop or other menu, loading screen.</li>
-   <li><b>Wanted stars: yes</b> when the row of wanted stars is on screen, even if most are empty, one is filled or they flash.
-     <b>no</b> when the row isn't there, also when ammo or money text sits where the stars would be.</li>
-   <li><b>Phone call: yes</b> when the phone's call screen is up. <b>no</b> when it isn't.</li>
-   <li>Not sure? Leave it on <b>?</b>. That picture is then left out of that question, which is better than a wrong tick.</li>
-   <li>Click a picture to see it full size (click again to close).</li>
+   <li>Every guess on it right? Press <b>Looks right</b>.</li>
+   <li>One wrong? Click the right answer. That confirms it too.</li>
+   <li>Not sure? Click <b>not sure</b>. That picture is then left out of that question, which is better than a wrong answer.</li>
   </ul>
-  Every tick is kept as you go. Then type the game's name below and go to step 2.</div>
+  What the answers mean:
+  <ul>
+   <li><b>HUD shown</b>: the small minimap and its coloured bars are on screen. <b>hidden</b>: they're gone (pause menu, <b>full-screen map</b>, cutscene, shop, loading or black screen).
+     The big full-screen map is <b>not</b> the minimap. The tool guesses this from the bars it found in step 1.</li>
+   <li><b>Wanted stars yes</b>: the row of wanted stars is on screen, even if most are empty, one is filled or they flash.
+     <b>no</b> when the row isn't there, also when ammo or money numbers sit where the stars would be.</li>
+   <li><b>Phone call yes</b>: the phone's call screen is up.</li>
+   <li>Stars and phone start as "no". Click <b>yes</b> on the pictures that have them.</li>
+  </ul>
+  Only answers you confirmed are used. The saved profile records how many guesses you kept or changed. Then type the game's name below.</div>
+  ${noHudGuess ? `<div class="msg info">No HUD guesses yet: do step 1 first (find the bars). Until then, tick HUD yourself.</div>` : ""}
   <div class="row"><span class="k">Game name</span><input type="text" id="game" placeholder="e.g. GTA 6" value="${esc(S.data.game || "")}">
    <span class="muted">used in clip.py's messages, e.g. "no GTA 6 minimap found"</span></div>
-  <div class="counts">${need(c.hud.shown, 3, "HUD shown")}${need(c.hud.hidden, 2, "HUD hidden")}${need(c.stars.yes, 2, "stars yes")}
+  <div class="counts"><span class="${left ? "need" : ""}">Checked: ${S.data.frames.length - left} of ${S.data.frames.length} pictures</span>
+   ${need(c.hud.shown, 3, "HUD shown")}${need(c.hud.hidden, 2, "HUD hidden")}${need(c.stars.yes, 2, "stars yes")}
    ${need(c.stars.no, 2, "stars no")}${need(c.phone.yes, 2, "phone yes")}${need(c.phone.no, 2, "phone no")}</div>
-  <div class="grid">${S.data.frames.map(f => `<div class="card"><img src="/frame/${f.id}.png" data-id="${f.id}" alt="${esc(f.video_name)} ${f.time}" loading="lazy">
+  <div class="grid">${S.data.frames.map(f => `<div class="card ${unchecked(f) ? "todo" : ""}"><img src="/frame/${f.id}.png" data-id="${f.id}" alt="${esc(f.video_name)} ${f.time}" loading="lazy">
    <div class="body"><b>${f.id}</b> <span class="muted">${esc(f.video_name)} ${f.time}</span>
-   <div class="row"><span class="k">HUD</span>${seg(f, "hud", [["shown","shown","y"],["hidden","hidden","n"],[null,"?","u"]])}</div>
-   <div class="row"><span class="k">Wanted stars</span>${seg(f, "stars", [["yes","yes","y"],["no","no","n"],[null,"?","u"]])}</div>
-   <div class="row"><span class="k">Phone call</span>${seg(f, "phone", [["yes","yes","y"],["no","no","n"],[null,"?","u"]])}</div>
+   ${(f.suggest || {}).why ? `<div class="why">Tool's guess: ${esc(f.suggest.why)}</div>` : ""}
+   <div class="row"><span class="k">HUD</span>${seg(f, "hud", [["shown","shown","y"],["hidden","hidden","n"],["?","not sure","u"]])}</div>
+   <div class="row"><span class="k">Wanted stars</span>${seg(f, "stars", [["yes","yes","y"],["no","no","n"],["?","not sure","u"]])}</div>
+   <div class="row"><span class="k">Phone call</span>${seg(f, "phone", [["yes","yes","y"],["no","no","n"],["?","not sure","u"]])}</div>
+   <div class="row">${unchecked(f) ? `<button class="act small" data-ok="${f.id}">Looks right</button>`
+     + (["hud","stars","phone"].some(k => f.labels[k] == null && (f.suggest || {})[k] == null) ? ` <span class="muted">(tick HUD yourself: no guess yet)</span>` : "")
+     : `<span class="done">✔ checked</span>`}${changedGuess(f) ? ` <span class="muted">you changed the tool's guess</span>` : ""}</div>
    </div></div>`).join("")}</div>`;
   $("#game").oninput = e => { S.data.game = e.target.value.trim(); changed(); renderNav(); };
   for (const b of document.querySelectorAll(".seg button")) b.onclick = () => {
     const f = S.data.frames.find(x => x.id === b.dataset.f);
-    f.labels[b.dataset.k] = b.dataset.v || null;
+    f.labels[b.dataset.k] = b.dataset.v;
     changed(); render();
+  };
+  for (const b of document.querySelectorAll("[data-ok]")) b.onclick = () => {
+    looksRight(S.data.frames.find(x => x.id === b.dataset.ok)); changed(); render();
   };
   for (const im of document.querySelectorAll(".card img")) im.onclick = () => {
     const lb = $("#lightbox"); $("img", lb).src = im.src; lb.style.display = "grid";
@@ -172,24 +207,27 @@ function renderLabels() {
 }
 
 // ---------- drawing steps ----------
+const BARS_AUTO = [{id:"bars.area", kind:"box", label:"Rough box round the bars",
+  help:"Drag <b>one</b> box round <b>all</b> the coloured bars under the minimap, with a little space round them. It doesn't need to be exact: the tool finds the bars inside it."}];
 const TOOLS = {
-  2: [{id:"stars.box", kind:"box", label:"Box around the star row",
+  1: [{id:"bars.add", kind:"box", label:"Add a bar box",
+       help:"Drag a box <b>inside</b> one coloured bar. Stay off its edges and off the background. Do this for each bar (at least 2)."}],
+  3: [{id:"stars.box", kind:"box", label:"Box around the star row",
        help:"Drag a box around the <b>whole star row</b>, including the stars' <b>top points</b>: every star slot, filled or empty, with a little space round them. Not much more: other things in the box (ammo or money numbers) confuse it."},
       {id:"stars.top_first", kind:"point", label:"1. First star: top point", help:"Click the <b>very top point</b> of the <b>first</b> (leftmost) star. Not its middle: the tip."},
       {id:"stars.top_last", kind:"point", label:"2. Last star: top point", help:"Click the <b>very top point</b> of the <b>last</b> (rightmost) star slot, even if it's empty."},
       {id:"stars.low", kind:"point", label:"3. First star: lowest point", help:"Click the <b>lowest point</b> of the <b>first</b> star: one of its two bottom tips."},
       {id:"stars.inner", kind:"point", label:"4. First star: inner corner", help:"Click one <b>inner corner</b> of the <b>first</b> star: a notch between two of its points, where the edge turns inwards."}],
-  3: [{id:"bars.add", kind:"box", label:"Add a bar box",
-       help:"Drag a box <b>inside</b> one coloured bar. Stay off its edges and off the background. Do this for each bar (at least 2)."}],
   4: [{id:"phone.box", kind:"box", label:"Phone box", help:"Drag a box over the <b>top part of the phone</b>: from its dark face, past the row of status icons, down to the grey call panel."},
       {id:"phone.dark", kind:"box", label:"Dark area", help:"Inside the phone box, drag a box over a part that is <b>black on every call</b> (e.g. the phone face above the status icons)."},
       {id:"phone.bright", kind:"box", label:"Bright area", help:"Drag a small box over a <b>bright icon that is always there</b> (e.g. the battery)."},
       {id:"phone.grey", kind:"box", label:"Add a grey area", help:"Drag a box over a <b>plain grey part</b> of the call panel, away from names, logos and buttons. One or two."}]
 };
+const toolsFor = step => step === 1 && !S.manualBars ? BARS_AUTO : TOOLS[step];
 function framesFor(step) {
-  const key = {2:["stars","yes"], 3:["hud","shown"], 4:["phone","yes"]}[step];
-  const good = S.data.frames.filter(f => f.labels[key[0]] === key[1]);
-  return good.length ? good : S.data.frames;
+  const key = {1:["hud","shown"], 3:["stars","yes"], 4:["phone","yes"]}[step];
+  const good = S.data.frames.filter(f => f.labels[key[0]] === key[1]), lit = S.data.frames.filter(f => !f.black);
+  return good.length ? good : lit.length ? lit : S.data.frames;
 }
 function getImg(id) {
   if (!S.img[id]) { const im = new Image(); im.src = `/frame/${id}.png`; im.onload = () => drawWs(); S.img[id] = im; }
@@ -217,14 +255,15 @@ function shapes(step) {
   const box = (b, col, txt, dash) => b && out.push({t:"box", b, col, txt, dash});
   const pt = (p, col, txt) => p && out.push({t:"pt", p, col, txt});
   const snap = S.report && !S.changed ? S.report.snapped : null;
-  if (step === 2) {
+  if (step === 3) {
     box(d.stars.box, "#facc15", "star row");
     const c = d.stars.clicks || {};
     pt(c.top_first, "#22d3ee", "1"); pt(c.top_last, "#22d3ee", "2"); pt(c.low, "#22d3ee", "3"); pt(c.inner, "#22d3ee", "4");
     const o = starOutline(d.stars); if (o) out.push({t:"stars", o});
-  } else if (step === 3) {
+  } else if (step === 1) {
+    if (!S.manualBars) box(d.bar_area, "#facc15", "your rough box", true);
     (d.bars || []).forEach((b, i) => box(b.box, "#fb923c", "bar " + (i + 1)));
-    box(rowsRead(d.bars), "#e5e7eb", "rows read", true);
+    box(rowsRead(d.bars), "#e5e7eb", S.manualBars ? "rows read" : "", true);
   } else if (step === 4) {
     box(d.phone.box, "#facc15", "phone"); box(d.phone.dark, "#60a5fa", "dark"); box(d.phone.bright, "#ffffff", "bright");
     (d.phone.grey || []).forEach((b, i) => box(b, "#a3a3a3", "grey " + (i + 1)));
@@ -283,10 +322,12 @@ function rowsRead(bars) {
 function isSet(id) {
   const d = S.data.drawing;
   return id === "stars.box" ? !!d.stars.box : id.startsWith("stars.") ? !!(d.stars.clicks || {})[id.slice(6)]
+    : id === "bars.area" ? !!d.bar_area && (d.bars || []).length >= 2
     : id === "bars.add" ? (d.bars || []).length >= 2 : id === "phone.grey" ? (d.phone.grey || []).length >= 1 : !!d.phone[id.slice(6)];
 }
 function applyShape(toolId, val) {
   const d = S.data.drawing;
+  if (toolId === "bars.area") { findBars(val); return; }
   if (toolId === "stars.box") d.stars.box = val;
   else if (toolId.startsWith("stars.")) { d.stars.clicks = d.stars.clicks || {}; d.stars.clicks[toolId.slice(6)] = val; }
   else if (toolId === "bars.add") { d.bars = d.bars || []; d.bars.push({box:val}); d.bars.sort((a, b) => a.box[0] - b.box[0]); }  // named left to right, as Measure does
@@ -294,7 +335,7 @@ function applyShape(toolId, val) {
   else d.phone[toolId.slice(6)] = val;
   // Move on to the next thing not set yet. Once everything is set, nothing is picked, so a stray click can't move a
   // point you already placed: pick one on the right first to redo it.
-  if (S.step === 2 || S.step === 4) { const next = TOOLS[S.step].find(t => !isSet(t.id)); S.tool[S.step] = next ? next.id : null; }
+  if (S.step === 3 || S.step === 4) { const next = TOOLS[S.step].find(t => !isSet(t.id)); S.tool[S.step] = next ? next.id : null; }
   S.hint = null;
   changed(); renderWsSide(); renderNav(); drawWs();
 }
@@ -303,8 +344,8 @@ function bindCanvas() {
   cv.oncontextmenu = e => e.preventDefault();
   cv.onmousedown = e => {
     if (e.button === 2) { S.pan = {x:e.clientX, y:e.clientY, cx:S.view.cx, cy:S.view.cy}; return; }
-    if (e.button !== 0) return;
-    const tool = TOOLS[S.step].find(t => t.id === S.tool[S.step]), p = toFrame(e);
+    if (e.button !== 0 || S.finding) return;
+    const tool = toolsFor(S.step).find(t => t.id === S.tool[S.step]), p = toFrame(e);
     if (!tool) { S.hint = "Everything here is set, so that click did nothing. To move a box or a point, pick it on the right first, then draw or click again."; renderWsSide(); return; }
     if (tool.kind === "point") applyShape(tool.id, [r1(p[0]), r1(p[1])]);
     else S.drag = {tool:tool.id, a:p, rect:[p[0], p[1], 0, 0]};
@@ -336,23 +377,27 @@ function bindCanvas() {
   };
 }
 function nextText(step, cur) {
-  if (cur) return `${TOOLS[step].length > 1 ? "Next " + (cur.kind === "point" ? "click" : "drag") + " sets" : "Next drag"}: <b>${esc(cur.label)}</b>`;
+  if (cur) return `${toolsFor(step).length > 1 ? "Next " + (cur.kind === "point" ? "click" : "drag") + " sets" : "Next drag"}: <b>${esc(cur.label)}</b>`;
   return "Everything here is set. To redo one, pick it below first.";
 }
 function notesHtml(step) {
-  const part = {2:"stars", 3:"minimap", 4:"phone"}[step], n = S.notes && S.notes[part];
-  if (step === 2 && S.data.drawing.stars.off || step === 4 && S.data.drawing.phone.off) return "";
+  const part = {1:"minimap", 3:"stars", 4:"phone"}[step], n = S.notes && S.notes[part];
+  if (step === 3 && S.data.drawing.stars.off || step === 4 && S.data.drawing.phone.off) return "";
+  if (step === 1 && !S.manualBars) return "";  // the finder's own message says what happened
   return n ? `<div class="msg err">${esc(n.charAt(0).toUpperCase() + n.slice(1))}.</div>`
     : S.notes ? `<div class="msg ok">No problem found in the drawing. Now check it on other pictures from the list.</div>` : "";
 }
 function renderWsSide() {
-  const step = S.step, d = S.data.drawing, tools = TOOLS[step], cur = tools.find(t => t.id === S.tool[step]);
+  const step = S.step, d = S.data.drawing, tools = toolsFor(step), cur = tools.find(t => t.id === S.tool[step]);
   let extra = "";
-  if (step === 2) extra = `<div class="row"><span class="k">Star slots</span><input type="number" id="slots" min="1" max="10" value="${d.stars.slots || ""}" style="width:70px"></div>
+  if (step === 3) extra = `<div class="row"><span class="k">Star slots</span><input type="number" id="slots" min="1" max="10" value="${d.stars.slots || ""}" style="width:70px"></div>
     <p class="muted" style="font-size:13px;margin:0">Count <b>every</b> star position in the row, lit or not. Use a picture where the whole row shows.</p>
-    <label class="chk"><input type="checkbox" id="off2" ${d.stars.off ? "checked" : ""}> Switch the stars rule off (no star row in this game)</label>`;
-  if (step === 3) extra = `<div class="list">${(d.bars || []).map((b, i) => `<div>bar ${i + 1} <button class="plain" data-del="${i}">delete</button></div>`).join("") || "<span class='muted'>No bars yet.</span>"}</div>
-    <p class="muted" style="font-size:13px">Bars are numbered left to right, the same as in Measure. The tool reads only the rows <b>all</b> boxes cover: the dashed "rows read" box. If it is much thinner than your boxes, line them up.</p>`;
+    <label class="chk"><input type="checkbox" id="off3" ${d.stars.off ? "checked" : ""}> Switch the stars rule off (no star row in this game)</label>`;
+  if (step === 1) extra = (S.finding ? `<div class="msg info">Finding the bars in every picture… (a few seconds)</div>`
+      : S.findMsg ? `<div class="msg ${S.findMsg.ok ? "ok" : "err"}">${esc(S.findMsg.text)}</div>` : "")
+    + `<div class="list">${(d.bars || []).map((b, i) => `<div>bar ${i + 1}${b.auto ? " <span class='muted'>(found)</span>" : ""} <button class="plain" data-del="${i}">delete</button></div>`).join("") || "<span class='muted'>No bars yet.</span>"}</div>
+    <p class="muted" style="font-size:13px">Bars are numbered left to right, the same as in Measure.${S.manualBars ? ` The tool reads only the rows <b>all</b> boxes cover: the dashed "rows read" box. If it is much thinner than your boxes, line them up.` : ""}</p>
+    <button class="plain" id="manual">${S.manualBars ? "Find them from one rough box instead" : "Draw the bars by hand instead"}</button>`;
   if (step === 4) extra = `<div class="list">${(d.phone.grey || []).map((b, i) => `<div>grey ${i + 1} <button class="plain" data-delg="${i}">delete</button></div>`).join("")}</div>
     <label class="chk"><input type="checkbox" id="off4" ${d.phone.off ? "checked" : ""}> Switch the phone rule off (no call in my footage, or no call screen in this game)</label>`;
   $("#side").innerHTML = `<div class="toolhelp">${nextText(step, cur)}${cur ? "<br>" + cur.help : ""}</div>
@@ -365,24 +410,35 @@ function renderWsSide() {
   for (const b of document.querySelectorAll("[data-del]")) b.onclick = () => { d.bars.splice(+b.dataset.del, 1); changed(); renderWsSide(); renderNav(); drawWs(); };
   for (const b of document.querySelectorAll("[data-delg]")) b.onclick = () => { d.phone.grey.splice(+b.dataset.delg, 1); changed(); renderWsSide(); renderNav(); drawWs(); };
   const sl = $("#slots"); if (sl) sl.oninput = () => { const n = parseInt(sl.value, 10); d.stars.slots = n >= 1 && n <= 10 ? n : null; changed(); renderNav(); drawWs(); };
-  const o2 = $("#off2"); if (o2) o2.onchange = () => { d.stars.off = o2.checked; changed(); renderNav(); };
+  const o3 = $("#off3"); if (o3) o3.onchange = () => { d.stars.off = o3.checked; changed(); renderNav(); };
+  const mb = $("#manual"); if (mb) mb.onclick = () => { S.manualBars = !S.manualBars; S.tool[1] = S.manualBars ? "bars.add" : "bars.area"; S.findMsg = null; renderWs(); };
   const o4 = $("#off4"); if (o4) o4.onchange = () => { d.phone.off = o4.checked; changed(); renderNav(); };
 }
 function renderWs() {
   const step = S.step;
   const intro = {
-    2: `<h2>Step 2. Wanted stars</h2><div class="howto">Pick a picture that shows the wanted stars (the list starts with the ones you ticked "stars: yes"). Then:
+    1: S.manualBars ? `<h2>Step 1. Minimap bars (by hand)</h2><div class="howto">The tool knows the HUD is on screen when the <b>coloured bars by the minimap</b> are there.
+      It checks the bars, not the map, because the map itself flashes and changes. Pick a picture with the HUD shown, zoom in on the bars, and:
+      <ol><li>Draw a thin box <b>inside each coloured bar</b> (at least 2). Keep each box inside the colour: no edges, no background.</li>
+      <li>The boxes should line up in one row. The tool reads only the rows <b>all</b> of them cover: the dashed "rows read" box. Bars are numbered left to right, as in Measure.</li>
+      <li>Then <b>check another picture</b> from the list: the boxes should still sit inside the bars there.</li></ol>
+      Drawn by hand, the bars give no "HUD shown or hidden" guesses in step 2: you tick those yourself.</div>`
+    : `<h2>Step 1. Minimap bars</h2><div class="howto">The tool knows the HUD is on screen when the <b>coloured bars under the minimap</b> are there
+      (health, armour and so on). It checks the bars, not the map, because the map itself flashes and changes.
+      <ol><li>Pick a picture where the HUD is on screen (any one will do).</li>
+      <li>Click the small picture on the right near the bars, to zoom in there.</li>
+      <li>Drag <b>one rough box</b> round <b>all</b> the coloured bars, with a little space round them. It doesn't need to be exact.
+        The tool then finds the bars itself. That takes a few seconds.</li>
+      <li><b>Check:</b> an orange box now sits inside each coloured bar. Pick 2 or 3 other pictures from the list: the orange boxes should sit inside the bars there too.</li></ol>
+      Wrong or nothing found? Drag the rough box again, a bit tighter or a bit bigger. Still wrong? Use "Draw the bars by hand instead" on the right.<br>
+      Once the bars are found, the tool also <b>guesses</b> for every picture whether the HUD is on screen. You check those guesses in step 2.</div>`,
+    3: `<h2>Step 3. Wanted stars</h2><div class="howto">Pick a picture that shows the wanted stars (the list starts with the ones you marked "stars: yes" in step 2). Then:
       <ol><li>Click the small picture on the right where the stars are, to zoom in there.</li>
       <li>Draw the <b>box around the star row</b> (include the stars' top points), then type how many <b>star slots</b> the row has: every position, lit or not.</li>
       <li>Click the 4 points, one after the other. The box on the right always says what your <b>next click sets</b>, and the numbers 1 to 4 appear on the picture where you clicked.</li>
       <li><b>Check:</b> green star outlines now appear. They should sit right on top of the real stars, all of them. If one point is off, pick it on the right first, then click again. When all 4 are set, a click does nothing until you pick one.</li>
       <li>If something is wrong with the points, a red message on the right says which point and what to do.</li></ol>
       This game has no star row? Tick "Switch the stars rule off" and go on.</div>`,
-    3: `<h2>Step 3. Minimap bars</h2><div class="howto">The tool knows the HUD is on screen when the <b>coloured bars by the minimap</b> are there.
-      It checks the bars, not the map, because the map itself flashes and changes. Pick a picture with the HUD shown, zoom in on the bars, and:
-      <ol><li>Draw a thin box <b>inside each coloured bar</b> (at least 2). Keep each box inside the colour: no edges, no background.</li>
-      <li>The boxes should line up in one row. The tool reads only the rows <b>all</b> of them cover: the dashed "rows read" box. Bars are numbered left to right, as in Measure.</li>
-      <li>Then <b>check another picture</b> from the list: the boxes should still sit inside the bars there.</li></ol></div>`,
     4: `<h2>Step 4. Phone call screen</h2><div class="howto">clip.py cuts phone calls out of clips. It spots the call screen from a few parts that look the same on every call.
       Pick a picture with the call screen up, zoom in on the phone, and:
       <ol><li>Draw the <b>phone box</b> over the top part of the phone.</li>
@@ -393,8 +449,9 @@ function renderWs() {
   }[step];
   const opts = framesFor(step);
   if (!S.frame[step] || !S.data.frames.find(f => f.id === S.frame[step])) S.frame[step] = opts[0].id;
+  const said = (f, k) => f.labels[k] && f.labels[k] !== "?" ? f.labels[k] : (f.suggest || {})[k] ? f.suggest[k] + "?" : "?";
   $("#main").innerHTML = intro + `<div class="row"><span class="k">Picture</span><select id="fsel">${S.data.frames.map(f =>
-    `<option value="${f.id}" ${f.id === S.frame[step] ? "selected" : ""}>${f.id} ${esc(f.video_name)} ${f.time}  (HUD ${f.labels.hud || "?"}, stars ${f.labels.stars || "?"}, phone ${f.labels.phone || "?"})</option>`).join("")}</select>
+    `<option value="${f.id}" ${f.id === S.frame[step] ? "selected" : ""}>${f.id} ${esc(f.video_name)} ${f.time}  (HUD ${said(f, "hud")}, stars ${said(f, "stars")}, phone ${said(f, "phone")})</option>`).join("")}</select>
     <button class="plain" id="zfit">Whole picture</button><span class="muted" id="zoomtxt"></span></div>
     <div class="ws"><div class="canvasbox"><canvas id="detail" width="960" height="540"></canvas></div>
     <div><canvas id="overview" width="300" height="169"></canvas><div id="side"></div></div></div>`;
@@ -415,9 +472,9 @@ const HOW = {"halfway": "halfway between the two kinds", "one side only": "one s
              "set by you": "set by you",
              "backup check: half the smallest": "backup check: no hidden picture had 2 passing bars, so half the smallest"};
 const HINT = {
-  minimap: "Fix: make sure each bar box sits well inside its bar on every 'HUD shown' picture (step 3); check the HUD ticks (step 1); add more 'HUD hidden' pictures if there are false alarms.",
-  stars: "Fix: check that the green outlines sit on the stars (step 2) and that the star ticks are right (step 1).",
-  phone: "Fix: check that each phone area sits on a part that looks the same on every call (step 4), and the phone ticks (step 1)."
+  minimap: "Fix: check that the orange bar boxes sit inside the bars on every 'HUD shown' picture (step 1) and the HUD answers (step 2); add more 'HUD hidden' pictures if there are false alarms.",
+  stars: "Fix: check that the green outlines sit on the stars (step 3) and the star answers (step 2).",
+  phone: "Fix: check that each phone area sits on a part that looks the same on every call (step 4), and the phone answers (step 2)."
 };
 const TITLE = {minimap:"HUD shown (minimap bars)", stars:"Wanted stars", phone:"Phone call screen"};
 function renderMeasure() {
@@ -455,7 +512,7 @@ function renderMeasure() {
       r.frames.map(f => `<tr><td>${esc(f.label)}</td>${["hud","stars","phone"].map(k => {
         const want = f.want[k], got = f.got[k];
         if (got === undefined) return `<td class="muted">-</td>`;
-        if (!want) return `<td class="muted">tool: ${got} (not ticked)</td>`;
+        if (!want || want === "?") return `<td class="muted">tool: ${got} (${want ? "you: not sure, left out" : "not confirmed"})</td>`;
         return `<td class="${want === got ? "right" : "wrong"}">${want === got ? "✔ " + got : "✘ you: " + want + ", tool: " + got}</td>`;
       }).join("")}<td>${f.star_score === null ? "-" : f.star_score}</td>
       <td class="muted">${Object.entries(f.why || {}).map(([k, w]) => `${{hud:"HUD", stars:"stars", phone:"phone"}[k]}: ${esc(w)}`).join("<br>")}</td></tr>`).join("") + `</table></details>`;
@@ -489,7 +546,7 @@ function renderSave() {
   } else if (!r || S.changed) {
     html += `<div class="msg info">Press Measure (step 5) first${r ? ": you changed something since the last one" : ""}.</div>`;
   } else if (!r.can_save) {
-    html += `<div class="msg err">Not ready yet: ${!S.data.game ? "type the game's name (step 1); " : ""}fix the rules marked Problem in step 5.</div>`;
+    html += `<div class="msg err">Not ready yet: ${!S.data.game ? "type the game's name (step 2); " : ""}fix the rules marked Problem in step 5.</div>`;
   } else if (!r.clean) {
     html += `<div class="msg info">Some rules are marked Check or have pictures that come out wrong (step 5). You can still save, but it's safer to fix them first.</div>
       <button class="act" id="save" data-anyway="1">Save anyway</button>`;
@@ -509,7 +566,26 @@ function renderSave() {
 
 function render() {
   renderNav();
-  if (S.step === 1) renderLabels(); else if (S.step <= 4) renderWs(); else if (S.step === 5) renderMeasure(); else renderSave();
+  if (S.step === 2) renderLabels(); else if (S.step <= 4) renderWs(); else if (S.step === 5) renderMeasure(); else renderSave();
+}
+function tidyDrawing() {
+  const d = S.data.drawing; d.stars = d.stars || {}; d.bars = d.bars || []; d.phone = d.phone || {}; d.phone.grey = d.phone.grey || [];
+  d.bars.sort((a, b) => a.box[0] - b.box[0]);  // left to right, as Measure numbers them
+}
+// One rough box round the bars: the server finds them (find_strips) and guesses HUD shown/hidden on every picture.
+async function findBars(rect) {
+  S.finding = true; S.findMsg = null; S.data.drawing.bar_area = rect; renderWsSide(); drawWs();
+  clearTimeout(saveTimer);
+  try {
+    const r = await api("/findbars", {...payload(), rect});
+    S.data.drawing = r.drawing; tidyDrawing();
+    for (const f of S.data.frames) { const g = r.frames.find(x => x.id === f.id); if (g) { f.suggest = g.suggest; f.black = g.black; } }
+    S.findMsg = {ok:true, text:r.message + " Now check the orange boxes on 2 or 3 other pictures from the list, then go to step 2."};
+    S.changed = true; $("#savedstate").textContent = "All changes kept.";
+  } catch (e) { S.findMsg = {ok:false, text:e.message.charAt(0).toUpperCase() + e.message.slice(1) + "."}; }
+  S.finding = false;
+  if (S.step === 1) { renderNav(); renderWsSide(); drawWs(); } else render();
+  checkDrawing();
 }
 function tickClock() {
   const first = (S.data.log || []).find(e => e.event === "page_opened");
@@ -521,10 +597,12 @@ $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
 (async () => {
   S.data = await api("/session");
   $("#pname").textContent = S.data.name;
-  const d = S.data.drawing; d.stars = d.stars || {}; d.bars = d.bars || []; d.phone = d.phone || {}; d.phone.grey = d.phone.grey || [];
-  d.bars.sort((a, b) => a.box[0] - b.box[0]);  // left to right, as Measure numbers them
+  tidyDrawing();
   S.data.overrides = S.data.overrides || {};
-  for (const st of [2, 4]) { const n = TOOLS[st].find(t => !isSet(t.id)); S.tool[st] = n ? n.id : null; }
+  // bars drawn by hand earlier (none found by the tool): carry on by hand
+  S.manualBars = S.data.drawing.bars.length > 0 && !S.data.drawing.bars.some(b => b.auto);
+  S.tool[1] = S.manualBars ? "bars.add" : "bars.area";
+  for (const st of [3, 4]) { const n = TOOLS[st].find(t => !isSet(t.id)); S.tool[st] = n ? n.id : null; }
   tickClock(); setInterval(tickClock, 30000);
   render(); checkDrawing();
 })();
