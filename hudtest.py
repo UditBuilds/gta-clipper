@@ -16,12 +16,16 @@ detectors, so they are regression checks only:
   test2 4:10  phone call (unknown number)       -> phone present
   test2 12:10 phone call (Dr. Friedlander)      -> phone present
 
+--profile (v9) picks the HUD profile, default gta5. These frames were used to set gta5, not other profiles: a
+re-calibration that didn't use them (gta5_recal) is checked on them out of sample.
+
 Single frames are checked, so the 2-of-3 smoothing clip.py applies to stars is not involved here.
 Exit code 0 = all pass, 1 = a check failed, 2 = footage missing (SKIP, never a pass).
 
-Usage:  python hudtest.py [path\\to\\test1.webm] [path\\to\\test2.webm]
+Usage:  python hudtest.py [--profile NAME] [path\\to\\test1.webm] [path\\to\\test2.webm]
 """
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -46,9 +50,17 @@ EXTRA = [
 
 
 def main():
+    ap = argparse.ArgumentParser(description="Known-frame checks of clip.py's HUD detectors on test1/test2.")
+    ap.add_argument("videos", nargs="*", type=Path, help="test1.webm and test2.webm (default C:\\AI\\gta\\input)")
+    ap.add_argument("--profile", default=clip.DEFAULT_PROFILE, help=f"HUD profile (default {clip.DEFAULT_PROFILE})")
+    args = ap.parse_args()
+    try:
+        prof = clip.load_profile(args.profile)
+    except clip.ProfileError as e:
+        sys.exit(f"ERROR: {e}")
     videos = dict(DEFAULT_VIDEOS)
-    for name, arg in zip(videos, sys.argv[1:]):
-        videos[name] = Path(arg)
+    for name, arg in zip(videos, args.videos):
+        videos[name] = arg
     missing = [str(p) for p in videos.values() if not p.is_file()]
     if missing:
         print(f"SKIP: {', '.join(missing)} not found. These checks need the owner's test footage.")
@@ -58,7 +70,8 @@ def main():
     for name, video in videos.items():
         info = clip.probe(ffprobe, video)
         range_fix = info["video_codec"] == "vp9" and info["color_range"] == "tv"  # same test as clip.py main()
-        vf[name] = clip.hud_filter(info, range_fix)
+        vf[name] = clip.hud_filter(info, range_fix, prof)
+    print(f"Profile: {prof.name} ({prof.path}, sha256 {prof.sha256[:12]})")
     ok = True
     for group, checks in (("required", CHECKS), ("extra (calibration frames)", EXTRA)):
         print(f"{group}:")
@@ -66,19 +79,19 @@ def main():
             raw = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}",
                                   "-i", str(videos[name]), "-frames:v", "1", "-vf", vf[name],
                                   "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
-            if len(raw) != clip.HUD_FRAME_BYTES:
-                print(f"  FAIL {name} {what}: got {len(raw)} bytes, expected {clip.HUD_FRAME_BYTES}")
+            if len(raw) != prof.frame_bytes:
+                print(f"  FAIL {name} {what}: got {len(raw)} bytes, expected {prof.frame_bytes}")
                 ok = False
                 continue
-            score = clip.star_score(raw)
-            got = {"stars": score >= clip.STAR_MIN_SCORE, "minimap": clip.minimap_seen(raw),
-                   "phone": clip.phone_seen(raw)}
+            score = clip.star_score(raw, prof)
+            got = {"stars": prof.stars_on and score >= prof.star_min_score, "minimap": clip.minimap_seen(raw, prof),
+                   "phone": clip.phone_seen(raw, prof)}
             good = all(got[k] == v for k, v in want.items())
             ok &= good
             shown = ", ".join(f"{k} {'present' if got[k] else 'absent'}" for k in want)
-            m = clip.phone_measure(raw)
+            m = clip.phone_measure(raw, prof)
             print(f"  {'PASS' if good else 'FAIL'} {name} {what}: {shown}  (star score {score:.3f}, "
-                  f"threshold {clip.STAR_MIN_SCORE}; phone face {m['face_max']:.0f}, battery {m['battery_mean']:.0f}, "
+                  f"threshold {prof.star_min_score}; phone face {m['face_max']:.0f}, battery {m['battery_mean']:.0f}, "
                   f"panel {m['panel_min']:.0f}-{m['panel_max']:.0f}, tint {m['panel_tint']})")
     print("RESULT: " + ("PASS" if ok else "FAIL"))
     sys.exit(0 if ok else 1)
