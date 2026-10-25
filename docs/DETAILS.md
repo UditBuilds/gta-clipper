@@ -1,4 +1,7 @@
-# gta-clipper (v7)
+# gta-clipper (v7): full details
+
+This was the project README up to PR 8. It moved here unchanged apart from this note, the title and its links; the short
+case study is the [README](../README.md).
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (15-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
@@ -12,7 +15,7 @@ default): see [v7](#v7-measured-wanted-stars-optional).
 ## Held-out result (PR 8)
 
 The one-time test on two videos the rules were never tuned on (heldout1, heldout2), run as pre-registered in
-[eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md). The config was frozen before the videos were opened: `--vlm
+[eval/HELDOUT_PLAN.md](../eval/HELDOUT_PLAN.md). The config was frozen before the videos were opened: `--vlm
 qwen3-vl:4b-instruct --vlm-rule stars` ("4b v3 + star rule"), the config the pre-registered rule chose on the dev set.
 
 **The frozen config did not beat `--vlm off`. On both held-out videos it made exactly the same clips as off, in the same
@@ -36,7 +39,7 @@ of action, which gave 4 candidates. With 4 candidates and `--count 5` no veto ca
 heldout1 (10 candidates) could tell the configs apart. The held-out answer keys were drafted by Claude from video frames
 and were not checked by the owner frame by frame. **From PR 8 on, heldout1 and heldout2 are dev data;** a later claim
 needs new held-out footage. Every table, the deviations from the plan, and the full lists are in
-[eval/BASELINE.md](eval/BASELINE.md) (v8).
+[eval/BASELINE.md](../eval/BASELINE.md) (v8).
 
 What was observed:
 - The frozen config's clips equal off's on both videos (same start, end and peak; `timeline.csv` byte-identical).
@@ -271,7 +274,7 @@ The scores can't tell good action from clumsy action: a low-speed bump scores li
    makes no call. Failed answers aren't stored, so they are asked again next time. Delete the folder to ask afresh.
 7. **Prompt.** `prompts/veto_v3.txt`, frozen for the held-out test. Line endings are made LF before use and hashing,
    so a CRLF checkout sends the same text. All three versions tried on test1/test2, the stopping rule and every result
-   are in [prompts/LOG.md](prompts/LOG.md).
+   are in [prompts/LOG.md](../prompts/LOG.md).
 
 **Models.** `qwen3-vl:4b-instruct` (3.3 GB) and `qwen3-vl:8b-instruct` (6.2 GB) from Ollama's official library,
 Apache-2.0. The plain `qwen3-vl:4b` and `qwen3-vl:8b` tags are the Thinking builds. Ollama accepts `think: false` for
@@ -308,7 +311,7 @@ both need `--vlm` and the HUD rules.
   scores.json counts every step the clip touches in full, so a 30.0 s clip that starts mid-step can show 30.5 s;
   `stars_s` is unchanged.)
 - **`--vlm-hint stars`.** The prompt is `prompts/stars_v2.txt`, the final of the two versions allowed (stars_v1 failed
-  the stopping rule; both, and every result, are in [prompts/LOG.md](prompts/LOG.md)). It is veto_v3 with the star
+  the stopping rule; both, and every result, are in [prompts/LOG.md](../prompts/LOG.md)). It is veto_v3 with the star
   sentences replaced. Its `{MEASURED_STARS}` line becomes, per candidate, e.g. "Measured by the tool: wanted stars
   visible for 27.5 of 30.0 s." The prompt says the line is reliable and the model's own reading of the stars is not;
   that 0 s of stars means neither boring nor that nobody is chasing (gang chases, getaways, shootouts, fights and
@@ -433,9 +436,9 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 Everything else is neutral. Times are seconds in the source.
 
 **test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
-postable) in this README and in [eval/BASELINE.md](eval/BASELINE.md) is on them, except the [held-out
+postable) in this README and in [eval/BASELINE.md](../eval/BASELINE.md) is on them, except the [held-out
 result](#held-out-result-pr-8) of PR 8. That one-time test on heldout1 and heldout2 was planned before any of their
-output existed ([eval/HELDOUT_PLAN.md](eval/HELDOUT_PLAN.md)). **Since PR 8, heldout1 and heldout2 are dev data too.**
+output existed ([eval/HELDOUT_PLAN.md](../eval/HELDOUT_PLAN.md)). **Since PR 8, heldout1 and heldout2 are dev data too.**
 Their answer keys (`eval/answer_keys/heldout1.json`, `heldout2.json`) were drafted by Claude from frames (10 s, 2.5 s,
 and 0.5 s at every edge) and were not checked by the owner frame by frame; the owner answered the policy questions
 and accepted the ranges as drafted.
@@ -483,7 +486,7 @@ The keys were drafted from contact sheets, one frame every 10 s, with pause-map,
 checked on 2.5 s and 0.5 s sheets. The owner confirmed them on 2026-10-22. Revision 1 then fixed five edges from
 0.5 s frames. Revision 2 (2026-10-23, before any v4 run) set the four phone-call ranges to when the phone is on
 screen, and moved the start of test2's crash range from 19:09 to 19:07.5, where the swerve starts. Each key's
-`revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets are good to about 5 s. The v1 baseline and the v2 and v3 comparisons are in [eval/BASELINE.md](eval/BASELINE.md).
+`revisions` block lists the frame evidence. Edges that were only seen on the 10 s sheets are good to about 5 s. The v1 baseline and the v2 and v3 comparisons are in [eval/BASELINE.md](../eval/BASELINE.md).
 
 v3 with GPU decoding: full runs took 81 s and 87 s, against 232 s and 297 s on the CPU, and `timeline.csv` was
 byte-identical either way.
@@ -499,7 +502,7 @@ v3 and v4 (15 s minimum) on the dev set, scored with PR 5's eval.py (keys at rev
 
 test1 v3's 2:26.0-2:46.0 keeps its own rating, "not postable, boring, bad cut", although the owner later rated v4's
 2:16.0-2:46.0 (same peak) postable: a clip's own rating beats a newer rating of another cut. Details and the earlier
-numbers are in [eval/BASELINE.md](eval/BASELINE.md).
+numbers are in [eval/BASELINE.md](../eval/BASELINE.md).
 
 v6 with the frozen prompt v3, on the dev set (2026-10-24). Postable@5 counts unrated picks as not postable. The 4b's
 test1 row includes the owner's ratings of its two new picks (both postable, added in PR 7; before that it read 3/5 with
@@ -518,10 +521,10 @@ test1 row includes the owner's ratings of its two new picks (both postable, adde
   (all in test1) and both clumsy crashes. The 8b vetoed no rated candidate, so its picks equal v5's in both videos.
 - In test2 the 4b's picks are v5's five clips, with the two clumsy crashes moved to the end as fillers.
 - Model time is the model step plus unloading, first run (nothing cached); building the sheets adds about 10.5 s.
-- Details, the judge table per prompt version and GPU memory are in [eval/BASELINE.md](eval/BASELINE.md).
+- Details, the judge table per prompt version and GPU memory are in [eval/BASELINE.md](../eval/BASELINE.md).
 
 v7 on the dev set (2026-10-24). "+ stars" is `--vlm-hint stars` with the final prompt stars_v2 (stars_v1 failed the
-stopping rule, see [prompts/LOG.md](prompts/LOG.md)). "+ star rule" is `--vlm-rule stars` on the cached v3 answers.
+stopping rule, see [prompts/LOG.md](../prompts/LOG.md)). "+ star rule" is `--vlm-rule stars` on the cached v3 answers.
 Every pick of these runs has an owner rating.
 
 | Config | Hits (strict) test1 / test2 | Recall | Bad picks | Postable@5 | Vetoed but postable | Kept but not postable | Model time (per video) |
@@ -544,7 +547,7 @@ Every pick of these runs has an owner rating.
 - **Postable@5 is the same for every config,** because vetoed candidates come back as fillers.
 - With `--vlm off` and with the v6 options, v7 gives v6's results (same timelines and picks; v6's cached answers
   used, 0 model calls).
-- Tables A, B and C, and the selection rule of the held-out test, are in [eval/BASELINE.md](eval/BASELINE.md). The
+- Tables A, B and C, and the selection rule of the held-out test, are in [eval/BASELINE.md](../eval/BASELINE.md). The
   test was run in PR 8: see [Held-out result](#held-out-result-pr-8).
 
 ## Known limits
