@@ -74,7 +74,7 @@ label.chk { display:flex; gap:8px; align-items:center; margin:10px 0; }
 <script>
 "use strict";
 const S = {data:null, step:1, frame:{2:null,3:null,4:null}, view:null, tool:{2:"stars.box",3:"bars.add",4:"phone.box"},
-           img:{}, drag:null, pan:null, report:null, changed:true, busy:false, error:null, saved:null};
+           img:{}, drag:null, pan:null, report:null, changed:true, busy:false, error:null, saved:null, hint:null, notes:null};
 const STEPS = ["Label the pictures", "Wanted stars", "Minimap bars", "Phone call screen", "Measure", "Save"];
 const SIN54 = Math.sin(54 * Math.PI / 180);
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -100,7 +100,13 @@ function changed() {
   saveTimer = setTimeout(async () => {
     try { await api("/state", payload()); $("#savedstate").textContent = "All changes kept (you can close this tab and carry on later)."; }
     catch (e) { $("#savedstate").textContent = "Couldn't keep the last change: " + e.message; }
+    checkDrawing();
   }, 500);
+}
+// Problems with the drawing (star points, bar boxes, phone areas), shown while you draw.
+async function checkDrawing() {
+  try { S.notes = (await api("/check", {drawing:S.data.drawing})).notes; } catch (e) { return; }
+  const n = $("#notes"); if (n) n.innerHTML = notesHtml(S.step);
 }
 
 // ---------- counts and readiness ----------
@@ -168,13 +174,13 @@ function renderLabels() {
 // ---------- drawing steps ----------
 const TOOLS = {
   2: [{id:"stars.box", kind:"box", label:"Box around the star row",
-       help:"Drag a box around the <b>whole star row</b>: every star slot, filled or empty, with a little space round them. Not much more: other things in the box confuse it."},
-      {id:"stars.top_first", kind:"point", label:"First star: top point", help:"Click the <b>very top point</b> of the <b>first</b> (leftmost) star."},
-      {id:"stars.top_last", kind:"point", label:"Last star: top point", help:"Click the <b>very top point</b> of the <b>last</b> (rightmost) star slot, even if it's empty."},
-      {id:"stars.low", kind:"point", label:"First star: lowest point", help:"Click the <b>lowest point</b> of the first star: one of its two bottom tips."},
-      {id:"stars.inner", kind:"point", label:"First star: inner corner", help:"Click one <b>inner corner</b> of the first star: a notch between two of its points."}],
+       help:"Drag a box around the <b>whole star row</b>, including the stars' <b>top points</b>: every star slot, filled or empty, with a little space round them. Not much more: other things in the box (ammo or money numbers) confuse it."},
+      {id:"stars.top_first", kind:"point", label:"1. First star: top point", help:"Click the <b>very top point</b> of the <b>first</b> (leftmost) star. Not its middle: the tip."},
+      {id:"stars.top_last", kind:"point", label:"2. Last star: top point", help:"Click the <b>very top point</b> of the <b>last</b> (rightmost) star slot, even if it's empty."},
+      {id:"stars.low", kind:"point", label:"3. First star: lowest point", help:"Click the <b>lowest point</b> of the <b>first</b> star: one of its two bottom tips."},
+      {id:"stars.inner", kind:"point", label:"4. First star: inner corner", help:"Click one <b>inner corner</b> of the <b>first</b> star: a notch between two of its points, where the edge turns inwards."}],
   3: [{id:"bars.add", kind:"box", label:"Add a bar box",
-       help:"Drag a thin box <b>inside</b> one coloured bar. Stay off its edges and off the background. Do this for each bar (at least 2)."}],
+       help:"Drag a box <b>inside</b> one coloured bar. Stay off its edges and off the background. Do this for each bar (at least 2)."}],
   4: [{id:"phone.box", kind:"box", label:"Phone box", help:"Drag a box over the <b>top part of the phone</b>: from its dark face, past the row of status icons, down to the grey call panel."},
       {id:"phone.dark", kind:"box", label:"Dark area", help:"Inside the phone box, drag a box over a part that is <b>black on every call</b> (e.g. the phone face above the status icons)."},
       {id:"phone.bright", kind:"box", label:"Bright area", help:"Drag a small box over a <b>bright icon that is always there</b> (e.g. the battery)."},
@@ -218,7 +224,7 @@ function shapes(step) {
     const o = starOutline(d.stars); if (o) out.push({t:"stars", o});
   } else if (step === 3) {
     (d.bars || []).forEach((b, i) => box(b.box, "#fb923c", "bar " + (i + 1)));
-    if (snap) box(snap.minimap_box, "#e5e7eb", "rows read", true);
+    box(rowsRead(d.bars), "#e5e7eb", "rows read", true);
   } else if (step === 4) {
     box(d.phone.box, "#facc15", "phone"); box(d.phone.dark, "#60a5fa", "dark"); box(d.phone.bright, "#ffffff", "bright");
     (d.phone.grey || []).forEach((b, i) => box(b, "#a3a3a3", "grey " + (i + 1)));
@@ -267,15 +273,29 @@ function toFrame(e) {
   return [v.cx - cv.width / (2 * v.z) + mx / v.z, v.cy - cv.height / (2 * v.z) + my / v.z];
 }
 const r1 = x => Math.round(x * 10) / 10;
+// The rows calibrate.py reads: only those every bar box covers (bar_row() in calibrate.py), from the leftmost box to the rightmost.
+function rowsRead(bars) {
+  if (!bars || bars.length < 2) return null;
+  const y0 = Math.max(...bars.map(b => Math.round(b.box[1]))), y1 = Math.min(...bars.map(b => Math.round(b.box[1] + b.box[3])));
+  const x0 = Math.min(...bars.map(b => Math.round(b.box[0]))), x1 = Math.max(...bars.map(b => Math.round(b.box[0] + b.box[2])));
+  return y1 > y0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+}
+function isSet(id) {
+  const d = S.data.drawing;
+  return id === "stars.box" ? !!d.stars.box : id.startsWith("stars.") ? !!(d.stars.clicks || {})[id.slice(6)]
+    : id === "bars.add" ? (d.bars || []).length >= 2 : id === "phone.grey" ? (d.phone.grey || []).length >= 1 : !!d.phone[id.slice(6)];
+}
 function applyShape(toolId, val) {
   const d = S.data.drawing;
   if (toolId === "stars.box") d.stars.box = val;
   else if (toolId.startsWith("stars.")) { d.stars.clicks = d.stars.clicks || {}; d.stars.clicks[toolId.slice(6)] = val; }
-  else if (toolId === "bars.add") { d.bars = d.bars || []; d.bars.push({box:val}); }
+  else if (toolId === "bars.add") { d.bars = d.bars || []; d.bars.push({box:val}); d.bars.sort((a, b) => a.box[0] - b.box[0]); }  // named left to right, as Measure does
   else if (toolId === "phone.grey") { d.phone.grey = d.phone.grey || []; d.phone.grey.push(val); }
   else d.phone[toolId.slice(6)] = val;
-  if (S.step === 2) { const ts = TOOLS[2], i = ts.findIndex(t => t.id === toolId); if (i < ts.length - 1) S.tool[2] = ts[i + 1].id; }
-  if (S.step === 4 && toolId !== "phone.grey") { const ts = TOOLS[4], i = ts.findIndex(t => t.id === toolId); S.tool[4] = ts[i + 1].id; }
+  // Move on to the next thing not set yet. Once everything is set, nothing is picked, so a stray click can't move a
+  // point you already placed: pick one on the right first to redo it.
+  if (S.step === 2 || S.step === 4) { const next = TOOLS[S.step].find(t => !isSet(t.id)); S.tool[S.step] = next ? next.id : null; }
+  S.hint = null;
   changed(); renderWsSide(); renderNav(); drawWs();
 }
 function bindCanvas() {
@@ -285,7 +305,7 @@ function bindCanvas() {
     if (e.button === 2) { S.pan = {x:e.clientX, y:e.clientY, cx:S.view.cx, cy:S.view.cy}; return; }
     if (e.button !== 0) return;
     const tool = TOOLS[S.step].find(t => t.id === S.tool[S.step]), p = toFrame(e);
-    if (!tool) return;
+    if (!tool) { S.hint = "Everything here is set, so that click did nothing. To move a box or a point, pick it on the right first, then draw or click again."; renderWsSide(); return; }
     if (tool.kind === "point") applyShape(tool.id, [r1(p[0]), r1(p[1])]);
     else S.drag = {tool:tool.id, a:p, rect:[p[0], p[1], 0, 0]};
   };
@@ -315,22 +335,33 @@ function bindCanvas() {
     drawWs();
   };
 }
+function nextText(step, cur) {
+  if (cur) return `${TOOLS[step].length > 1 ? "Next " + (cur.kind === "point" ? "click" : "drag") + " sets" : "Next drag"}: <b>${esc(cur.label)}</b>`;
+  return "Everything here is set. To redo one, pick it below first.";
+}
+function notesHtml(step) {
+  const part = {2:"stars", 3:"minimap", 4:"phone"}[step], n = S.notes && S.notes[part];
+  if (step === 2 && S.data.drawing.stars.off || step === 4 && S.data.drawing.phone.off) return "";
+  return n ? `<div class="msg err">${esc(n.charAt(0).toUpperCase() + n.slice(1))}.</div>`
+    : S.notes ? `<div class="msg ok">No problem found in the drawing. Now check it on other pictures from the list.</div>` : "";
+}
 function renderWsSide() {
   const step = S.step, d = S.data.drawing, tools = TOOLS[step], cur = tools.find(t => t.id === S.tool[step]);
-  const isSet = id => id === "stars.box" ? !!d.stars.box : id.startsWith("stars.") ? !!(d.stars.clicks || {})[id.slice(6)]
-    : id === "bars.add" ? (d.bars || []).length >= 2 : id === "phone.grey" ? (d.phone.grey || []).length >= 1 : !!d.phone[id.slice(6)];
   let extra = "";
-  if (step === 2) extra = `<div class="row"><span class="k">Star slots</span><input type="number" id="slots" min="1" max="10" value="${d.stars.slots || ""}" style="width:70px">
-    <span class="muted">how many slots the row has</span></div>
+  if (step === 2) extra = `<div class="row"><span class="k">Star slots</span><input type="number" id="slots" min="1" max="10" value="${d.stars.slots || ""}" style="width:70px"></div>
+    <p class="muted" style="font-size:13px;margin:0">Count <b>every</b> star position in the row, lit or not. Use a picture where the whole row shows.</p>
     <label class="chk"><input type="checkbox" id="off2" ${d.stars.off ? "checked" : ""}> Switch the stars rule off (no star row in this game)</label>`;
-  if (step === 3) extra = `<div class="list">${(d.bars || []).map((b, i) => `<div>bar ${i + 1} <button class="plain" data-del="${i}">delete</button></div>`).join("") || "<span class='muted'>No bars yet.</span>"}</div>`;
+  if (step === 3) extra = `<div class="list">${(d.bars || []).map((b, i) => `<div>bar ${i + 1} <button class="plain" data-del="${i}">delete</button></div>`).join("") || "<span class='muted'>No bars yet.</span>"}</div>
+    <p class="muted" style="font-size:13px">Bars are numbered left to right, the same as in Measure. The tool reads only the rows <b>all</b> boxes cover: the dashed "rows read" box. If it is much thinner than your boxes, line them up.</p>`;
   if (step === 4) extra = `<div class="list">${(d.phone.grey || []).map((b, i) => `<div>grey ${i + 1} <button class="plain" data-delg="${i}">delete</button></div>`).join("")}</div>
     <label class="chk"><input type="checkbox" id="off4" ${d.phone.off ? "checked" : ""}> Switch the phone rule off (no call in my footage, or no call screen in this game)</label>`;
-  $("#side").innerHTML = `<div class="tools">${tools.map(t => `<button class="plain ${t.id === S.tool[step] ? "on" : ""}" data-tool="${t.id}">${t.label}${isSet(t.id) ? '<span class="done">✔</span>' : ""}</button>`).join("")}</div>
-   <div class="toolhelp">${cur ? cur.help : ""}</div>${extra}
+  $("#side").innerHTML = `<div class="toolhelp">${nextText(step, cur)}${cur ? "<br>" + cur.help : ""}</div>
+   ${S.hint ? `<div class="msg info">${esc(S.hint)}</div>` : ""}
+   <div class="tools">${tools.map(t => `<button class="plain ${t.id === S.tool[step] ? "on" : ""}" data-tool="${t.id}">${t.label}${isSet(t.id) ? '<span class="done">✔</span>' : ""}</button>`).join("")}</div>
+   <div id="notes">${notesHtml(step)}</div>${extra}
    <p class="muted" style="font-size:13px">Scroll to zoom. Right-click and drag to move around. Click the small picture to jump there.
    To redo a box or a point, pick it above and draw it again.</p>`;
-  for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => { S.tool[step] = b.dataset.tool; renderWsSide(); };
+  for (const b of document.querySelectorAll("[data-tool]")) b.onclick = () => { S.tool[step] = b.dataset.tool; S.hint = null; renderWsSide(); };
   for (const b of document.querySelectorAll("[data-del]")) b.onclick = () => { d.bars.splice(+b.dataset.del, 1); changed(); renderWsSide(); renderNav(); drawWs(); };
   for (const b of document.querySelectorAll("[data-delg]")) b.onclick = () => { d.phone.grey.splice(+b.dataset.delg, 1); changed(); renderWsSide(); renderNav(); drawWs(); };
   const sl = $("#slots"); if (sl) sl.oninput = () => { const n = parseInt(sl.value, 10); d.stars.slots = n >= 1 && n <= 10 ? n : null; changed(); renderNav(); drawWs(); };
@@ -342,14 +373,15 @@ function renderWs() {
   const intro = {
     2: `<h2>Step 2. Wanted stars</h2><div class="howto">Pick a picture that shows the wanted stars (the list starts with the ones you ticked "stars: yes"). Then:
       <ol><li>Click the small picture on the right where the stars are, to zoom in there.</li>
-      <li>Draw the <b>box around the star row</b>, then type how many <b>star slots</b> the row has.</li>
-      <li>Click the 4 points the tool asks for, one after the other: the first star's top, the last star's top, the first star's lowest point, the first star's inner corner.</li>
-      <li><b>Check:</b> green star outlines now appear. They should sit right on top of the real stars, all of them. If one is off, pick that step and click again.</li></ol>
+      <li>Draw the <b>box around the star row</b> (include the stars' top points), then type how many <b>star slots</b> the row has: every position, lit or not.</li>
+      <li>Click the 4 points, one after the other. The box on the right always says what your <b>next click sets</b>, and the numbers 1 to 4 appear on the picture where you clicked.</li>
+      <li><b>Check:</b> green star outlines now appear. They should sit right on top of the real stars, all of them. If one point is off, pick it on the right first, then click again. When all 4 are set, a click does nothing until you pick one.</li>
+      <li>If something is wrong with the points, a red message on the right says which point and what to do.</li></ol>
       This game has no star row? Tick "Switch the stars rule off" and go on.</div>`,
     3: `<h2>Step 3. Minimap bars</h2><div class="howto">The tool knows the HUD is on screen when the <b>coloured bars by the minimap</b> are there.
       It checks the bars, not the map, because the map itself flashes and changes. Pick a picture with the HUD shown, zoom in on the bars, and:
       <ol><li>Draw a thin box <b>inside each coloured bar</b> (at least 2). Keep each box inside the colour: no edges, no background.</li>
-      <li>The boxes should line up in one row. The tool reads only the rows they share (dashed line, after Measure).</li>
+      <li>The boxes should line up in one row. The tool reads only the rows <b>all</b> of them cover: the dashed "rows read" box. Bars are numbered left to right, as in Measure.</li>
       <li>Then <b>check another picture</b> from the list: the boxes should still sit inside the bars there.</li></ol></div>`,
     4: `<h2>Step 4. Phone call screen</h2><div class="howto">clip.py cuts phone calls out of clips. It spots the call screen from a few parts that look the same on every call.
       Pick a picture with the call screen up, zoom in on the phone, and:
@@ -404,9 +436,11 @@ function renderMeasure() {
       const x = r.rules[key], [st, txt] = STATUS[x.status];
       html += `<div class="rule"><b>${TITLE[key]}</b> <span class="status s-${x.status}">${st}</span>
        <span class="muted">from ${x.used.shown} picture(s) that show it and ${x.used.hidden} that don't</span><p>${txt}</p>`;
-      for (const b of x.bad) html += `<div class="msg err">${esc(b)}</div>`;
-      if (x.missed.length) html += `<p class="wrong">Missed (on screen, but the tool says no): ${x.missed.map(esc).join(", ")}</p>`;
-      if (x.false_alarms.length) html += `<p class="wrong">False alarm (not on screen, but the tool says yes): ${x.false_alarms.map(esc).join(", ")}</p>`;
+      for (const b of x.bad) html += `<div class="msg err">${esc(b.charAt(0).toUpperCase() + b.slice(1))}.</div>`;
+      const k = {minimap:"hud", stars:"stars", phone:"phone"}[key];
+      const why = lbl => { const f = r.frames.find(q => q.label === lbl), w = f && f.why && f.why[k]; return `<li>${esc(lbl)}${w ? `: <span class="muted">${esc(w)}</span>` : ""}</li>`; };
+      if (x.missed.length) html += `<p class="wrong">Missed (on screen, but the tool says no):</p><ul>${x.missed.map(why).join("")}</ul>`;
+      if (x.false_alarms.length) html += `<p class="wrong">False alarm (not on screen, but the tool says yes):</p><ul>${x.false_alarms.map(why).join("")}</ul>`;
       if (x.missed.length || x.false_alarms.length || x.bad.length) html += `<p class="muted">${HINT[key]}</p>`;
       if (key === "minimap" && x.rows.length) html += `<p class="muted">The HUD counts as shown when at least ${x.min_bars} of the ${x.bars} bars pass every check below.</p>`;
       if (x.rows.length) html += `<table><tr><th>What is checked</th><th>On pictures that show it</th><th>Closest picture that doesn't</th><th>Limit</th><th>How the limit was set</th><th>Use instead</th></tr>` +
@@ -417,13 +451,14 @@ function renderMeasure() {
     }
     html += `<div class="rule"><b>Not measured</b> <span class="muted">(a still picture can't show these; they are GTA V's settings, and you can change them in the file later)</span>
       <ul>${r.inherited.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
-      <details class="rule"><summary><b>Every picture</b> (what you ticked, what the tool sees)</summary><table><tr><th>Picture</th><th>HUD</th><th>Stars</th><th>Phone</th><th>Star score</th></tr>` +
+      <details class="rule"><summary><b>Every picture</b> (what you ticked, what the tool sees, and why where they differ)</summary><table><tr><th>Picture</th><th>HUD</th><th>Stars</th><th>Phone</th><th>Star score</th><th>Why it's wrong</th></tr>` +
       r.frames.map(f => `<tr><td>${esc(f.label)}</td>${["hud","stars","phone"].map(k => {
         const want = f.want[k], got = f.got[k];
         if (got === undefined) return `<td class="muted">-</td>`;
         if (!want) return `<td class="muted">tool: ${got} (not ticked)</td>`;
         return `<td class="${want === got ? "right" : "wrong"}">${want === got ? "✔ " + got : "✘ you: " + want + ", tool: " + got}</td>`;
-      }).join("")}<td>${f.star_score === null ? "-" : f.star_score}</td></tr>`).join("") + `</table></details>`;
+      }).join("")}<td>${f.star_score === null ? "-" : f.star_score}</td>
+      <td class="muted">${Object.entries(f.why || {}).map(([k, w]) => `${{hud:"HUD", stars:"stars", phone:"phone"}[k]}: ${esc(w)}`).join("<br>")}</td></tr>`).join("") + `</table></details>`;
   }
   $("#main").innerHTML = html;
   $("#measure").onclick = measure;
@@ -487,9 +522,11 @@ $("#lightbox").onclick = () => { $("#lightbox").style.display = "none"; };
   S.data = await api("/session");
   $("#pname").textContent = S.data.name;
   const d = S.data.drawing; d.stars = d.stars || {}; d.bars = d.bars || []; d.phone = d.phone || {}; d.phone.grey = d.phone.grey || [];
+  d.bars.sort((a, b) => a.box[0] - b.box[0]);  // left to right, as Measure numbers them
   S.data.overrides = S.data.overrides || {};
+  for (const st of [2, 4]) { const n = TOOLS[st].find(t => !isSet(t.id)); S.tool[st] = n ? n.id : null; }
   tickClock(); setInterval(tickClock, 30000);
-  render();
+  render(); checkDrawing();
 })();
 </script>
 </body></html>

@@ -45,8 +45,9 @@ CALIB_ROOT = Path(r"C:\AI\gta\calib")
 NAME_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 # Values a still frame can't show. They are GTA V's (gta5's), the only ones we have; the profile lists them.
 DEFAULTS = {"stretch_min_s": 1.5, "stretch_pad_s": 0.5, "min_share": 0.2, "star_boost": 3.0, "phone_cell": [8, 4]}
-STRONG_GAP = 40.0        # a bar's colour channel within this of its brightest channel counts as one of its colours
+GREY_CHROMA = 12.0       # a colour whose channels are all within this of each other is grey (compression noise level)
 SIN54 = math.sin(math.radians(54))  # a 5-pointed star's lowest tips sit SIN54 * radius below its centre
+COS18 = math.cos(math.radians(18))  # ... and its two side points COS18 * radius left and right of it
 WORKERS = 4              # ffmpeg frame grabs at once
 
 
@@ -82,17 +83,30 @@ def shown_size(info):
 
 def star_geometry(top_first, top_last, low, inner, slots):
     """Star outline numbers from 4 clicks: the first star's top point, the last star's top point, the first star's
-    lowest point and one of its inner corners. The star is clip.py's: 5 points, the top one straight up."""
+    lowest point and one of its inner corners. The star is clip.py's: 5 points, the top one straight up.
+    The messages name the points by the numbers the page draws next to them (1 to 4, in that order)."""
     (ax, ay), (bx, by) = top_first, top_last
     r = (low[1] - ay) / (1 + SIN54)
     if r <= 1:
-        raise CalibError("the star's lowest point must be below its top point: click the top tip, then a bottom tip")
+        raise CalibError("point 3 (the first star's lowest point) must be lower down than point 1 (its top point): "
+                         "click point 3 on one of the first star's two bottom tips")
+    if abs(low[0] - ax) > r:  # the bottom tips sit 0.59 radius left and right of the top point
+        raise CalibError("point 3 should be a bottom tip of the same star as point 1: just below it, a little to the "
+                         "left or right. Click point 1 or point 3 again")
+    if slots == 1 and abs(bx - ax) > r:
+        raise CalibError("you typed 1 star slot, but point 2 is on another star. Count every star position in the "
+                         "row, lit or not, and type that number")
     spacing = (bx - ax) / (slots - 1) if slots > 1 else 0.0
     if slots > 1 and spacing <= r:
-        raise CalibError("the last star's top point must be to the right of the first star, by more than a star's width")
+        raise CalibError("point 2 (the last star's top point) must be to the right of point 1 by more than a star's "
+                         "width: click it on the rightmost star slot, and check the number of star slots")
     ratio = math.hypot(inner[0] - ax, inner[1] - (ay + r)) / r
-    if not 0.15 <= ratio <= 0.85:
-        raise CalibError("the inner corner should be a notch between two points of the first star; click it again")
+    if ratio > 0.85:
+        raise CalibError("point 4 is too far from the first star's middle to be an inner corner: click a notch "
+                         "between two of the first star's points")
+    if ratio < 0.15:
+        raise CalibError("point 4 is too close to the first star's middle: click a notch between two of its points, "
+                         "where the edge turns inwards")
     return {"first_tip_x": round(ax, 2), "tip_spacing": round(spacing, 3), "tip_y": round(ay, 2),
             "radius": round(r, 2), "inner": round(ratio, 3), "level_px": round(by - ay, 1)}
 
@@ -103,11 +117,15 @@ def snap_box(rect, cell):
     return [x, y, max(cell[0], w // cell[0] * cell[0]), max(cell[1], h // cell[1] * cell[1])]
 
 
-def snap_area(rect, box, cell):
-    """rect moved onto the box's cell grid (nearest cell edges, at least one cell) and kept inside the box."""
+def snap_area(rect, box, cell, what="area"):
+    """rect moved onto the box's cell grid (nearest cell edges, at least one cell) and kept inside the box. An area
+    drawn more than one cell outside the box is refused: cutting it down without a word would read something else."""
     bx, by, bw, bh = box
     cw, ch = cell
     x, y, w, h = rect
+    if x < bx - cw or y < by - ch or x + w > bx + bw + cw or y + h > by + bh + ch:
+        raise CalibError(f"the {what} goes outside the phone box: draw it inside the yellow phone box, or draw the "
+                         "phone box bigger first")
 
     def edges(a, length, origin, size, step):
         lo = min(max(round((a - origin) / step), 0), size // step - 1)
@@ -156,18 +174,92 @@ def at_most(shown, hidden, digits=1, cap=255.0):
     return round(min(cap, hi * 1.5 + 5), digits), "one side only", None
 
 
+def family(c):
+    """A colour's own channels: those above the middle of its brightest and darkest channel (green for green, red
+    and green for yellow, green and blue for cyan). Empty for grey, where all three are within GREY_CHROMA."""
+    hi, lo = max(c), min(c)
+    if hi - lo < GREY_CHROMA:
+        return ()
+    return tuple(k for k in range(3) if c[k] > (hi + lo) / 2)
+
+
 def colour_groups(colours):
-    """Shown colours of one bar grouped by which channels are its colours (within STRONG_GAP of the brightest).
-    A bar that changes colour (e.g. health turning red) gets one group per colour."""
-    groups = {}
-    for c in colours:
-        top = max(c)
-        groups.setdefault(tuple(i for i in range(3) if c[i] >= top - STRONG_GAP), []).append(c)
-    return groups
+    """Shown colours of one bar, grouped by colour family; every coloured frame lands in exactly one group, so none
+    is left without a rule. The commonest family starts the first group. A family nested in a group's (green inside
+    yellow) joins it; one that isn't (red next to green: health turning red) starts its own group.
+    Grey colours (the bar isn't there: a picture ticked "HUD shown" by mistake, or an empty bar) join no group. They
+    would drag the limits down to nothing, so that every picture passes; left out, they fail the rule and Measure
+    lists them as missed, with the reason. All grey: one group of all three channels, which fit_bar() can't test."""
+    fams = [family(c) for c in colours]
+    counts = {}
+    for f in fams:
+        if f:
+            counts[f] = counts.get(f, 0) + 1
+    groups, home = [], {}
+    for f in sorted(counts, key=lambda f: (-counts[f], f)):
+        g = next((g for g in groups if set(f) <= set(g[0]) or set(g[0]) <= set(f)), None)
+        if g is None:
+            g = (f, [])
+            groups.append(g)
+        home[f] = g
+    if not groups:
+        return {(0, 1, 2): list(colours)}
+    for c, f in zip(colours, fams):
+        if f:
+            home[f][1].append(c)
+    return dict(groups)
 
 
 CH = "rgb"
 CH_NAME = {"r": "red", "g": "green", "b": "blue"}
+
+
+def term_text(c, hi, lo):
+    return f"{CH_NAME[CH[hi]]} beats {' and '.join(CH_NAME[CH[i]] for i in lo)} by {c[hi] - max(c[i] for i in lo):.0f}"
+
+
+def bar_check(c, rule, min_sat):
+    """None when colour c passes one bar's checks (clip.py's), else what fails, in plain words."""
+    sat = clip.saturation(c)
+    if sat < min_sat:
+        return f"colour too weak ({sat:.2f}, needs {min_sat:g})"
+    if clip.bar_colour_ok(c, rule):
+        return None
+    # the colour group closest to passing, and its term furthest from passing
+    _, hi, lo, least = min(max((least - (c[hi] - max(c[i] for i in lo)), hi, lo, least) for hi, lo, least in group)
+                           for group in rule)
+    return f"{term_text(c, hi, lo)}, needs {least:g}"
+
+
+def hud_why(means, prof):
+    """Why minimap_seen() says what it says on one frame, in plain words."""
+    ok, fails = [], []
+    for i, (c, rule) in enumerate(zip(means, prof.bar_rules), 1):
+        w = bar_check(c, rule, prof.bar_min_sat)
+        if w:
+            fails.append(f"bar {i}: {w}")
+        else:
+            ok.append(c)
+    if len(ok) < prof.bar_min_count:
+        return f"{len(ok)} of {len(means)} bars pass, needs {prof.bar_min_count} ({'; '.join(fails)})"
+    far = max(math.dist(a, b) for k, a in enumerate(ok) for b in ok[k + 1:])
+    if far < prof.bar_min_distinct:
+        return f"the passing bars are too alike in colour (distance {far:.0f}, needs {prof.bar_min_distinct:g})"
+    return f"{len(ok)} of {len(means)} bars pass as coloured bars" + (f" ({'; '.join(fails)})" if fails else "")
+
+
+def phone_why(m, prof):
+    """Which of phone_seen()'s checks fail on one frame, in plain words."""
+    lo, hi = prof.phone_panel_range
+    tests = [("dark area's brightest cell", m["face_max"], "at most", prof.phone_face_max),
+             ("bright area's average", m["battery_mean"], "at least", prof.phone_battery_min),
+             ("grey areas' darkest cell", m["panel_min"], "at least", lo),
+             ("grey areas' brightest cell", m["panel_max"], "at most", hi),
+             ("grey areas' spread", m["panel_max"] - m["panel_min"], "at most", prof.phone_panel_spread),
+             ("grey areas' tint", m["panel_tint"], "at most", prof.phone_panel_tint)]
+    bad = [f"{what} {v:.0f}, needs {kind} {lim:g}" for what, v, kind, lim in tests
+           if not (v <= lim if kind == "at most" else v >= lim)]
+    return "; ".join(bad) if bad else "every phone check passes"
 
 
 def term_value(c, hi, lo):
@@ -244,6 +336,14 @@ def geometry_profile(name, game, frame, drawing):
             if missing:
                 raise CalibError("click the 4 star points (" + ", ".join(missing) + " still missing)")
             g = star_geometry(c["top_first"], c["top_last"], c["low"], c["inner"], st["slots"])
+            x0, y0, w, h = st["box"]
+            r, last = g["radius"], g["first_tip_x"] + g["tip_spacing"] * (st["slots"] - 1)
+            cut = [side for side, out in (("top", g["tip_y"] < y0 - 2), ("bottom", g["tip_y"] + r * (1 + SIN54) > y0 + h + 2),
+                                          ("left", g["first_tip_x"] - r * COS18 < x0 - 2),
+                                          ("right", last + r * COS18 > x0 + w + 2)) if out]
+            if cut:
+                raise CalibError(f"the green star outlines go past the {' and '.join(cut)} of the star box: drag the "
+                                 "box again so every star fits inside it, with a little space round them")
             box = [round(v) for v in st["box"]]
             profile["stars"] = {"on": True, "box": box, "slots": st["slots"],
                                 **{k: g[k] for k in ("first_tip_x", "tip_spacing", "tip_y", "radius", "inner")},
@@ -263,11 +363,16 @@ def geometry_profile(name, game, frame, drawing):
         profile["phone"] = {"on": False, "_missing": True}
     else:
         box = snap_box(ph["box"], cell)
-        profile["phone"] = {"on": True, "box": box, "cell": list(cell),
-                            "dark": {"area": snap_area(ph["dark"], box, cell), "max": 0.0},
-                            "bright": {"area": snap_area(ph["bright"], box, cell), "min_mean": 0.0},
-                            "grey": {"areas": [snap_area(a, box, cell) for a in ph["grey"]], "min": 0.0, "max": 0.0,
-                                     "max_spread": 0.0, "max_tint": 0.0}}
+        try:
+            profile["phone"] = {"on": True, "box": box, "cell": list(cell),
+                                "dark": {"area": snap_area(ph["dark"], box, cell, "dark area"), "max": 0.0},
+                                "bright": {"area": snap_area(ph["bright"], box, cell, "bright area"), "min_mean": 0.0},
+                                "grey": {"areas": [snap_area(a, box, cell, f"grey area {i}")
+                                                   for i, a in enumerate(ph["grey"], 1)],
+                                         "min": 0.0, "max": 0.0, "max_spread": 0.0, "max_tint": 0.0}}
+        except CalibError as e:
+            notes.append(("phone", str(e)))
+            profile["phone"] = {"on": False, "_missing": True}
     return profile, notes
 
 
@@ -401,7 +506,9 @@ class Session:
                     any_of = [[{"hi": "r", "lo": ["g"], "min": 256}]]  # can never pass
                 bar["any_of"] = any_of
                 rows += r
-            sat_yes = [clip.saturation(means[f][i]) for f in hud_yes for i in range(len(means[f]))]
+            # grey bars on "HUD shown" pictures don't set the colour-strength limit either (see colour_groups)
+            sat_yes = [clip.saturation(means[f][i]) for f in hud_yes for i in range(len(means[f]))
+                       if family(means[f][i])] or [0.0]
             sat_no = [clip.saturation(means[f][i]) for f in hud_no for i in range(len(means[f]))]
             v, row = number_row("min_sat", "every bar's colour strength (0 = grey, 1 = pure colour) at least",
                                 sat_yes, sat_no, "at least", ov, 3)
@@ -490,15 +597,24 @@ class Session:
 
         # The finished profile on every labelled frame, with clip.py's own detectors
         final = load(prof, cand / f"{self.name}.json")
+        yes_word = {"hud": "shown", "stars": "yes", "phone": "yes"}
         for f in frames:
             fid, lb = f["id"], lab[f["id"]]
             raw = raws[fid]
             got = {"hud": "shown" if clip.minimap_seen(raw, final) else "hidden"}
+            why = {"hud": hud_why(clip.bar_means(raw, final), final)}
             if final.stars_on:
-                got["stars"] = "yes" if clip.star_score(raw, final) >= final.star_min_score else "no"
+                score = clip.star_score(raw, final)
+                got["stars"] = "yes" if score >= final.star_min_score else "no"
+                why["stars"] = f"star outline match {score:.3f}, limit {final.star_min_score:g}"
             if final.phone_on:
                 got["phone"] = "yes" if clip.phone_seen(raw, final) else "no"
+                why["phone"] = phone_why(clip.phone_measure(raw, final), final)
+            # the reason is kept only where the tool and the label disagree
+            why = {k: v for k, v in why.items() if lb.get(k) in ("shown", "hidden", "yes", "no") and k in got
+                   and (got[k] == yes_word[k]) != (lb[k] == yes_word[k])}
             report["frames"].append({"id": fid, "label": f"{f['video_name']} {f['time']}", "want": lb, "got": got,
+                                     "why": why,
                                      "star_score": round(scores[fid], 3) if fid in scores else None,
                                      "bars": [[round(v) for v in c] for c in means[fid]],
                                      "phone": {k: round(v, 1) for k, v in pm[fid].items()} if fid in pm else None})
@@ -645,6 +761,10 @@ def serve(session, port, browser):
                         session.data["last_report"] = report
                         session.save()
                         self.send(200, report)
+                    elif self.path == "/check":  # the drawing's problems, while drawing (nothing is read or kept)
+                        _, notes = geometry_profile(session.name, "", session.frame_size() or (1920, 1080),
+                                                    body.get("drawing") or {})
+                        self.send(200, {"notes": dict(notes)})
                     elif self.path == "/save":
                         out, mins = session.save_profile(bool(body.get("anyway")))
                         print(f"Saved {out}" + (f" ({mins:g} min after the page was first opened)" if mins else ""))

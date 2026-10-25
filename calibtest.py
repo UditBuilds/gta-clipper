@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import calibrate as cal
 import clip
@@ -74,14 +75,56 @@ def star_geometry_refuses_bad_clicks():
     return raises(cal.star_geometry, top, last, (100, 15), inner, 4) and raises(cal.star_geometry, top, (90, 20), low, inner, 4)
 
 
+def refused_with(fn, *args):
+    """The CalibError message fn raises, or '' if it doesn't raise one."""
+    try:
+        fn(*args)
+    except cal.CalibError as e:
+        return str(e)
+    return ""
+
+
+@check
+def star_clicks_on_the_wrong_spots_name_the_point():
+    """point 3 on another star, 1 slot typed with point 2 on another star, point 4 far outside: each refused, naming it"""
+    top, last, low, inner = star_clicks(100.0, 20.0, 10.0, 25.0, 4, 0.45)
+    far_low = (40.0, low[1])
+    far_inner = (inner[0] + 5, inner[1] + 60)
+    return ("point 3" in refused_with(cal.star_geometry, top, last, far_low, inner, 4)
+            and "1 star slot" in refused_with(cal.star_geometry, top, last, low, inner, 1)
+            and "point 4" in refused_with(cal.star_geometry, top, last, low, far_inner, 4)
+            and "point 4" in refused_with(cal.star_geometry, top, last, low, (100.0, 30.0), 4))
+
+
+@check
+def star_outlines_past_the_box_are_refused():
+    """a star box that cuts off the stars' top points gives a problem naming the top of the box"""
+    clicks = dict(zip(("top_first", "top_last", "low", "inner"), star_clicks(512.0, 14.0, 10.0, 30.0, 4, 0.45)))
+    drawing = {"bars": [{"box": [20, 300, 60, 4]}, {"box": [90, 300, 40, 4]}],
+               "stars": {"box": [500, 20, 120, 30], "slots": 4, "clicks": clicks}, "phone": {"off": True}}
+    _, notes = cal.geometry_profile("made_up", "Made Up", (640, 360), drawing)
+    return "top" in dict(notes).get("stars", "") and "star box" in dict(notes)["stars"]
+
+
 @check
 def snapping_to_the_cell_grid():
     """phone box cut to whole cells; an area moves to the nearest cell edges, at least one cell, inside the box"""
     box = cal.snap_box([10.4, 20.2, 43.0, 17.9], (8, 4))
     a = cal.snap_area([13, 21, 10, 6], box, (8, 4))
     tiny = cal.snap_area([11, 21, 1, 1], box, (8, 4))
-    outside = cal.snap_area([0, 0, 200, 200], box, (8, 4))
-    return box == [10, 20, 40, 16] and a == [10, 20, 16, 8] and tiny == [10, 20, 8, 4] and outside == box
+    edge = cal.snap_area([8, 18, 44, 20], box, (8, 4))  # less than a cell outside: cut to the box
+    return box == [10, 20, 40, 16] and a == [10, 20, 16, 8] and tiny == [10, 20, 8, 4] and edge == box
+
+
+@check
+def a_phone_area_outside_the_box_is_refused():
+    """an area drawn well outside the phone box is refused with a message naming it (it used to be cut down silently)"""
+    box = cal.snap_box([100, 100, 80, 40], (8, 4))
+    try:
+        cal.snap_area([110, 150, 20, 30], box, (8, 4), "dark area")
+    except cal.CalibError as e:
+        return "dark area" in str(e) and "outside the phone box" in str(e)
+    return False
 
 
 @check
@@ -123,6 +166,48 @@ def a_yellow_bar_tests_both_strong_channels():
     """a yellow bar (red and green strong, blue weak) gets two terms: red beats blue, green beats blue"""
     any_of, _ = cal.fit_bar(2, [[220, 200, 30], [210, 205, 40]], [], {})
     return len(any_of) == 1 and sorted((t["hi"], tuple(t["lo"])) for t in any_of[0]) == [("g", ("b",)), ("r", ("b",))]
+
+
+@check
+def dim_frames_of_a_bar_are_never_left_without_a_rule():
+    """a green bar on dark and bright scenes (dim ones close to grey-green) gets one green rule that every shown frame
+    passes; before, the dim frames got no rule at all and could never pass"""
+    shown = [[60, 92, 58], [52, 84, 55], [90, 150, 86], [100, 160, 95], [70, 108, 66]]
+    any_of, _ = cal.fit_bar(1, shown, [[30, 30, 30], [140, 120, 90]], {})
+    rule = [[("rgb".index(t["hi"]), tuple("rgb".index(c) for c in t["lo"]), t["min"]) for t in g] for g in any_of]
+    return (len(any_of) == 1 and [t["hi"] for t in any_of[0]] == ["g"]
+            and all(clip.bar_colour_ok(c, rule) for c in shown))
+
+
+@check
+def every_coloured_frame_lands_in_one_group():
+    """colour_groups: green and yellowish-green share one group, a red frame gets its own, a grey frame joins none"""
+    cols = [[40, 200, 50], [35, 190, 45], [120, 180, 40], [100, 104, 98], [200, 40, 30]]
+    groups = cal.colour_groups(cols)
+    return (sorted(groups) == [(0,), (1,)] and len(groups[(1,)]) == 3 and groups[(0,)] == [[200, 40, 30]]
+            and [100, 104, 98] not in groups[(1,)] + groups[(0,)])
+
+
+@check
+def a_black_frame_ticked_shown_does_not_wreck_the_limit():
+    """a black bar on a frame ticked 'HUD shown' by mistake doesn't drag the limit down; it fails the rule instead"""
+    shown = [[40, 200, 50], [50, 180, 60], [0, 0, 0]]
+    any_of, _ = cal.fit_bar(1, shown, [[100, 120, 100]], {})
+    rule = [[("rgb".index(t["hi"]), tuple("rgb".index(c) for c in t["lo"]), t["min"]) for t in g] for g in any_of]
+    return any_of[0][0]["min"] == (120 + 20) / 2 and not clip.bar_colour_ok([0, 0, 0], rule)
+
+
+@check
+def a_wrong_frame_says_why():
+    """hud_why names the bar that fails and the check it fails; phone_why names the failing phone part"""
+    prof = SimpleNamespace(bar_rules=(((((1, (0, 2), 50.0),),)), ((((2, (0,), 40.0),),))), bar_min_sat=0.3,
+                                bar_min_count=2, bar_min_distinct=30.0, phone_panel_range=(10.0, 60.0),
+                                phone_face_max=8.0, phone_battery_min=90.0, phone_panel_spread=20.0, phone_panel_tint=10.0)
+    hud = cal.hud_why([[40, 200, 50], [60, 100, 80]], prof)
+    phone = cal.phone_why({"face_max": 30.0, "battery_mean": 120.0, "panel_min": 20.0, "panel_max": 30.0,
+                           "panel_tint": 4}, prof)
+    return ("1 of 2 bars pass" in hud and "bar 2" in hud and "blue beats red by 20, needs 40" in hud
+            and phone == "dark area's brightest cell 30, needs at most 8")
 
 
 @check
