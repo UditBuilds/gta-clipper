@@ -1,7 +1,7 @@
 # gta-clipper (v7): full details
 
-This was the project README up to PR 8. It moved here unchanged apart from this note, the title and its links; the short
-case study is the [README](../README.md).
+This was the project README up to PR 8. It moved here unchanged apart from this note, the title, its links and one
+"this README" (now "this file"); the short case study is the [README](../README.md).
 
 Finds the most action-heavy moments in a gameplay recording and cuts them into vertical
 1080x1920 Shorts clips (15-30 s each, cut to the action). Built and tested on Windows 11 for GTA 5 PS5 captures.
@@ -436,7 +436,7 @@ hand-made answer key in `eval/answer_keys/` (one per test video; the videos them
 Everything else is neutral. Times are seconds in the source.
 
 **test1 and test2 are the dev set (rules were tuned on these).** Every eval result (precision, recall, bad picks,
-postable) in this README and in [eval/BASELINE.md](../eval/BASELINE.md) is on them, except the [held-out
+postable) in this file (docs/DETAILS.md) and in [eval/BASELINE.md](../eval/BASELINE.md) is on them, except the [held-out
 result](#held-out-result-pr-8) of PR 8. That one-time test on heldout1 and heldout2 was planned before any of their
 output existed ([eval/HELDOUT_PLAN.md](../eval/HELDOUT_PLAN.md)). **Since PR 8, heldout1 and heldout2 are dev data too.**
 Their answer keys (`eval/answer_keys/heldout1.json`, `heldout2.json`) were drafted by Claude from frames (10 s, 2.5 s,

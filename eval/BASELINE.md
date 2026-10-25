@@ -416,7 +416,7 @@ the new rule gave both clips a v2 rating with the same peak: 0:48.0-1:08.0 (peak
 |---|---|---|---|
 | 1 | eval's `hits()` counts a 0.0 s touch | true; fixed | `eval.py` used `<=` both ways; test1 v4 3:50.2-4:19.0 was a bad pick with 0.0 s shared |
 | 2 | v4 doesn't extend clips to 15 s and still makes 8 s clips | false | `clip.py` extends to `--min-len` (default 15) and drops shorter; the 15 s runs' lengths are 15-30 s. The reviewer read `ratings/test2_v4.json`, which rates the 8 s run |
-| 3 | HUD boxes scale by height/1088, so 1080/2160 footage turns HUD detection off silently | partly | The arithmetic is right (see README Known limits), but the 20 % guard prints a WARNING and `scores.json` records the HUD state. Not seen on such footage. Left for a HUD-profile PR |
+| 3 | HUD boxes scale by height/1088, so 1080/2160 footage turns HUD detection off silently | partly | The arithmetic is right (see [docs/DETAILS.md, Known limits](../docs/DETAILS.md#known-limits)), but the 20 % guard prints a WARNING and `scores.json` records the HUD state. Not seen on such footage. Left for a HUD-profile PR |
 | 4 | The phone-cut loop skips active steps after a short phone blip | false | `s` only moves on a phone step, to that step's end, which is where the next step starts. A synthetic check through `pick_clips` kept action that starts right after a phone stretch |
 | 5 | `steps(a, b)` is off by one at exact 0.5 s multiples | false | The end is exclusive, and dividing by 0.5 is exact: `steps(0, 10)` is steps 0-19. A piece ending at 47.0 s did not count a 9.0 step at 47.0-47.5 |
 | 6 | Muted or missing audio crashes or divides by zero | false | 60 s synthetic videos with no audio stream and with a silent track both ran to the end (exit 0, 2 clips). Silence reads -163.5 LUFS, floored to -70; the 1.0 LU scale floor prevents the division by zero |
@@ -424,7 +424,7 @@ the new rule gave both clips a v2 rating with the same peak: 0:48.0-1:08.0 (peak
 | 8 | The 80 % rule drops ratings when the clip length changes | true; replaced | Not silent: such clips printed "unrated". Replaced by the peak rule above |
 
 Found while checking claim 4, not changed: when cutting the phone out splits a clip, the piece with the best step is
-kept even if it is under 15 s, and then the candidate is dropped (README, Known limits). No test1/test2 clip has
+kept even if it is under 15 s, and then the candidate is dropped ([docs/DETAILS.md, Known limits](../docs/DETAILS.md#known-limits)). No test1/test2 clip has
 phone time cut.
 
 ## Tests

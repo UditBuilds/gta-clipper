@@ -1,7 +1,15 @@
 # gta-clipper
 
-Finds the action in a GTA V gameplay recording (PS5 captures) and cuts it into vertical 1080x1920 clips of 15-30 s for
-Shorts.
+- **What it does:** it finds the action in a GTA V gameplay recording (PS5 captures) and cuts it into vertical
+  1080x1920 clips of 15-30 s for Shorts, automatically.
+- **How I measured it:** before improving the tool, I built a way to score it: a list of where the action is (and where
+  a clip must never go) in each video, and my own "would I post this?" rating of each clip.
+- **What didn't help:** a local vision model, added to throw out bad clips. On two new videos, the setup I had chosen in
+  advance made exactly the same clips as the tool without it (one other setup did worse). A simple code rule fixed the
+  model's 3 mistakes on the videos I tuned on, but I wrote it after seeing those mistakes, and on the new videos it
+  turned 2 of the model's right calls into wrong ones.
+- **Final result:** on the two new videos, 5 of the top 10 clips were ones I would post (one video gave only 4 clips,
+  and the empty slot counts as a miss). On the two videos the tool was tuned on: 8 of 10.
 
 <!-- Demo video: the MP4 is uploaded with GitHub's web editor; its link goes on the line below this comment. -->
 
