@@ -16,13 +16,14 @@ of it (2:32.0-2:38.0, around the clip's peak at 2:35.0).*
 |---|---|---|
 | `--vlm off` (no vision model) | 8 | 5 |
 | The frozen vision-model config (4b v3 + star rule) | 8 | 5 |
-| 4b + stars, the only config that did worse than off | 8 | 4 |
+| 4b + stars, the only config worse than off on held-out | 8 | 4 |
 
 Postable@5 is how many of the first 5 clips per video I rated postable ([How I measured](#how-i-measured)).
 
 - **The vision-model step added nothing on held-out.** The frozen config made exactly the clips that `--vlm off` made,
-  on both held-out videos (same rank, start, end and peak). It spent 69.4 s of model time and 15.0 s of contact sheets
-  doing that. Of the six vision-model configs, five equal off and one did worse (4b + stars, 4 of 10).
+  on both held-out videos (same rank, start, end and peak). It costs 69.4 s of model time (its 4b v3 answers) and
+  15.0 s of contact sheets over the two videos, and changed no clip. Of the six vision-model configs, five equal off and
+  one did worse (4b + stars, 4 of 10).
 - **Dev is in-sample.** The rules were tuned on test1 and test2, and every config scored 8 of 10 there, so dev
   Postable@5 can't tell the configs apart.
 - **Held-out 5 of 10 includes an empty slot.** heldout2 made only 4 clips, and the missing 5th counts as not postable:
@@ -34,7 +35,7 @@ Details: [eval/BASELINE.md, v8](eval/BASELINE.md#v8-the-one-time-held-out-test-2
 
 ## How I measured
 
-Four PS5 recordings: test1 (15:24.7) and test2 (20:49.7) are the dev set, and the rules were tuned on them.
+Four GTA V recordings: test1 (15:24.7) and test2 (20:49.7) are the dev set, and the rules were tuned on them.
 heldout1 (15:18.7) and heldout2 (5:59.0) were used once, for the held-out test.
 
 - **Answer keys** (`eval/answer_keys/`, one per video): `action` ranges (shootouts, chases, crashes, carjacks, driving
@@ -95,9 +96,9 @@ The idea: before a candidate becomes a clip, a local vision model (Qwen3-VL 4B o
 
 - **The veto itself (PR 6).** On the 12 rated dev candidates, with the final prompt (v3), the 4b vetoed 3 clips I rated
   postable. All three had at least 27.5 s of measured wanted stars, and it called them boring (one is the demo clip).
-  The 8b vetoed no rated clip, so it also kept both clumsy crashes I rejected. Postable@5 didn't change with either model. None
-  of the three prompt versions allowed met the stopping rule (neither model vetoing a clip I rated postable). Model time
-  per video: 45.0-46.6 s for the 4b, 64.0-66.4 s for the 8b.
+  The 8b vetoed no rated clip, so it also kept both clumsy crashes I rejected. Postable@5 didn't change with either
+  model. None of the three prompt versions allowed met the stopping rule (neither model vetoing a clip I rated
+  postable). Model time per video: 45.0-46.6 s for the 4b, 64.0-66.4 s for the 8b.
 - **Telling the model the wanted stars as text (PR 7).** The tool already measures the stars, so the prompt got a line
   such as "Measured by the tool: wanted stars visible for 27.5 of 30.0 s." The 4b still called clips with 27.5-30 s of
   measured stars boring. With the final hint prompt it made 4 costly vetoes and kept 2 rejected clips (3 and 0 without
