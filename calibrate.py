@@ -7,7 +7,10 @@
      - the tool guesses what each frame shows (HUD shown or hidden from those bars, black screens, stars and phone
        "no") and you confirm each picture ("Looks right") or change it. Measure uses confirmed labels only, and
        the saved profile records how many guesses were kept or changed;
-     - you draw the star row (4 clicks) and the phone on zoomed frames.
+     - you draw one box round the star row and the tool finds the stars in it (fit_stars: the outer edges of
+       what differs between pictures with and without stars); you confirm the green outlines or redo them.
+       4 clicks on the first and last star are the fallback;
+     - you draw the phone on zoomed frames.
   3. "Measure" reads every labelled frame the way clip.py will: its own HUD filter chain on the video itself
      (same range handling), and its own detectors. Each limit is set halfway between the frames that show the
      thing and the nearest frame that doesn't. A limit with no such frame beyond it gets a fixed margin and is
@@ -42,6 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import clip
 
@@ -63,6 +67,17 @@ BAR_COL_SHARE = 0.6      # a column is part of a bar when 60 % of the bar rows a
 BAR_MIN_W = 6            # narrower coloured runs are not bars
 BAR_HUE_SPLIT = 30.0     # a hue change of more than this (degrees) between neighbouring columns starts a new bar
 BAR_MAX_AREA = 160_000   # a bigger rough box is refused (slow, and it picks up more than the bars)
+# Finding the stars inside the drawn star box (fit_stars). Judgement values, not measured on any game; calibtest.py
+# checks them on made-up star rows (sizes, shapes, slot counts, lit and unlit slots, text on the "no" pictures).
+STAR_TOL = 1.9           # outlines stay this close to the star box (geometry_profile allows 2 px)
+STAR_MIN_R = 3.0         # smaller stars can't be told from noise
+STAR_MIN_FILL = 0.45     # the stars are at least this much of the box's height (the box is drawn round the row)
+STAR_MIN_GAP = 1.95      # star slots at least this many radii apart: a star is 1.9 radii wide, so no overlaps
+STAR_MIN_YES = STAR_MIN_NO = 2  # "stars: yes" and "no" pictures needed to find the stars
+STAR_FIT_INNER = 0.45    # the coarse search's inner-corner ratio; the fine fit then finds the real one
+STAR_INNER = (0.3, 0.7)  # inner corners at 0.3-0.7 of the radius (a regular star: 0.38); spikier or fatter is no star
+STAR_COARSE, STAR_REFINE, STAR_KEEP = 12, 6, 3  # sizes/heights given a full row search; rows refined; rows scored
+STAR_PAD = 4             # zeros round the target grid
 BLACK_LEVEL, BLACK_SHARE = 20, 0.99  # a black screen: 99 % of a 160x90 copy of the frame darker than 20 (of 255)
 REAL = {"hud": ("shown", "hidden"), "stars": ("yes", "no"), "phone": ("yes", "no")}  # labels Measure uses; "?" = not sure
 
@@ -125,6 +140,216 @@ def star_geometry(top_first, top_last, low, inner, slots):
                          "where the edge turns inwards")
     return {"first_tip_x": round(ax, 2), "tip_spacing": round(spacing, 3), "tip_y": round(ay, 2),
             "radius": round(r, 2), "inner": round(ratio, 3), "level_px": round(by - ay, 1)}
+
+
+def luminance(raw, w, h):
+    return [0.2126 * raw[i] + 0.7152 * raw[i + 1] + 0.0722 * raw[i + 2] for i in range(0, w * h * 3, 3)]
+
+
+def star_target(yes_lums, no_lums, w, h):
+    """What a star outline should line up with, as rows of a grid padded with STAR_PAD zeros all round.
+
+    The stars are what differs between the "stars: yes" and "no" pictures: |mean brightness with stars - without|
+    is high over each whole star (dark outline and lit or unlit fill alike) and about 0 elsewhere, since the scene
+    behind changes. The edges of that difference are the stars' outer edges. Edges inside a star (fill against
+    outline) mostly cancel, so a smaller star inside the real one doesn't fit better. The edge map is
+    clip.star_score's (|dx| + |dy|), mean-centred like clip's template and blurred like its outline
+    (exp(-(d/1.5)^2))."""
+    diff = [abs(sum(m[i] for m in yes_lums) / len(yes_lums) - sum(m[i] for m in no_lums) / len(no_lums))
+            for i in range(w * h)]
+    e = [0.0] * (w * h)
+    for y in range(1, h - 1):
+        for i in range(y * w + 1, y * w + w - 1):
+            e[i] = abs(diff[i + 1] - diff[i - 1]) + abs(diff[i + w] - diff[i - w])
+    mean = sum(e) / len(e)
+    P = STAR_PAD
+    W, H = w + 2 * P, h + 2 * P
+    base = [[0.0] * W for _ in range(H)]
+    for y in range(h):
+        base[y + P][P:P + w] = [v - mean for v in e[y * w:(y + 1) * w]]
+    k = [math.exp(-(t / 1.5) ** 2) for t in range(-4, 5)]  # exp(-(dx/1.5)^2) * exp(-(dy/1.5)^2) = exp(-(d/1.5)^2)
+    across = [[sum(k[j] * row[x + j - 4] for j in range(9) if 0 <= x + j - 4 < W) for x in range(W)] for row in base]
+    return [[sum(k[j] * across[y + j - 4][x] for j in range(9) if 0 <= y + j - 4 < H) for x in range(W)]
+            for y in range(H)]
+
+
+def star_samples(r, inner, step=0.5):
+    """Points along one star outline (clip's star: 5 points, the top one straight up), relative to its top
+    point: (dx, dy, length of outline the point stands for)."""
+    pts = [(r_ * math.cos(a), r + r_ * math.sin(a)) for i in range(10)
+           for a, r_ in [(-math.pi / 2 + i * math.pi / 5, r if i % 2 == 0 else r * inner)]]
+    out = []
+    for i in range(10):
+        (ax, ay), (bx, by) = pts[i], pts[(i + 1) % 10]
+        length = math.hypot(bx - ax, by - ay)
+        m = max(1, math.ceil(length / step))
+        out += [(ax + (bx - ax) * (j + 0.5) / m, ay + (by - ay) * (j + 0.5) / m, length / m) for j in range(m)]
+    return out
+
+
+def star_row_score(grid, tip_x, spacing, tip_y, r, inner, slots):
+    """How well a row of star outlines lines up with the target (box pixels; about clip's correlation, up to a
+    constant): the target summed along the outlines, over the square root of their length."""
+    total = length = 0.0
+    smp = star_samples(r, inner)
+    for k in range(slots):
+        ox = tip_x + k * spacing - 0.5 + STAR_PAD
+        oy = tip_y - 0.5 + STAR_PAD
+        for dx, dy, wt in smp:
+            x, y = ox + dx, oy + dy
+            ix, iy = math.floor(x), math.floor(y)
+            fx, fy = x - ix, y - iy
+            r0, r1 = grid[iy], grid[iy + 1]
+            total += wt * ((1 - fy) * ((1 - fx) * r0[ix] + fx * r0[ix + 1]) + fy * ((1 - fx) * r1[ix] + fx * r1[ix + 1]))
+            length += wt
+    return total / math.sqrt(length)
+
+
+def star_fits_box(w, h, tip_x, spacing, tip_y, r, inner, slots):
+    """The outlines stay inside the box (within STAR_TOL), the stars don't overlap and the shape is a star."""
+    return (r >= max(STAR_MIN_R, STAR_MIN_FILL * h / (1 + SIN54)) and STAR_INNER[0] <= inner <= STAR_INNER[1] and tip_y >= -STAR_TOL and tip_y + r * (1 + SIN54) <= h + STAR_TOL
+            and tip_x - r * COS18 >= -STAR_TOL and tip_x + spacing * (slots - 1) + r * COS18 <= w + STAR_TOL
+            and (slots == 1 or spacing >= STAR_MIN_GAP * r))
+
+
+def fit_star_row(grid, w, h, slots=None):
+    """The star rows that line up best with the target grid (star_target), best first: up to STAR_KEEP of
+    (score, (tip_x, spacing, tip_y, r, inner, slots)) in box pixels. slots None = try every count that fits.
+
+    Coarse: for every size and height on a 0.5 px / 1 px grid, one star's score at every whole-pixel position
+    (from the target's shifted rows), then the best evenly spaced row of 1-10 of those stars. Fine: the best few
+    rows moved, spaced, sized and shaped in ever smaller steps while the score rises."""
+    r_max = min((h + 2 * STAR_TOL) / (1 + SIN54), (w + 2 * STAR_TOL) / (2 * COS18))
+    r_min = max(STAR_MIN_R, STAR_MIN_FILL * h / (1 + SIN54))
+    singles = []
+    r = r_min
+    while r <= r_max + 1e-9:
+        smp = star_samples(r, STAR_FIT_INNER)
+        L = sum(s[2] for s in smp)
+        lo, hi = math.ceil(r * COS18 - STAR_TOL), math.floor(w + STAR_TOL - r * COS18)
+        ty = -STAR_TOL
+        while hi >= lo and ty + r * (1 + SIN54) <= h + STAR_TOL + 1e-9:
+            weights = {}
+            for dx, dy, wt in smp:
+                x, y = dx - 0.5 + STAR_PAD, ty + dy - 0.5 + STAR_PAD
+                ix, iy = math.floor(x), math.floor(y)
+                fx, fy = x - ix, y - iy
+                for key, part in (((iy, ix), (1 - fx) * (1 - fy)), ((iy, ix + 1), fx * (1 - fy)),
+                                  ((iy + 1, ix), (1 - fx) * fy), ((iy + 1, ix + 1), fx * fy)):
+                    weights[key] = weights.get(key, 0.0) + wt * part
+            one = [0.0] * (hi - lo + 1)
+            for (iy, ix), wt in weights.items():
+                seg = grid[iy][lo + ix:hi + ix + 1]
+                one = [a + wt * b for a, b in zip(one, seg)]
+            singles.append((max(one) / math.sqrt(L), r, ty, one, lo, L))
+            ty += 1.0
+        r += 0.5
+    if not singles:
+        raise CalibError("the star box is too small for a star: drag it again round the whole star row")
+    singles.sort(key=lambda c: -c[0])
+    rows = []
+    for _, r, ty, one, lo, L in singles[:STAR_COARSE]:
+        span = len(one) - 1
+        for n in ([slots] if slots else range(1, 11)):
+            if n == 1:
+                i = max(range(len(one)), key=one.__getitem__)
+                rows.append((one[i] / math.sqrt(L), (lo + i, 0.0, ty, r, STAR_FIT_INNER, 1)))
+                continue
+            best = None
+            s = max(STAR_MIN_GAP * r, 2.0)
+            while s * (n - 1) <= span:
+                for x0 in range(0, span - math.ceil(s * (n - 1)) + 1):
+                    v = sum(one[round(x0 + k * s)] for k in range(n))
+                    if best is None or v > best[0]:
+                        best = (v, x0, s)
+                s += 0.5
+            if best:
+                rows.append((best[0] / math.sqrt(n * L), (lo + best[1], best[2], ty, r, STAR_FIT_INNER, n)))
+    if not rows:
+        raise CalibError(f"{slots} star slots don't fit side by side in the star box: check the number, or drag the "
+                         "box again round the whole star row")
+    rows.sort(key=lambda c: -c[0])
+    picked = []
+    for score, p in rows:  # the best few, no two the same layout
+        if all(p[5] != q[5] or abs(p[0] - q[0]) > 1 or abs(p[3] - q[3]) > 0.5 or abs(p[2] - q[2]) > 1 for _, q in picked):
+            picked.append((score, p))
+        if len(picked) == STAR_REFINE:
+            break
+    out = [refine_star_row(grid, w, h, p) for _, p in picked]
+    out.sort(key=lambda c: -c[0])
+    return out[:STAR_KEEP]
+
+
+def refine_star_row(grid, w, h, p):
+    """(score, params) after moving tip_x, spacing, tip_y, r and inner in ever smaller steps while the score rises."""
+    p = list(p)
+    steps = [0.5, 0.25 if p[5] > 1 else 0.0, 0.5, 0.25, 0.04]
+    least = [0.05, 0.01, 0.05, 0.02, 0.005]
+    best = star_row_score(grid, *p)
+    while any(st >= lo for st, lo in zip(steps, least)):
+        moved = False
+        for i in range(5):
+            if steps[i] < least[i]:
+                continue
+            for sign in (1, -1):
+                q = list(p)
+                q[i] += sign * steps[i]
+                if star_fits_box(w, h, *q):
+                    v = star_row_score(grid, *q)
+                    if v > best + 1e-12:
+                        best, p, moved = v, q, True
+                        break
+        if not moved:
+            steps = [st / 2 for st in steps]
+    return best, tuple(p)
+
+
+def star_scores(box, geom, raws):
+    """clip.star_score of each raw star box (bytes, the box's own width) with the outline geom (frame pixels)."""
+    prof = SimpleNamespace(star_box=tuple(box), hud_w=box[2], star_tip_y=geom["tip_y"], star_radius=geom["radius"],
+                           star_inner=geom["inner"],
+                           star_tips_x=tuple(geom["first_tip_x"] + geom["tip_spacing"] * k for k in range(geom["slots"])))
+    prof.star_template = clip.star_template(prof)
+    return [clip.star_score(raw, prof) for raw in raws]
+
+
+def fit_stars(box, yes_raws, no_raws, slots=None):
+    """The star row inside box ([x, y, w, h], whole frame pixels) from the star box of the "stars: yes" and "no"
+    pictures (raw RGB bytes, box size); slots None = find the number too. Of the best rows the target picks, the
+    best fitting one whose clip.star_score separates the two groups wins (the best fitting one if none does).
+    Returns the outline (frame pixels), the lowest "yes" and highest "no" score and whether they separate."""
+    x0, y0, w, h = box
+    for raws, what, need in ((yes_raws, "yes", STAR_MIN_YES), (no_raws, "no", STAR_MIN_NO)):
+        if len(raws) < need:
+            raise CalibError(f"mark at least {need} pictures 'stars: {what}' in step 2 first ({len(raws)} so far): "
+                             "the tool finds the stars from what differs between the two")
+    grid = star_target([luminance(r, w, h) for r in yes_raws], [luminance(r, w, h) for r in no_raws], w, h)
+    best = None
+    for _, (tx, sp, ty, r, inner, n) in fit_star_row(grid, w, h, slots):  # best fitting first
+        geom = {"first_tip_x": round(x0 + tx, 2), "tip_spacing": round(sp, 3), "tip_y": round(y0 + ty, 2),
+                "radius": round(r, 2), "inner": round(inner, 3), "slots": n}
+        yes, no = star_scores(box, geom, yes_raws), star_scores(box, geom, no_raws)
+        if best is None or min(yes) > max(no) >= best[0]:  # the first one that separates, else the first
+            best = (min(yes) - max(no), geom, yes, no)
+        if best[0] > 0:
+            break
+    gap, geom, yes, no = best
+    return {**geom, "box": list(box), "slots_typed": bool(slots), "yes": len(yes), "no": len(no),
+            "lowest_yes": round(min(yes), 3), "highest_no": round(max(no), 3), "separates": gap > 0,
+            "confirmed": False}
+
+
+def in_frame(rect, frame, what="box"):
+    """rect [x, y, w, h] cut to the picture's edges: a box dragged past an edge would make clip.py refuse the
+    profile. A box already inside (in whole pixels) comes back unchanged; one wholly outside is refused."""
+    fw, fh = frame
+    x, y, w, h = rect
+    if round(x) >= 0 and round(y) >= 0 and round(x) + round(w) <= fw and round(y) + round(h) <= fh:
+        return rect
+    x0, y0, x1, y1 = max(0, round(x)), max(0, round(y)), min(fw, round(x + w)), min(fh, round(y + h))
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        raise CalibError(f"the {what} is outside the picture: draw it again on the picture")
+    return [x0, y0, x1 - x0, y1 - y0]
 
 
 def snap_box(rect, cell):
@@ -463,12 +688,13 @@ def number_row(key, what, shown, hidden, kind, override, digits=1):
 
 def geometry_profile(name, game, frame, drawing):
     """A profile with the drawn geometry and stand-in limits, for measuring. Missing parts are left off and
-    reported; the minimap needs its bars before anything can be measured."""
+    reported; the minimap needs its bars before anything can be measured. Every box is cut to the picture's
+    edges first (in_frame); the drawing itself is left as drawn."""
     d = drawing
     notes = []
     bars = d.get("bars") or []
     try:
-        mm_box, xr = bar_row([b["box"] for b in bars])
+        mm_box, xr = bar_row([in_frame(b["box"], frame, f"bar {i} box") for i, b in enumerate(bars, 1)])
     except CalibError as e:
         notes.append(("minimap", str(e)))
         mm_box, xr = [0, 0, 16, 2], [[0, 8], [8, 16]]
@@ -483,29 +709,41 @@ def geometry_profile(name, game, frame, drawing):
     if st.get("off"):
         profile["stars"] = {"on": False}
     else:
-        c = st.get("clicks") or {}
         try:
             if not st.get("box"):
                 raise CalibError("draw the box around the star row")
-            if not isinstance(st.get("slots"), int) or not 1 <= st["slots"] <= 10:
-                raise CalibError("type how many star slots the row has")
-            missing = [k for k in ("top_first", "top_last", "low", "inner") if not c.get(k)]
-            if missing:
-                raise CalibError("click the 4 star points (" + ", ".join(missing) + " still missing)")
-            g = star_geometry(c["top_first"], c["top_last"], c["low"], c["inner"], st["slots"])
-            x0, y0, w, h = st["box"]
-            r, last = g["radius"], g["first_tip_x"] + g["tip_spacing"] * (st["slots"] - 1)
+            star_box = in_frame(st["box"], frame, "star box")
+            box = [round(v) for v in star_box]
+            if st.get("mode") == "clicks":  # the fallback: 4 clicks and a typed number of slots
+                c = st.get("clicks") or {}
+                if not isinstance(st.get("slots"), int) or not 1 <= st["slots"] <= 10:
+                    raise CalibError("type how many star slots the row has")
+                missing = [k for k in ("top_first", "top_last", "low", "inner") if not c.get(k)]
+                if missing:
+                    raise CalibError("click the 4 star points (" + ", ".join(missing) + " still missing)")
+                g = star_geometry(c["top_first"], c["top_last"], c["low"], c["inner"], st["slots"])
+                slots = st["slots"]
+            else:  # the default: the tool finds the stars in the box (Session.fit_stars), you confirm them
+                g = st.get("fit")
+                if not g:
+                    raise CalibError("press 'Find the stars' so the tool finds them in your box")
+                if g.get("box") != box:
+                    raise CalibError("the star box changed after the stars were found: press 'Find the stars' again")
+                if not g.get("confirmed"):
+                    raise CalibError("check the green outlines on a few pictures, then press 'Looks right' (or 'Redo')")
+                slots = g["slots"]
+            x0, y0, w, h = star_box
+            r, last = g["radius"], g["first_tip_x"] + g["tip_spacing"] * (slots - 1)
             cut = [side for side, out in (("top", g["tip_y"] < y0 - 2), ("bottom", g["tip_y"] + r * (1 + SIN54) > y0 + h + 2),
                                           ("left", g["first_tip_x"] - r * COS18 < x0 - 2),
                                           ("right", last + r * COS18 > x0 + w + 2)) if out]
             if cut:
                 raise CalibError(f"the green star outlines go past the {' and '.join(cut)} of the star box: drag the "
                                  "box again so every star fits inside it, with a little space round them")
-            box = [round(v) for v in st["box"]]
-            profile["stars"] = {"on": True, "box": box, "slots": st["slots"],
+            profile["stars"] = {"on": True, "box": box, "slots": slots,
                                 **{k: g[k] for k in ("first_tip_x", "tip_spacing", "tip_y", "radius", "inner")},
                                 "min_score": 1.0, "boost": DEFAULTS["star_boost"]}
-            if abs(g["level_px"]) > 2:
+            if abs(g.get("level_px", 0)) > 2:
                 notes.append(("stars", f"the first and last top points are {abs(g['level_px']):g} px apart in "
                                        "height; the outline uses the first one"))
         except CalibError as e:
@@ -519,13 +757,13 @@ def geometry_profile(name, game, frame, drawing):
         notes.append(("phone", "draw the phone box, then its dark, bright and grey areas"))
         profile["phone"] = {"on": False, "_missing": True}
     else:
-        box = snap_box(ph["box"], cell)
         try:
+            box = snap_box(in_frame(ph["box"], frame, "phone box"), cell)
+            area = lambda r, what: snap_area(in_frame(r, frame, what), box, cell, what)
             profile["phone"] = {"on": True, "box": box, "cell": list(cell),
-                                "dark": {"area": snap_area(ph["dark"], box, cell, "dark area"), "max": 0.0},
-                                "bright": {"area": snap_area(ph["bright"], box, cell, "bright area"), "min_mean": 0.0},
-                                "grey": {"areas": [snap_area(a, box, cell, f"grey area {i}")
-                                                   for i, a in enumerate(ph["grey"], 1)],
+                                "dark": {"area": area(ph["dark"], "dark area"), "max": 0.0},
+                                "bright": {"area": area(ph["bright"], "bright area"), "min_mean": 0.0},
+                                "grey": {"areas": [area(a, f"grey area {i}") for i, a in enumerate(ph["grey"], 1)],
                                          "min": 0.0, "max": 0.0, "max_spread": 0.0, "max_tint": 0.0}}
         except CalibError as e:
             notes.append(("phone", str(e)))
@@ -675,6 +913,40 @@ class Session:
         return (f"Found {len(found['bars'])} bars ({', '.join(found['names'])}) in one row, from {len(use)} pictures. "
                 f"The tool's guess: HUD shown on {shown} pictures, hidden on {len(frames) - shown}.")
 
+    def fit_stars(self, slots=None):
+        """Find the star row inside the drawn star box from the confirmed "stars: yes" and "no" pictures (fit_stars)
+        and keep it, unconfirmed, as drawing.stars.fit. slots: a number typed on the page, else None (found too).
+        Returns (the fit, a message for the page)."""
+        frame = self.frame_size()
+        st = self.data["drawing"].setdefault("stars", {})
+        if not frame:
+            raise CalibError("add frames first (all of one picture size)")
+        if not st.get("box"):
+            raise CalibError("drag the box around the star row first")
+        if slots is not None and not (isinstance(slots, int) and 1 <= slots <= 10):
+            raise CalibError("the number of star slots must be 1 to 10 (or leave it empty)")
+        box = [round(v) for v in in_frame(st["box"], frame, "star box")]
+        if box[2] < 8 or box[3] < 6:
+            raise CalibError("the star box is too small: drag it round the whole star row")
+        frames = self.data["frames"]
+        yes = [f for f in frames if f["labels"].get("stars") == "yes"]
+        no = [f for f in frames if f["labels"].get("stars") == "no"]
+        raws = self.read_area(yes + no, box)
+        fit = fit_stars(box, [raws[f["id"]] for f in yes], [raws[f["id"]] for f in no], slots)
+        st["fit"] = fit
+        self.event("fit_stars", box=box, slots_typed=slots, slots=fit["slots"], separates=fit["separates"])
+        self.save()
+        found = f"{fit['slots']} star slot{'s' if fit['slots'] > 1 else ''}" + (" (the number you typed)" if slots else "")
+        if fit["separates"]:
+            msg = (f"Found {found} in your box, from {fit['yes']} pictures with stars and {fit['no']} without. "
+                   f"With these outlines every picture with stars scores at least {fit['lowest_yes']:.3f} and every "
+                   f"picture without at most {fit['highest_no']:.3f}, so they can be told apart.")
+        else:
+            msg = (f"Found {found} in your box, but with these outlines a picture without stars scores "
+                   f"{fit['highest_no']:.3f} and one with stars only {fit['lowest_yes']:.3f}: they can't be told "
+                   "apart yet. Check the 'stars' labels in step 2, or drag the star box again a little tighter.")
+        return fit, msg
+
     def frame_size(self):
         sizes = {(f["w"], f["h"]) for f in self.data["frames"]}
         return sizes.pop() if len(sizes) == 1 else None
@@ -777,7 +1049,9 @@ class Session:
                 sbad.append("tick at least one frame as 'stars: yes'")
             elif no and min(yes) <= max(no):
                 sbad.append(f"the two groups overlap: a frame with stars scores {min(yes):.3f}, a frame without "
-                            f"scores {max(no):.3f}. Check the labels, the star box and the 4 clicks")
+                            f"scores {max(no):.3f}. Check the labels, the star box and the "
+                            + ("4 clicks" if d["drawing"].get("stars", {}).get("mode") == "clicks"
+                               else "green star outlines (step 3)"))
             if yes:
                 v, row = number_row("min_score", "star outline match (0 = none, 1 = perfect) at least", yes, no,
                                     "at least", ov, 3)
@@ -892,6 +1166,7 @@ class Session:
                                "status": {k: v["status"] for k, v in report["rules"].items()},
                                "bars": ("found by the tool from one rough box" if bars and all(b.get("auto") for b in bars)
                                         else "drawn by hand"),
+                               "stars": star_source(self.data["drawing"].get("stars") or {}),
                                "labels": label_summary(self.data["frames"]),
                                "page_opened": opened, "saved": saved}
         clean = json.loads(json.dumps(prof))
@@ -906,6 +1181,17 @@ class Session:
         self.data["saved"] = {"path": str(out), "time": saved, "report": report}
         self.save()
         return out, minutes(opened, saved)
+
+
+def star_source(st):
+    """Where the saved star outline came from, for the profile's calibration block."""
+    if st.get("off"):
+        return "switched off"
+    if st.get("mode") == "clicks":
+        return "from 4 clicks"
+    fit = st.get("fit") or {}
+    return ("found by the tool in the drawn box and confirmed"
+            + (", with the number of slots typed in" if fit.get("slots_typed") else ""))
 
 
 def inherited(prof):
@@ -977,7 +1263,7 @@ def serve(session, port, browser):
                 return
             try:
                 with session.lock:
-                    if self.path in ("/state", "/measure", "/save", "/findbars"):
+                    if self.path in ("/state", "/measure", "/save", "/findbars", "/fitstars"):
                         for k in ("drawing", "overrides", "game"):
                             if k in body:
                                 session.data[k] = body[k]
@@ -1000,6 +1286,9 @@ def serve(session, port, browser):
                         message = session.find_bars(rect)
                         self.send(200, {"message": message, "drawing": session.data["drawing"],
                                         "frames": session.data["frames"]})
+                    elif self.path == "/fitstars":
+                        fit, message = session.fit_stars(body.get("slots"))
+                        self.send(200, {"fit": fit, "message": message})
                     elif self.path == "/check":  # the drawing's problems, while drawing (nothing is read or kept)
                         _, notes = geometry_profile(session.name, "", session.frame_size() or (1920, 1080),
                                                     body.get("drawing") or {})

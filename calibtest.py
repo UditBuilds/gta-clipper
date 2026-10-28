@@ -7,6 +7,9 @@ without the HUD. The end-to-end checks build a 12 s 640x360 video with ffmpeg (t
 dark/bright/grey "phone" that come and go over random colour blocks that change every frame, then a black
 screen): one draws the bars by hand, the other finds them from one rough box and confirms the tool's guesses;
 both measure, save and load the result with clip.py. They work in a temporary folder; profiles/ is not touched.
+The star finder is checked on 8 invented star rows (2-6 slots, 6.5-12 px radius, any spacing and shape, some
+slots unlit, the box loose and off-centre, digit-like strokes on some "no" pictures), and a third end-to-end run
+finds an invented star row in the video, measures and saves it.
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error), so a
 missing function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL; exit code 0 or 1.
@@ -18,9 +21,11 @@ import json
 import math
 import random
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -105,7 +110,7 @@ def star_outlines_past_the_box_are_refused():
     """a star box that cuts off the stars' top points gives a problem naming the top of the box"""
     clicks = dict(zip(("top_first", "top_last", "low", "inner"), star_clicks(512.0, 14.0, 10.0, 30.0, 4, 0.45)))
     drawing = {"bars": [{"box": [20, 300, 60, 4]}, {"box": [90, 300, 40, 4]}],
-               "stars": {"box": [500, 20, 120, 30], "slots": 4, "clicks": clicks}, "phone": {"off": True}}
+               "stars": {"mode": "clicks", "box": [500, 20, 120, 30], "slots": 4, "clicks": clicks}, "phone": {"off": True}}
     _, notes = cal.geometry_profile("made_up", "Made Up", (640, 360), drawing)
     return "top" in dict(notes).get("stars", "") and "star box" in dict(notes)["stars"]
 
@@ -232,7 +237,7 @@ def an_override_wins():
 def drawing_makes_a_profile_clip_loads():
     """a made-up drawing on a 640x360 frame becomes a profile clip.load_profile accepts, phone areas on the grid"""
     drawing = {"bars": [{"box": [20, 300, 60, 4]}, {"box": [90, 300, 40, 4]}],
-               "stars": {"box": [500, 10, 120, 30], "slots": 4,
+               "stars": {"mode": "clicks", "box": [500, 10, 120, 30], "slots": 4,
                          "clicks": dict(zip(("top_first", "top_last", "low", "inner"),
                                             star_clicks(512.0, 14.0, 10.0, 30.0, 4, 0.45)))},
                "phone": {"box": [500, 200, 100, 80], "dark": [505, 203, 50, 10], "bright": [560, 220, 9, 7],
@@ -243,6 +248,30 @@ def drawing_makes_a_profile_clip_loads():
     return (not notes and p.frame == (640, 360) and p.bar_segments == ((20, 80), (90, 130)) and p.bar_min_count == 2
             and len(p.star_tips_x) == 4 and p.phone_box == (500, 200, 96, 80)
             and all((x0 - 500) % 8 == 0 and (y0 - 200) % 4 == 0 for x0, _, y0, _ in (p.phone_face, p.phone_battery)))
+
+
+@check
+def boxes_past_the_picture_edge_are_cut_to_it():
+    """boxes dragged past the picture's edges are cut to them, so clip.py loads the profile; boxes inside are
+    unchanged; a box wholly outside is refused with its name; the drawing itself is not changed"""
+    drawing = {"bars": [{"box": [-5, 300, 85, 4]}, {"box": [90, 300, 40, 4]}],
+               "stars": {"mode": "clicks", "box": [500, 10, 150, 30], "slots": 4,
+                         "clicks": dict(zip(("top_first", "top_last", "low", "inner"),
+                                            star_clicks(512.0, 14.0, 10.0, 30.0, 4, 0.45)))},
+               "phone": {"box": [500.4, 200, 100, 180.6], "dark": [505, 203, 50, 10], "bright": [560, 220, 9, 7],
+                         "grey": [[505, 340, 30, 40]]}}
+    before = json.dumps(drawing)
+    prof, notes = cal.geometry_profile("made_up", "Made Up", (640, 360), drawing)
+    with tempfile.TemporaryDirectory() as tmp:
+        p = cal.load(prof, Path(tmp) / "made_up.json")
+    inside = cal.in_frame([10.4, 20.2, 43.0, 17.9], (640, 360)) == [10.4, 20.2, 43.0, 17.9]
+    try:
+        cal.in_frame([700, 10, 20, 20], (640, 360), "phone box")
+        outside = False
+    except cal.CalibError as e:
+        outside = "phone box" in str(e) and "outside the picture" in str(e)
+    return (not notes and json.dumps(drawing) == before and p.bar_segments == ((0, 80), (90, 130))
+            and p.phone_box == (500, 200, 96, 160) and p.star_box == (500, 10, 140, 30) and inside and outside)
 
 
 @check
@@ -470,6 +499,222 @@ def end_to_end_on_a_made_up_video():
     return (frames_right and statuses["minimap"] in ("ready", "check") and statuses["phone"] in ("ready", "check")
             and statuses["stars"] == "off" and again and p.phone_on and not p.stars_on
             and saved["calibration"]["frames"] == 8 and "inherited" in saved["calibration"])
+
+
+# --- The star finder (fit_stars) on made-up star rows ---
+
+def star_points(tip_x, tip_y, r, inner):
+    """clip.py's star: 5 points, the top one straight up, as 10 corners."""
+    return [(tip_x + rr * math.cos(a), tip_y + r + rr * math.sin(a)) for i in range(10)
+            for a, rr in [(-math.pi / 2 + i * math.pi / 5, r if i % 2 == 0 else r * inner)]]
+
+
+def inside_polygon(poly, x, y):
+    hit = False
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i], poly[i - 1]
+        if (ay > y) != (by > y) and x < ax + (y - ay) * (bx - ax) / (by - ay):
+            hit = not hit
+    return hit
+
+
+def to_outline(poly, x, y):
+    def seg(a, b):
+        (ax, ay), (bx, by) = a, b
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+        return math.hypot(x - ax - t * dx, y - ay - t * dy)
+    return min(seg(poly[i], poly[(i + 1) % len(poly)]) for i in range(len(poly)))
+
+
+def draw_stars(w, h, stars, lit, under=None, outline=1.2):
+    """RGBA pixels (lists) of star outlines: a dark outline round a white (lit) or grey (unlit) fill, 3x3 samples a
+    pixel, painted over under (RGB lists) or over transparent."""
+    px = under or [[0, 0, 0, 0] for _ in range(w * h)]
+    for k, poly in enumerate(stars):
+        fill = (235, 235, 235) if k < lit else (110, 110, 110)
+        xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+        for y in range(max(0, int(min(ys)) - 2), min(h, int(max(ys)) + 3)):
+            for x in range(max(0, int(min(xs)) - 2), min(w, int(max(xs)) + 3)):
+                acc, cov = [0.0, 0.0, 0.0], 0
+                for sy in (0.17, 0.5, 0.83):
+                    for sx in (0.17, 0.5, 0.83):
+                        if to_outline(poly, x + sx, y + sy) < outline:
+                            c = (15, 15, 15)
+                        elif inside_polygon(poly, x + sx, y + sy):
+                            c = fill
+                        else:
+                            continue
+                        cov += 1
+                        acc = [a + b for a, b in zip(acc, c)]
+                if cov:
+                    o = px[y * w + x]
+                    if under is None:
+                        px[y * w + x] = [round(a / cov) for a in acc] + [round(255 * cov / 9)]
+                    else:
+                        px[y * w + x] = [(acc[i] + o[i] * (9 - cov)) / 9 for i in range(3)]
+    return px
+
+
+def scene_box(w, h, rng):
+    """A changing scene behind the HUD: random 6 px colour blocks."""
+    blocks = {(i, j): [rng.randrange(256) for _ in range(3)] for i in range(w // 6 + 1) for j in range(h // 6 + 1)}
+    return [list(blocks[(x // 6, y // 6)]) for y in range(h) for x in range(w)]
+
+
+def digits(px, w, h, rng):
+    """Digit-like white strokes, the kind of text that sits in a star row without stars (ammo, cash)."""
+    for _ in range(rng.randint(3, 6)):
+        x0, y0 = rng.randrange(0, w - 8), rng.randrange(0, max(1, h - 12))
+        for y in range(y0, min(h, y0 + rng.randint(8, 14))):
+            for x in range(x0, min(w, x0 + rng.randint(2, 7))):
+                px[y * w + x] = [240, 240, 240]
+    return px
+
+
+def to_bytes(px):
+    return bytes(max(0, min(255, round(v))) for p in px for v in p[:3])
+
+
+def made_up_star_row(seed):
+    """A random star row in a loose, off-centre box: (w, h, true layout, "yes" pictures, "no" pictures)."""
+    rng = random.Random(seed)
+    n, r, inner = rng.randint(2, 6), rng.uniform(6.5, 12), rng.uniform(0.38, 0.55)
+    spacing = r * rng.uniform(2.05, 2.6)
+    tip_x, tip_y = rng.uniform(3, 15) + r * cal.COS18, rng.uniform(2, 7)
+    w = math.ceil(tip_x + spacing * (n - 1) + r * cal.COS18 + rng.uniform(3, 15))
+    h = math.ceil(tip_y + r * (1 + cal.SIN54) + rng.uniform(2, 7))
+    stars = [star_points(tip_x + k * spacing, tip_y, r, inner) for k in range(n)]
+    yes = [to_bytes(draw_stars(w, h, stars, rng.randint(1, n), scene_box(w, h, rng))) for _ in range(5)]
+    no = [to_bytes(digits(scene_box(w, h, rng), w, h, rng) if rng.random() < 0.5 else scene_box(w, h, rng))
+          for _ in range(6)]
+    return w, h, {"tip_x": tip_x, "spacing": spacing, "tip_y": tip_y, "r": r, "slots": n}, yes, no
+
+
+def star_fit_matches(fit, true, x0, y0):
+    """slots exact; every star's middle within 1 px across and down; the radius from the outline's middle to 2.5 px
+    past it (the fit follows the outer edge of the dark outline, which is what you see as the star's edge)."""
+    mids_ok = all(abs((fit["first_tip_x"] - x0 + k * fit["tip_spacing"]) - (true["tip_x"] + k * true["spacing"])) <= 1.0
+                  for k in range(true["slots"]))
+    return (fit["slots"] == true["slots"] and mids_ok
+            and abs((fit["tip_y"] - y0 + fit["radius"]) - (true["tip_y"] + true["r"])) <= 1.0
+            and true["r"] - 0.5 <= fit["radius"] <= true["r"] + 2.5)
+
+
+@check
+def stars_found_in_made_up_star_rows():
+    """8 made-up star rows (2-6 slots, 6.5-12 px, some unlit, loose box, text on some 'no' pictures): the tool
+    finds the number of slots, every star's middle within 1 px, the size to the outline's outer edge, and the
+    outlines separate the pictures with stars from those without (clip.star_score)"""
+    bad = []
+    for seed in range(8):
+        w, h, true, yes, no = made_up_star_row(seed)
+        fit = cal.fit_stars([100, 50, w, h], yes, no)
+        if not (star_fit_matches(fit, true, 100, 50) and fit["separates"] and not fit["confirmed"]):
+            bad.append(seed)
+    if bad:
+        print(f"    rows found wrong: {bad}")
+    return not bad
+
+
+@check
+def star_slots_typed_in_are_used():
+    """with the number of slots typed in, the tool finds that many (here one fewer than the row has: the outlines
+    sit on stars, evenly spaced) and records that the number was typed"""
+    w, h, true, yes, no = made_up_star_row(3)
+    fit = cal.fit_stars([0, 0, w, h], yes, no, slots=true["slots"] - 1)
+    return fit["slots"] == true["slots"] - 1 and fit["slots_typed"] and fit["separates"]
+
+
+@check
+def too_few_star_pictures_are_refused():
+    """fewer than 2 'stars: yes' or 2 'stars: no' pictures: refused with a message saying what to label"""
+    w, h, _, yes, no = made_up_star_row(1)
+    msgs = []
+    for y, n in ((yes[:1], no), (yes, no[:1])):
+        try:
+            cal.fit_stars([0, 0, w, h], y, n)
+            msgs.append("")
+        except cal.CalibError as e:
+            msgs.append(str(e))
+    return "'stars: yes'" in msgs[0] and "'stars: no'" in msgs[1]
+
+
+@check
+def a_found_star_row_is_used_once_confirmed():
+    """the found outline goes into the profile only once confirmed, and only for the box it was found in"""
+    w, h, _, yes, no = made_up_star_row(2)
+    box = [400, 10, w, h]
+    fit = cal.fit_stars(box, yes, no)
+    bars = [{"box": [20, 300, 60, 4]}, {"box": [90, 300, 40, 4]}]
+    notes = {}
+    for case, stars in (("new", {"box": box, "fit": dict(fit)}),
+                        ("moved", {"box": [401, 10, w, h], "fit": dict(fit, confirmed=True)}),
+                        ("ok", {"box": box, "fit": dict(fit, confirmed=True), "clicks": {"top_first": [1, 1]}})):
+        prof, n = cal.geometry_profile("made_up", "Made Up", (640, 360), {"bars": bars, "stars": stars, "phone": {"off": True}})
+        notes[case] = dict(n).get("stars", "")
+    with tempfile.TemporaryDirectory() as tmp:
+        p = cal.load(prof, Path(tmp) / "made_up.json")
+    return ("Looks right" in notes["new"] and "box changed" in notes["moved"] and notes["ok"] == ""
+            and p.stars_on and len(p.star_tips_x) == fit["slots"] and p.star_radius == fit["radius"]
+            and cal.star_source({"fit": dict(fit, confirmed=True)}).startswith("found by the tool")
+            and cal.star_source({"mode": "clicks"}) == "from 4 clicks")
+
+
+def png_rgba(path, w, h, px):
+    """A plain RGBA PNG (no filtering), standard library only."""
+    raw = b"".join(b"\0" + bytes(v for p in px[y * w:(y + 1) * w] for v in p) for y in range(h))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+@check
+def end_to_end_stars_found_in_a_made_up_video():
+    """made-up video with a row of 5 stars (2 lit) shown with the HUD: one box round the row, the tool finds 5
+    slots on the stars from the labelled pictures, you confirm, Measure gets the stars right on every picture and
+    the saved profile says the stars were found by the tool"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        old = cal.CALIB_ROOT, clip.PROFILE_DIR
+        cal.CALIB_ROOT, clip.PROFILE_DIR = tmp / "calib", tmp / "profiles"
+        try:
+            sw, sh, r, spacing = 120, 26, 9.0, 21.0
+            stars = [star_points(12 + k * spacing, 3, r, 0.45) for k in range(5)]
+            png_rgba(tmp / "stars.png", sw, sh, draw_stars(sw, sh, stars, 2))
+            plain = tmp / "plain.mp4"
+            made_up_video(plain)
+            video = tmp / "made_up.mp4"
+            subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-i", str(plain),
+                            "-i", str(tmp / "stars.png"), "-filter_complex",
+                            "[0][1]overlay=x=470:y=20:enable='between(t,0,3)+between(t,6,9)'",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", str(video)],
+                           check=True)
+            s = cal.Session("made_up")
+            s.add(video, ["0:01", "1.5", "2.5", "4", "5", "7", "8", "10.5"])
+            for f in s.data["frames"]:
+                t = f["time_s"]
+                shown = t < 3 or 6 <= t < 9
+                f["labels"] = {"hud": "shown" if shown else "hidden", "stars": "yes" if shown else "no",
+                               "phone": "yes" if t < 3 else "no"}
+            s.data["game"] = "Made Up"
+            s.data["drawing"] = {"bars": [{"box": [24, 300, 56, 4]}, {"box": [94, 300, 36, 4]}],
+                                 "stars": {"box": [462, 14, 136, 38]}, "phone": dict(PHONE_DRAWING)}
+            fit, message = s.fit_stars()
+            true = {"tip_x": 470 + 12 - 462, "spacing": spacing, "tip_y": 20 + 3 - 14, "r": r, "slots": 5}
+            found_ok = star_fit_matches(fit, true, 462, 14) and fit["separates"] and "Found 5 star slots" in message
+            s.data["drawing"]["stars"]["fit"]["confirmed"] = True
+            report, _ = s.measure()
+            frames_right = all(x["want"][k] == x["got"][k] for x in report["frames"] for k in ("hud", "stars", "phone"))
+            status = report["rules"]["stars"]["status"]
+            out, _ = s.save_profile(force_with_problems=True)
+            saved = json.loads(out.read_text(encoding="utf-8"))
+        finally:
+            cal.CALIB_ROOT, clip.PROFILE_DIR = old
+    return (found_ok and frames_right and status in ("ready", "check") and saved["stars"]["slots"] == 5
+            and saved["calibration"]["stars"].startswith("found by the tool"))
 
 
 def main():
