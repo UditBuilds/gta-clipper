@@ -15,16 +15,19 @@ With --vlm off (the default) nothing changes.
 v7 gives the veto the wanted stars measured above, two ways (both off by default, both need the HUD rules):
 --vlm-hint stars puts each candidate's measured seconds of stars into the prompt, and --vlm-rule stars cancels a
 boring_driving_or_walking veto when the clip has at least vlm.STAR_RULE_MIN_S of stars.
+v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile, profiles/<name>.json, chosen with
+--profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
-                       [--cpu-decode] [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
+                       [--profile NAME] [--cpu-decode] [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
                        [--vlm-hint none|stars] [--vlm-rule none|stars]
 """
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import re
@@ -36,9 +39,11 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import vlm
 
+HERE = Path(__file__).resolve().parent
 DEFAULT_OUT = Path(r"C:\AI\gta\output")
 
 # --- Scoring constants. All of them are written into scores.json, so runs can be compared. ---
@@ -57,36 +62,14 @@ ANALYSIS_FPS = 10        # frames per second compared for visual change
 ANALYSIS_WIDTH = 320     # frames are shrunk to this width before comparing
 END_MARGIN = 0.1         # seconds kept clear of the end of the file
 
-# --- HUD rules (v2), GTA V on PS5. Boxes are pixels of a 1920x1088 capture and scale with the frame. ---
-HUD_REF_W, HUD_REF_H = 1920, 1088
+# --- HUD rules (v2, v3). v9: every value is in the profile, profiles/<name>.json (load_profile). gta5 = GTA V on PS5:
+# stars, the bars under the minimap and Michael's iFruit call screen; its thresholds were set on test1 and test2
+# (the 210 call-screen samples of 4 calls for the phone: face up to 6, battery 147 or more, panel 19-40, spread up
+# to 11.9, tint up to 8). ---
+PROFILE_DIR = HERE / "profiles"
+DEFAULT_PROFILE = "gta5"
 HUD_FPS = 2              # HUD samples per second: one per timeline step
-STAR_BOX = (1676, 46, 152, 42)   # x, y, w, h around the five wanted-star slots
-STAR_TIPS_X = tuple(1696.5 + 28.6 * k for k in range(5))  # top point of each star slot
-STAR_TIP_Y = 54.0        # top point of every star
-STAR_RADIUS = 15.5       # star centre to tip
-STAR_INNER = 0.42        # inner corner radius / tip radius
-STAR_MIN_SCORE = 0.28    # outline match (correlation, -1..1) at which stars count as showing
-BAR_BOX = (96, 1014, 272, 6)     # health, armour and special-ability bars under the minimap
-BAR_SEGMENTS = ((104, 224), (240, 290), (306, 360))  # x ranges of those three bars
-BAR_MIN_SAT = 0.3        # a bar is a clearly coloured strip, not grey
-BAR_MIN_DISTINCT = 60.0  # RGB distance between passing bars, so one plain colour can't pass as two bars
-MIN_HIDDEN = 1.5         # seconds the minimap must be missing (or the phone up) before that stretch is excluded
-HIDDEN_PAD = 0.5         # excluded stretches grow this much on each side (menu and cutscene fades)
-STAR_BOOST = 3.0         # added to a step's combined score while wanted stars show
-HUD_MIN_SHARE = 0.2      # minimap seen in less of the video than this: not this HUD, so HUD rules are off
-# Phone call screen (v3): the top of Michael's iFruit phone, bottom right. ffmpeg averages the box into
-# PHONE_CELL-sized cells; the three checks below are (x0, x1, y0, y1) areas in the same 1920x1088 pixels.
-PHONE_BOX = (1552, 656, 248, 240)  # x, y, w, h
-PHONE_CELL = (8, 4)      # w, h of one averaged cell
-PHONE_FACE = (1560, 1800, 660, 680)     # black phone face between the "iFruit" logo and the status bar
-PHONE_BATTERY = (1768, 1792, 684, 696)  # battery icon at the right end of the status bar
-PHONE_PANEL = ((1560, 1648, 820, 860), (1720, 1792, 820, 860))  # grey call panel, left and right of the logo
-# Limits on brightness (0-255). "Calls" = the 210 call-screen samples found in test1 and test2 (4 calls).
-PHONE_FACE_MAX = 15.0    # brightest face cell; calls up to 6
-PHONE_BATTERY_MIN = 70.0 # mean battery-icon brightness; calls 147 or more
-PHONE_PANEL_RANGE = (12.0, 50.0)  # every panel cell's brightness; calls 19-40 (the panel lets a little background through)
-PHONE_PANEL_SPREAD = 20.0         # brightest minus darkest panel cell; calls up to 11.9
-PHONE_PANEL_TINT = 10.0  # largest R/G/B difference in a panel cell (the panel is neutral grey); calls up to 8
+CHANNELS = "rgb"         # names of the colour channels in a profile's bar rules
 
 # --- Spreading picks (v3). Chosen before looking at any eval result; not tuned to the test videos. ---
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
@@ -171,15 +154,159 @@ def analyse_audio(ffmpeg, video):
     return parse_metadata(text, "lavfi.r128.M")
 
 
-def star_template():
-    """Soft outline of the five star slots over STAR_BOX, mean-centred and scaled to unit length."""
-    x0, y0, w, h = STAR_BOX
+class ProfileError(Exception):
+    """A profile is missing or doesn't describe a usable HUD: clip.py stops instead of guessing."""
+
+
+# Stand-ins for a rule a profile switches off ("on": false). Its crop is still taken, so the HUD frame keeps its
+# layout, but the result is never used: no step has stars, no sample has the phone up.
+OFF_STARS = {"box": [0, 0, 32, 32], "slots": 1, "first_tip_x": 16.0, "tip_spacing": 0.0, "tip_y": 4.0,
+             "radius": 12.0, "inner": 0.4, "min_score": 1.0, "boost": 0.0}
+OFF_PHONE = {"box": [0, 0, 8, 4], "cell": [8, 4], "dark": {"area": [0, 0, 8, 4], "max": 0.0},
+             "bright": {"area": [0, 0, 8, 4], "min_mean": 255.0},
+             "grey": {"areas": [[0, 0, 8, 4]], "min": 0.0, "max": 0.0, "max_spread": 0.0, "max_tint": 0.0}}
+
+
+def load_profile(name, path=None):
+    """The HUD profile profiles/<name>.json (or path), checked, as a namespace with everything the HUD code uses.
+
+    Rectangles are [x, y, w, h] in pixels of the profile's "frame": the picture as shown, after any container
+    cropping. hud_filter() takes each crop at the same place in the real frame and resamples it to its size in
+    "frame" pixels, so the star outline, bar ranges and phone cells work in those pixels at any resolution.
+    """
+    path = Path(path) if path else PROFILE_DIR / f"{name}.json"
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        known = ", ".join(sorted(f.stem for f in PROFILE_DIR.glob("*.json"))) or "none"
+        raise ProfileError(f"profile {name!r} not readable ({e.strerror}: {path}); profiles in {PROFILE_DIR}: {known}")
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        raise ProfileError(f"{path}: not valid JSON ({e})")
+
+    def need(ok, msg):
+        if not ok:
+            raise ProfileError(f"{path.name}: {msg}")
+
+    def get(section, key, what=None):
+        need(isinstance(section, dict) and key in section, f"missing {what or key!r}")
+        return section[key]
+
+    def num(v, what):
+        need(isinstance(v, (int, float)) and not isinstance(v, bool), f"{what} must be a number, not {v!r}")
+        return v
+
+    def rect(r, what, within=None):
+        need(isinstance(r, list) and len(r) == 4 and all(isinstance(v, int) and not isinstance(v, bool) for v in r)
+             and r[2] > 0 and r[3] > 0, f"{what} must be [x, y, w, h] in whole pixels with w and h above 0, not {r!r}")
+        x, y, w, h = r
+        bx, by, bw, bh = within or (0, 0) + frame
+        need(bx <= x and by <= y and x + w <= bx + bw and y + h <= by + bh,
+             f"{what} {r} is not inside {'the frame ' + str(list(frame)) if within is None else list(within)}")
+        return tuple(r)
+
+    need(isinstance(d, dict), "the file must hold one JSON object")
+    need(get(d, "name") == path.stem, f"name {d.get('name')!r} differs from the file name {path.stem!r}")
+    frame = get(d, "frame")
+    need(isinstance(frame, list) and len(frame) == 2 and all(isinstance(v, int) and v > 0 for v in frame),
+         f"frame must be [width, height] in whole pixels, not {frame!r}")
+    frame = tuple(frame)
+    stretch, mm = get(d, "stretch"), get(d, "minimap")
+    stars, phone = get(d, "stars"), get(d, "phone")
+    stars_on, phone_on = stars.get("on", True), phone.get("on", True)
+    need(isinstance(stars_on, bool) and isinstance(phone_on, bool), "\"on\" must be true or false")
+    s = stars if stars_on else OFF_STARS
+    ph = phone if phone_on else OFF_PHONE
+
+    bar_box = rect(get(mm, "box", "minimap box"), "minimap box")
+    bars = get(mm, "bars", "minimap bars")
+    need(isinstance(bars, list) and len(bars) >= 2, "the minimap needs at least 2 bars")
+    segments, rules = [], []
+    for i, bar in enumerate(bars, 1):
+        xr = get(bar, "x_range", f"x_range of bar {i}")
+        need(isinstance(xr, list) and len(xr) == 2 and all(isinstance(v, int) for v in xr)
+             and bar_box[0] <= xr[0] < xr[1] <= bar_box[0] + bar_box[2],
+             f"bar {i} x_range {xr!r} must be [x0, x1] inside the minimap box's x range")
+        groups = get(bar, "any_of", f"any_of of bar {i}")
+        need(isinstance(groups, list) and groups and all(isinstance(g, list) and g for g in groups),
+             f"bar {i} any_of must be a list of non-empty lists of terms")
+        rule = []
+        for g in groups:
+            terms = []
+            for t in g:
+                hi, lo = get(t, "hi", f"hi of a bar {i} term"), get(t, "lo", f"lo of a bar {i} term")
+                need(hi in CHANNELS and isinstance(lo, list) and lo and all(c in CHANNELS and c != hi for c in lo),
+                     f"bar {i} term {t!r}: hi must be one of r, g, b and lo a list of the others")
+                terms.append((CHANNELS.index(hi), tuple(CHANNELS.index(c) for c in lo),
+                              num(get(t, "min", f"min of a bar {i} term"), f"bar {i} term min")))
+            rule.append(tuple(terms))
+        segments.append(tuple(xr))
+        rules.append(tuple(rule))
+    min_bars = get(mm, "min_bars")
+    need(isinstance(min_bars, int) and 2 <= min_bars <= len(bars), f"min_bars must be 2 to {len(bars)}")
+
+    star_box = rect(get(s, "box", "stars box"), "stars box")
+    slots = get(s, "slots", "stars slots")
+    need(isinstance(slots, int) and slots >= 1, "stars slots must be a whole number, at least 1")
+    first, spacing = num(get(s, "first_tip_x"), "first_tip_x"), num(get(s, "tip_spacing"), "tip_spacing")
+
+    phone_box = rect(get(ph, "box", "phone box"), "phone box")
+    cell = get(ph, "cell", "phone cell")
+    need(isinstance(cell, list) and len(cell) == 2 and all(isinstance(v, int) and v > 0 for v in cell)
+         and phone_box[2] % cell[0] == 0 and phone_box[3] % cell[1] == 0,
+         f"phone cell {cell!r} must be [w, h] whole pixels that divide the phone box's width and height")
+
+    def area(r, what):
+        """[x, y, w, h] on the phone's cell grid -> (x0, x1, y0, y1), the form phone_cells() reads."""
+        x, y, w, h = rect(r, what, phone_box)
+        need((x - phone_box[0]) % cell[0] == 0 and w % cell[0] == 0 and (y - phone_box[1]) % cell[1] == 0
+             and h % cell[1] == 0, f"{what} {r} must sit on the phone's {cell[0]}x{cell[1]} cell grid")
+        return x, x + w, y, y + h
+
+    dark, bright, grey = get(ph, "dark", "phone dark"), get(ph, "bright", "phone bright"), get(ph, "grey", "phone grey")
+    grey_areas = get(grey, "areas", "phone grey areas")
+    need(isinstance(grey_areas, list) and grey_areas, "phone grey areas must be a non-empty list")
+    prof = SimpleNamespace(
+        name=path.stem, path=str(path.resolve()), sha256=hashlib.sha256(raw).hexdigest(), data=d,
+        game=get(d, "game"), frame=frame,
+        min_hidden=num(get(stretch, "min_s", "stretch min_s"), "stretch min_s"),
+        hidden_pad=num(get(stretch, "pad_s", "stretch pad_s"), "stretch pad_s"),
+        bar_box=bar_box, bar_segments=tuple(segments), bar_rules=tuple(rules),
+        bar_names=tuple(b.get("name", f"bar {i}") for i, b in enumerate(bars, 1)),
+        bar_min_sat=num(get(mm, "min_sat"), "min_sat"), bar_min_count=min_bars,
+        bar_min_distinct=num(get(mm, "min_distinct"), "min_distinct"), min_share=num(get(mm, "min_share"), "min_share"),
+        stars_on=stars_on, star_box=star_box, star_tips_x=tuple(first + spacing * k for k in range(slots)),
+        star_tip_y=num(get(s, "tip_y"), "tip_y"), star_radius=num(get(s, "radius"), "radius"),
+        star_inner=num(get(s, "inner"), "inner"), star_min_score=num(get(s, "min_score"), "min_score"),
+        star_boost=num(get(s, "boost"), "boost"),
+        phone_on=phone_on, phone_box=phone_box, phone_cell=tuple(cell),
+        phone_face=area(get(dark, "area", "phone dark area"), "phone dark area"),
+        phone_battery=area(get(bright, "area", "phone bright area"), "phone bright area"),
+        phone_panel=tuple(area(a, "phone grey area") for a in grey_areas),
+        phone_face_max=num(get(dark, "max", "phone dark max"), "phone dark max"),
+        phone_battery_min=num(get(bright, "min_mean", "phone bright min_mean"), "phone bright min_mean"),
+        phone_panel_range=(num(get(grey, "min", "phone grey min"), "phone grey min"),
+                           num(get(grey, "max", "phone grey max"), "phone grey max")),
+        phone_panel_spread=num(get(grey, "max_spread", "phone grey max_spread"), "phone grey max_spread"),
+        phone_panel_tint=num(get(grey, "max_tint", "phone grey max_tint"), "phone grey max_tint"))
+    prof.phone_cols, prof.phone_rows = phone_box[2] // cell[0], phone_box[3] // cell[1]
+    prof.hud_w = max(star_box[2], bar_box[2], prof.phone_cols)
+    prof.frame_bytes = prof.hud_w * (star_box[3] + bar_box[3] + prof.phone_rows) * 3
+    prof.star_template = star_template(prof)
+    return prof
+
+
+def star_template(prof):
+    """Soft outline of the star slots over the stars box, mean-centred and scaled to unit length."""
+    x0, y0, w, h = prof.star_box
     edges = []
-    for tx in STAR_TIPS_X:
-        cx, cy = tx, STAR_TIP_Y + STAR_RADIUS
+    for tx in prof.star_tips_x:
+        cx, cy = tx, prof.star_tip_y + prof.star_radius
         pts = [(cx + r * math.cos(a), cy + r * math.sin(a))
                for i in range(10)
-               for a, r in [(-math.pi / 2 + i * math.pi / 5, STAR_RADIUS if i % 2 == 0 else STAR_RADIUS * STAR_INNER)]]
+               for a, r in [(-math.pi / 2 + i * math.pi / 5,
+                             prof.star_radius if i % 2 == 0 else prof.star_radius * prof.star_inner)]]
         edges += [(pts[i], pts[(i + 1) % 10]) for i in range(10)]
 
     def dist(px, py, a, b):
@@ -195,113 +322,131 @@ def star_template():
     return [(v - mean) / norm for v in t]
 
 
-STAR_TEMPLATE = star_template()
-PHONE_COLS, PHONE_ROWS = PHONE_BOX[2] // PHONE_CELL[0], PHONE_BOX[3] // PHONE_CELL[1]
-HUD_W = max(STAR_BOX[2], BAR_BOX[2], PHONE_COLS)
-HUD_FRAME_BYTES = HUD_W * (STAR_BOX[3] + BAR_BOX[3] + PHONE_ROWS) * 3
+def hud_filter(info, range_fix, prof):
+    """Filter chain: one frame in; star box, bar box and phone cells stacked out, RGB at the profile's frame scale.
 
-
-def hud_filter(info, range_fix):
-    """Filter chain: one frame in; star box, bar box and phone cells stacked out, RGB at 1920x1088 scale."""
-    sx, sy = info["width"] / HUD_REF_W, info["height"] / HUD_REF_H
+    The boxes scale by the size of the picture as shown (v9). A PS5 .webm stores 1088 rows and shows 1080: v2-v7
+    scaled by stored height / 1088, which is the same for those files but put the boxes about 7 px too high on a
+    file that really is 1080 or 2160 rows tall.
+    """
+    c = info["container_crop"]
+    shown_w, shown_h = info["width"] - c["left"] - c["right"], info["height"] - c["top"] - c["bottom"]
+    sx, sy = shown_w / prof.frame[0], shown_h / prof.frame[1]
     # Same range handling as make_review.py: PS5 VP9 pixels are limited range whatever the header says.
     conv = "in_color_matrix=bt709:in_range=tv:" if range_fix else ""
     parts = [f"[{tag}0]crop={round(w * sx)}:{round(h * sy)}:{round(x * sx)}:{round(y * sy)},"
-             f"scale={ow}:{oh}:{flags}{conv}out_range=pc,format=rgb24,pad={HUD_W}:{oh}[{tag}1]"
+             f"scale={ow}:{oh}:{flags}{conv}out_range=pc,format=rgb24,pad={prof.hud_w}:{oh}[{tag}1]"
              for tag, (x, y, w, h), (ow, oh), flags in (
-                 ("s", STAR_BOX, STAR_BOX[2:], ""),
-                 ("b", BAR_BOX, BAR_BOX[2:], ""),
-                 ("p", PHONE_BOX, (PHONE_COLS, PHONE_ROWS), "flags=area:"))]  # area = plain cell averages
+                 ("s", prof.star_box, prof.star_box[2:], ""),
+                 ("b", prof.bar_box, prof.bar_box[2:], ""),
+                 ("p", prof.phone_box, (prof.phone_cols, prof.phone_rows), "flags=area:"))]  # area = cell averages
     return "split=3[s0][b0][p0];" + ";".join(parts) + ";[s1][b1][p1]vstack=inputs=3"
 
 
-def star_score(rgb):
-    """How well edges in STAR_BOX line up with the star outlines (correlation, about 0 when no stars).
+def star_score(rgb, prof):
+    """How well edges in the stars box line up with the star outlines (correlation, about 0 when no stars).
 
     Edges are used rather than brightness because filled (white), empty (grey) and flashing stars all
     have the same dark outline, and the ammo/cash text that sits in this row when you are not wanted
     has different shapes.
     """
-    w, h = STAR_BOX[2], STAR_BOX[3]
+    w, h = prof.star_box[2], prof.star_box[3]
+    hud_w = prof.hud_w
     lum = [0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2]
-           for y in range(h) for i in range(y * HUD_W * 3, (y * HUD_W + w) * 3, 3)]
+           for y in range(h) for i in range(y * hud_w * 3, (y * hud_w + w) * 3, 3)]
     g = [0.0] * (w * h)
     for y in range(1, h - 1):
         for i in range(y * w + 1, y * w + w - 1):
             g[i] = abs(lum[i + 1] - lum[i - 1]) + abs(lum[i + w] - lum[i - w])
     mean = sum(g) / len(g)
     sd = math.sqrt(sum((v - mean) ** 2 for v in g))
-    return sum(a * b for a, b in zip(STAR_TEMPLATE, g)) / sd if sd > 1e-6 else 0.0
+    return sum(a * b for a, b in zip(prof.star_template, g)) / sd if sd > 1e-6 else 0.0
 
 
-def minimap_seen(rgb):
-    """True when the health / armour / special-ability bars under the minimap are on screen.
-
-    The minimap itself flashes red and blue while wanted, so the bars are checked instead. At least two
-    must show their own colour (health green, or red when low; armour blue; ability yellow), and those
-    must differ from each other, so a plain orange or beige background can't pass as two bars.
-    """
-    off = STAR_BOX[3] * HUD_W * 3
-    x0, _, _, h = BAR_BOX
+def bar_means(rgb, prof):
+    """Mean [r, g, b] of each bar's x range in the minimap box, in the profile's bar order."""
+    hud_w = prof.hud_w
+    off = prof.star_box[3] * hud_w * 3
+    x0, _, _, h = prof.bar_box
     means = []
-    for a, b in BAR_SEGMENTS:
+    for a, b in prof.bar_segments:
         acc = [0, 0, 0]
         for y in range(h):
-            row = off + y * HUD_W * 3
+            row = off + y * hud_w * 3
             for i in range(row + (a - x0) * 3, row + (b - x0) * 3, 3):
                 acc[0] += rgb[i]
                 acc[1] += rgb[i + 1]
                 acc[2] += rgb[i + 2]
         means.append([v / (h * (b - a)) for v in acc])
-
-    def sat(c):
-        return (max(c) - min(c)) / max(max(c), 1.0)
-
-    (hr, hg, hb), (ar, ag, ab), (yr, yg, yb) = means
-    checks = [(hg - max(hr, hb) >= 25) or (hr - max(hg, hb) >= 25),  # health
-              ab - ar >= 40 and ag - ar >= 15,                        # armour
-              yr - yb >= 40 and yg - yb >= 25]                        # special ability
-    ok = [c for c, passed in zip(means, checks) if passed and sat(c) >= BAR_MIN_SAT]
-    return len(ok) >= 2 and max(math.dist(p, q) for i, p in enumerate(ok) for q in ok[i + 1:]) >= BAR_MIN_DISTINCT
+    return means
 
 
-def phone_cells(rgb, area):
-    """(r, g, b) of every averaged phone cell inside area (x0, x1, y0, y1, in 1920x1088 pixels)."""
-    off = (STAR_BOX[3] + BAR_BOX[3]) * HUD_W * 3
+def saturation(c):
+    return (max(c) - min(c)) / max(max(c), 1.0)
+
+
+def bar_colour_ok(c, rule):
+    """True when the colour c meets every term of one of the rule's groups; a term (hi, lo, least) is
+    c[hi] - max(c[lo]) >= least (gta5's health: green or red above the other two; armour: blue and green above red)."""
+    return any(all(c[hi] - max(c[i] for i in lo) >= least for hi, lo, least in group) for group in rule)
+
+
+def minimap_seen(rgb, prof):
+    """True when the bars of the profile's minimap box are on screen (gta5: health, armour, special ability).
+
+    The minimap itself flashes red and blue while wanted, so the bars are checked instead. At least min_bars
+    must show their own colour (gta5: health green, or red when low; armour blue; ability yellow), and those
+    must differ from each other, so a plain orange or beige background can't pass as two bars.
+    """
+    ok = [c for c, rule in zip(bar_means(rgb, prof), prof.bar_rules)
+          if bar_colour_ok(c, rule) and saturation(c) >= prof.bar_min_sat]
+    return (len(ok) >= prof.bar_min_count
+            and max(math.dist(a, b) for i, a in enumerate(ok) for b in ok[i + 1:]) >= prof.bar_min_distinct)
+
+
+def phone_cells(rgb, area, prof):
+    """(r, g, b) of every averaged phone cell inside area (x0, x1, y0, y1, in the profile's frame pixels)."""
+    hud_w = prof.hud_w
+    off = (prof.star_box[3] + prof.bar_box[3]) * hud_w * 3
     x0, x1, y0, y1 = area
-    cw, ch = PHONE_CELL
+    cw, ch = prof.phone_cell
+    px, py = prof.phone_box[:2]
     out = []
-    for row in range((y0 - PHONE_BOX[1]) // ch, (y1 - PHONE_BOX[1]) // ch):
-        for col in range((x0 - PHONE_BOX[0]) // cw, (x1 - PHONE_BOX[0]) // cw):
-            i = off + (row * HUD_W + col) * 3
+    for row in range((y0 - py) // ch, (y1 - py) // ch):
+        for col in range((x0 - px) // cw, (x1 - px) // cw):
+            i = off + (row * hud_w + col) * 3
             out.append((rgb[i], rgb[i + 1], rgb[i + 2]))
     return out
 
 
-def phone_measure(rgb):
-    """The numbers phone_seen() tests: face max, battery mean, panel min/max/tint (brightness 0-255)."""
+def phone_measure(rgb, prof):
+    """The numbers phone_seen() tests: face max, battery mean, panel min/max/tint (brightness 0-255).
+    gta5's face, battery and panel are a profile's dark area, bright area and grey areas."""
     def lum(c):
         return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
-    face = [lum(c) for c in phone_cells(rgb, PHONE_FACE)]
-    battery = [lum(c) for c in phone_cells(rgb, PHONE_BATTERY)]
-    panel = [c for area in PHONE_PANEL for c in phone_cells(rgb, area)]
+    face = [lum(c) for c in phone_cells(rgb, prof.phone_face, prof)]
+    battery = [lum(c) for c in phone_cells(rgb, prof.phone_battery, prof)]
+    panel = [c for area in prof.phone_panel for c in phone_cells(rgb, area, prof)]
     plum = [lum(c) for c in panel]
     return {"face_max": max(face), "battery_mean": sum(battery) / len(battery),
             "panel_min": min(plum), "panel_max": max(plum), "panel_tint": max(max(c) - min(c) for c in panel)}
 
 
-def phone_seen(rgb):
-    """True when Michael's phone shows its call screen at the bottom right.
+def phone_seen(rgb, prof):
+    """True when the phone shows its call screen (gta5: Michael's iFruit phone, bottom right).
 
     Three parts of the phone must all match: the black face above the status bar, the bright battery icon in
     the status bar, and the even, neutral grey call panel either side of the iFruit logo. A dark scene can
     pass the black check, but not the bright icon and the grey panel at the same time.
+    Never true when the profile switches the phone rule off.
     """
-    m = phone_measure(rgb)
-    lo, hi = PHONE_PANEL_RANGE
-    return (m["face_max"] <= PHONE_FACE_MAX and m["battery_mean"] >= PHONE_BATTERY_MIN
+    if not prof.phone_on:
+        return False
+    m = phone_measure(rgb, prof)
+    lo, hi = prof.phone_panel_range
+    return (m["face_max"] <= prof.phone_face_max and m["battery_mean"] >= prof.phone_battery_min
             and lo <= m["panel_min"] and m["panel_max"] <= hi
-            and m["panel_max"] - m["panel_min"] <= PHONE_PANEL_SPREAD and m["panel_tint"] <= PHONE_PANEL_TINT)
+            and m["panel_max"] - m["panel_min"] <= prof.phone_panel_spread and m["panel_tint"] <= prof.phone_panel_tint)
 
 
 GPU_INPUT = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]  # decode on the GPU, frames stay there
@@ -335,19 +480,19 @@ def pick_decoder(ffmpeg, video, info, force_cpu):
     return "cuda", "GPU test decode worked"
 
 
-def analyse_video(ffmpeg, video, info, range_fix, decoder):
+def analyse_video(ffmpeg, video, info, range_fix, decoder, prof):
     """One decode for both picture signals, on the GPU (decoder 'cuda') or the CPU.
 
     Returns the frame-to-frame change score (0..1) on small frames at ANALYSIS_FPS, the HUD samples
-    (time, star score, minimap seen, phone seen) at HUD_FPS, the seconds spent on HUD pixel work, and
-    ffmpeg's error text (None on success).
+    (time, star score, minimap seen, phone seen; the profile prof sets the HUD) at HUD_FPS, the seconds spent on HUD
+    pixel work, and ffmpeg's error text (None on success).
     """
     # GPU frames are only copied to the CPU after fps= has dropped all but the frames the analysis uses.
     dl = gpu_download(info) + "," if decoder == "cuda" else ""
     graph = (f"[0:v:0]split=2[vs][vh];"
              f"[vs]fps={ANALYSIS_FPS},{dl}scale={ANALYSIS_WIDTH}:-2,"
              f"select='gte(scene,0)',metadata=print:key=lavfi.scene_score:file=scene.txt[scene];"
-             f"[vh]fps={HUD_FPS},{dl}{hud_filter(info, range_fix)}[hud]")
+             f"[vh]fps={HUD_FPS},{dl}{hud_filter(info, range_fix, prof)}[hud]")
     hud, t_px = [], 0.0
     with tempfile.TemporaryDirectory() as tmp:
         # The scene scores go to a file in tmp (relative path: no drive-letter escaping in the filter),
@@ -360,11 +505,11 @@ def analyse_video(ffmpeg, video, info, range_fix, decoder):
                                        "-map", "[hud]", "-f", "rawvideo", "pipe:1"],
                                     stdout=subprocess.PIPE, stderr=err, cwd=tmp)
             while True:
-                raw = proc.stdout.read(HUD_FRAME_BYTES)
-                if len(raw) < HUD_FRAME_BYTES:
+                raw = proc.stdout.read(prof.frame_bytes)
+                if len(raw) < prof.frame_bytes:
                     break
                 t0 = time.perf_counter()
-                hud.append((len(hud) / HUD_FPS, star_score(raw), minimap_seen(raw), phone_seen(raw)))
+                hud.append((len(hud) / HUD_FPS, star_score(raw, prof), minimap_seen(raw, prof), phone_seen(raw, prof)))
                 t_px += time.perf_counter() - t0
             proc.stdout.close()
             if proc.wait() != 0:
@@ -375,11 +520,11 @@ def analyse_video(ffmpeg, video, info, range_fix, decoder):
     return parse_metadata(text, "lavfi.scene_score"), hud, t_px, None
 
 
-def stretches(flags):
-    """Runs of True lasting MIN_HIDDEN seconds or more, each grown by HIDDEN_PAD on both sides."""
+def stretches(flags, prof):
+    """Runs of True lasting the profile's stretch min_s or more, each grown by its pad_s on both sides."""
     n = len(flags)
     out, i = [False] * n, 0
-    need, pad = round(MIN_HIDDEN / BUCKET), round(HIDDEN_PAD / BUCKET)
+    need, pad = round(prof.min_hidden / BUCKET), round(prof.hidden_pad / BUCKET)
     while i < n:
         j = i
         while j < n and flags[j]:
@@ -391,19 +536,19 @@ def stretches(flags):
     return out
 
 
-def hud_steps(hud, n):
+def hud_steps(hud, n, prof):
     """Per timeline step: star score, stars showing (2 of 3 neighbouring samples), minimap seen, phone seen,
-    excluded, and the phone stretches on their own."""
-    score = bucketize([(t, s) for t, s, _, _ in hud], n, max, None)
+    excluded, and the phone stretches on their own. A profile with the stars rule off has no star score."""
+    score = bucketize([(t, s) for t, s, _, _ in hud], n, max, None) if prof.stars_on else [None] * n
     seen = bucketize([(t, m) for t, _, m, _ in hud], n, lambda g: 2 * sum(g) >= len(g), None)
     phone = bucketize([(t, p) for t, _, _, p in hud], n, lambda g: 2 * sum(g) > len(g), False)
-    raw = [s is not None and s >= STAR_MIN_SCORE for s in score]
+    raw = [s is not None and s >= prof.star_min_score for s in score]
     stars = [sorted((raw[max(0, i - 1)], raw[i], raw[min(n - 1, i + 1)]))[1] for i in range(n)]
-    # Minimap missing or phone up for MIN_HIDDEN seconds or more: exclude that stretch, grown by HIDDEN_PAD
+    # Minimap missing or phone up for stretch min_s or more (gta5: 1.5 s): exclude that stretch, grown by pad_s
     # each side. Steps with no sample (the last fraction of a second) count as minimap seen, no phone.
     # v4 cuts the phone stretches (same length rule and pad) out of clips; the rest of excluded stays a wall.
-    excluded = stretches([seen[i] is False or phone[i] for i in range(n)])
-    return score, stars, [s is not False for s in seen], phone, excluded, stretches(phone)
+    excluded = stretches([seen[i] is False or phone[i] for i in range(n)], prof)
+    return score, stars, [s is not False for s in seen], phone, excluded, stretches(phone, prof)
 
 
 def runs(flags):
@@ -614,7 +759,7 @@ def explain(clip, tl, stats):
     parts = [f"peak at {hms(peak['time_s'])} scored {peak['combined']:.2f} (floor {MIN_PEAK_SCORE})"]
     if stats["hud"]:
         parts.append(f"wanted stars in {clip['stars_s']:g} s of the clip"
-                     + (f", peak step boosted +{STAR_BOOST:g}" if peak["star_boost"] else ""))
+                     + (f", peak step boosted +{stats['star_boost']:g}" if peak["star_boost"] else ""))
     if stats["has_audio"]:
         parts.append(f"loudness {peak['loudness_lufs']:.1f} LUFS vs median {stats['audio_median']:.1f} "
                      f"(z {peak['audio_z']:.1f}{' capped' if peak['audio_z'] >= Z_CAP else ''})")
@@ -668,7 +813,7 @@ def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio, range_fix):
 
 def star_measure_error(hint, rule, hud_on, hud_state):
     """None, or why --vlm-hint stars / --vlm-rule stars can't run: both use the measured wanted stars, which mean
-    nothing while the HUD rules are off (--no-hud, or no GTA V minimap found)."""
+    nothing while the HUD rules are off (--no-hud, or the profile's minimap not found)."""
     used = [f"--vlm-{name} stars" for name, value in (("hint", hint), ("rule", rule)) if value == "stars"]
     if used and not hud_on:
         return (f"{' and '.join(used)} {'need' if len(used) > 1 else 'needs'} the measured wanted stars, but the "
@@ -803,7 +948,10 @@ def main():
                     help="seconds between the end of one clip and the start of the next (default 10)")
     ap.add_argument("--crop", action="store_true", help="plain centre crop instead of blurred background")
     ap.add_argument("--no-hud", action="store_true",
-                    help="ignore the GTA V HUD (no exclusions, no wanted-star boost): scores like v1")
+                    help="ignore the HUD (no exclusions, no wanted-star boost): scores like v1")
+    ap.add_argument("--profile", default=DEFAULT_PROFILE,
+                    help=f"v9: HUD profile, profiles/NAME.json (default {DEFAULT_PROFILE}: GTA V on PS5; "
+                         "calibrate.py makes new ones)")
     ap.add_argument("--cpu-decode", action="store_true",
                     help="decode on the CPU even if the GPU can (the scores are the same; for comparisons)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output root (default {DEFAULT_OUT})")
@@ -827,6 +975,13 @@ def main():
     err = star_measure_error(args.vlm_hint, args.vlm_rule, not args.no_hud, "off (--no-hud)")
     if err:
         fail(err)
+    try:
+        prof = load_profile(args.profile)
+    except ProfileError as e:
+        fail(str(e))
+    if not prof.stars_on and "stars" in (args.vlm_hint, args.vlm_rule):
+        fail(f"--vlm-hint stars and --vlm-rule stars need the measured wanted stars, but profile {prof.name} has "
+             f"the stars rule off")
     ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         fail("ffmpeg/ffprobe not found on PATH (install: winget install Gyan.FFmpeg)")
@@ -884,27 +1039,27 @@ def main():
     decoder, why = pick_decoder(ffmpeg, args.video, info, args.cpu_decode)
     print(f"Analysing picture changes and HUD, decoding on the {'GPU (cuda)' if decoder == 'cuda' else 'CPU'} "
           f"({why})...")
-    scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder)
+    scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder, prof)
     if err and decoder == "cuda":
         print("WARNING: GPU decoding failed partway; running the picture analysis again on the CPU.\n" + err)
         decoder, why = "cpu", "GPU decode failed partway: " + err.splitlines()[-1]
-        scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder)
+        scene, hud, t_hud_px, err = analyse_video(ffmpeg, args.video, info, range_fix, decoder, prof)
     if err:
         fail(err)
     vis = bucketize(scene, n, statistics.mean, 0.0)
     hard = bucketize(scene, n, lambda g: sum(1 for v in g if v > HARD_CHANGE), 0)
     t_video = time.perf_counter() - t0
 
-    star_sc, stars, seen, phone, excluded, phone_cut = hud_steps(hud, n)
+    star_sc, stars, seen, phone, excluded, phone_cut = hud_steps(hud, n, prof)
     seen_share = sum(1 for _, _, m, _ in hud if m) / len(hud) if hud else 0.0
     phone_share = sum(1 for _, _, _, p in hud if p) / len(hud) if hud else 0.0
-    phone_runs = [r for r in runs(phone) if r[1] - r[0] >= MIN_HIDDEN]
+    phone_runs = [r for r in runs(phone) if r[1] - r[0] >= prof.min_hidden]
     if args.no_hud:
         hud_on, hud_state = False, "off (--no-hud)"
-    elif seen_share < HUD_MIN_SHARE:
-        hud_on, hud_state = False, "off (no GTA V minimap found)"
-        print(f"WARNING: no GTA V minimap where expected ({seen_share:.0%} of samples, needs "
-              f"{HUD_MIN_SHARE:.0%}). HUD rules are off; scoring falls back to loudness + picture change.")
+    elif seen_share < prof.min_share:
+        hud_on, hud_state = False, f"off (no {prof.game} minimap found)"
+        print(f"WARNING: no {prof.game} minimap where expected ({seen_share:.0%} of samples, needs "
+              f"{prof.min_share:.0%}). HUD rules are off; scoring falls back to loudness + picture change.")
     else:
         hud_on, hud_state = True, "on"
     err = star_measure_error(args.vlm_hint, args.vlm_rule, hud_on, hud_state)
@@ -913,10 +1068,10 @@ def main():
     if not hud_on:
         excluded = phone_cut = [False] * n
     walls = [e and not c for e, c in zip(excluded, phone_cut)]
-    boost = [STAR_BOOST if hud_on and s else 0.0 for s in stars]
+    boost = [prof.star_boost if hud_on and s else 0.0 for s in stars]
     excluded_runs = runs(excluded)
-    print(f"HUD rules {hud_state}. Minimap seen in {seen_share:.0%} of samples, wanted stars in "
-          f"{sum(stars) / n:.0%} of steps, phone call screen in {phone_share:.0%} of samples"
+    print(f"HUD rules {hud_state} (profile {prof.name}). Minimap seen in {seen_share:.0%} of samples, wanted stars "
+          f"in {sum(stars) / n:.0%} of steps, phone call screen in {phone_share:.0%} of samples"
           + (f"; {len(excluded_runs)} stretch(es) with no minimap or the phone up excluded "
              f"({sum(excluded) * BUCKET:.0f} s; {len(phone_runs)} phone stretch(es))" if hud_on else ""))
     if any(phone_cut):
@@ -947,6 +1102,7 @@ def main():
     clips, baseline, notes = pick_clips(pick, pick_smooth, usable_end, args.count * (2 if model_info else 1),
                                         args.min_len, args.max_len, args.min_gap, walls, phone_cut, seq)
     stats = {"has_audio": info["has_audio"], "audio_median": a_med, "visual_median": v_med, "hud": hud_on,
+             "star_boost": prof.star_boost,
              "sequences": seq_spans}
     for clip in clips:
         explain(clip, tl, stats)
@@ -1005,24 +1161,26 @@ def main():
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v7",
+        "tool": "gta-clipper v9",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
         "settings": {"count": args.count, "min_len": args.min_len, "max_len": args.max_len,
                      "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder,
                      "decoder": decoder, "decoder_reason": why, "vlm": args.vlm, "vlm_hint": args.vlm_hint,
-                     "vlm_rule": args.vlm_rule},
-        "hud": {"state": hud_state, "reference_size": [HUD_REF_W, HUD_REF_H], "samples_per_s": HUD_FPS,
-                "star_box": STAR_BOX, "star_tips_x": STAR_TIPS_X, "star_tip_y": STAR_TIP_Y,
-                "star_radius": STAR_RADIUS, "star_inner": STAR_INNER, "star_min_score": STAR_MIN_SCORE,
-                "bar_box": BAR_BOX, "bar_segments": BAR_SEGMENTS, "bar_min_sat": BAR_MIN_SAT,
-                "bar_min_distinct": BAR_MIN_DISTINCT, "min_hidden_s": MIN_HIDDEN, "hidden_pad_s": HIDDEN_PAD,
-                "star_boost": STAR_BOOST, "min_share": HUD_MIN_SHARE,
-                "phone_box": PHONE_BOX, "phone_cell": PHONE_CELL, "phone_face": PHONE_FACE,
-                "phone_battery": PHONE_BATTERY, "phone_panel": PHONE_PANEL, "phone_face_max": PHONE_FACE_MAX,
-                "phone_battery_min": PHONE_BATTERY_MIN, "phone_panel_range": PHONE_PANEL_RANGE,
-                "phone_panel_spread": PHONE_PANEL_SPREAD, "phone_panel_tint": PHONE_PANEL_TINT,
+                     "vlm_rule": args.vlm_rule, "profile": prof.name},
+        "hud": {"state": hud_state, "reference_size": list(prof.frame), "samples_per_s": HUD_FPS,
+                "star_box": prof.star_box, "star_tips_x": prof.star_tips_x, "star_tip_y": prof.star_tip_y,
+                "star_radius": prof.star_radius, "star_inner": prof.star_inner, "star_min_score": prof.star_min_score,
+                "bar_box": prof.bar_box, "bar_segments": prof.bar_segments, "bar_min_sat": prof.bar_min_sat,
+                "bar_min_distinct": prof.bar_min_distinct, "min_hidden_s": prof.min_hidden,
+                "hidden_pad_s": prof.hidden_pad, "star_boost": prof.star_boost, "min_share": prof.min_share,
+                "phone_box": prof.phone_box, "phone_cell": prof.phone_cell, "phone_face": prof.phone_face,
+                "phone_battery": prof.phone_battery, "phone_panel": prof.phone_panel,
+                "phone_face_max": prof.phone_face_max, "phone_battery_min": prof.phone_battery_min,
+                "phone_panel_range": prof.phone_panel_range, "phone_panel_spread": prof.phone_panel_spread,
+                "phone_panel_tint": prof.phone_panel_tint,
+                "profile": {"name": prof.name, "file": prof.path, "sha256": prof.sha256, "values": prof.data},
                 "minimap_seen_share": round(seen_share, 4), "stars_share": round(sum(stars) / n, 4),
                 "phone_seen_share": round(phone_share, 4), "phone_ranges_s": phone_runs,
                 "excluded_s": sum(excluded) * BUCKET, "excluded_ranges_s": excluded_runs,

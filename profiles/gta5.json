@@ -1,0 +1,43 @@
+{
+  "name": "gta5",
+  "game": "GTA V",
+  "notes": "GTA V on PS5, default HUD size; the values clip.py v2-v7 had in code. Rectangles are [x, y, w, h] in pixels of the 1920x1080 picture (as shown, after the container crop) and scale with the frame. Bar x ranges, star tips and phone areas are in the same pixels. A bar colour term means: channel hi minus the largest of the lo channels is at least min; a bar passes when every term of one any_of group passes.",
+  "frame": [1920, 1080],
+  "stretch": {"min_s": 1.5, "pad_s": 0.5},
+  "minimap": {
+    "box": [96, 1014, 272, 6],
+    "bars": [
+      {"name": "health", "x_range": [104, 224],
+       "any_of": [[{"hi": "g", "lo": ["r", "b"], "min": 25}], [{"hi": "r", "lo": ["g", "b"], "min": 25}]]},
+      {"name": "armour", "x_range": [240, 290],
+       "any_of": [[{"hi": "b", "lo": ["r"], "min": 40}, {"hi": "g", "lo": ["r"], "min": 15}]]},
+      {"name": "special ability", "x_range": [306, 360],
+       "any_of": [[{"hi": "r", "lo": ["b"], "min": 40}, {"hi": "g", "lo": ["b"], "min": 25}]]}
+    ],
+    "min_sat": 0.3,
+    "min_bars": 2,
+    "min_distinct": 60.0,
+    "min_share": 0.2
+  },
+  "stars": {
+    "on": true,
+    "box": [1676, 46, 152, 42],
+    "slots": 5,
+    "first_tip_x": 1696.5,
+    "tip_spacing": 28.6,
+    "tip_y": 54.0,
+    "radius": 15.5,
+    "inner": 0.42,
+    "min_score": 0.28,
+    "boost": 3.0
+  },
+  "phone": {
+    "on": true,
+    "box": [1552, 656, 248, 240],
+    "cell": [8, 4],
+    "dark": {"area": [1560, 660, 240, 20], "max": 15.0},
+    "bright": {"area": [1768, 684, 24, 12], "min_mean": 70.0},
+    "grey": {"areas": [[1560, 820, 88, 40], [1720, 820, 72, 40]], "min": 12.0, "max": 50.0,
+             "max_spread": 20.0, "max_tint": 10.0}
+  }
+}
