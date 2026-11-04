@@ -1,0 +1,16 @@
+{
+  "video": "Grand Theft Auto V_20261026160754.webm",
+  "rated_by": "owner",
+  "rated": "2026-11-04",
+  "run": "Grand Theft Auto V_20261026160754/20261104-154018",
+  "tool": "gta-clipper v10 (--spread v10)",
+  "method": "The owner rated these clips on make_rating_page.py's blind page (C:\\AI\\gta\\review\\rating_2026-11-04.html), which lists the clips in source-time order as letters and shows no score, peak, rank or rule. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The reasons are the owner's words as pasted; 'no reason given' where there was none. peak_s is the clip's peak_time_s in scores.json. This recording's only run, a spread check.",
+  "clips": [
+    {"start_s": 107.25, "end_s": 122.25, "span": "1:47.2-2:02.2", "peak_s": 121.0, "postable": true, "reason": "funny and good raining visual"},
+    {"start_s": 132.25, "end_s": 162.25, "span": "2:12.2-2:42.2", "peak_s": 147.0, "postable": false, "reason": "nothing much interesting in whole clip"},
+    {"start_s": 366.2, "end_s": 381.2, "span": "6:06.2-6:21.2", "peak_s": 370.0, "postable": false, "reason": "boring"},
+    {"start_s": 430.5, "end_s": 445.5, "span": "7:10.5-7:25.5", "peak_s": 434.5, "postable": true, "reason": "no reason given"},
+    {"start_s": 455.5, "end_s": 470.5, "span": "7:35.5-7:50.5", "peak_s": 458.5, "postable": false, "reason": "no reason given"}
+  ]
+}
