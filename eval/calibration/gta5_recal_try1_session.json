@@ -1,0 +1,1664 @@
+{
+ "name": "gta5_recal",
+ "created": "2026-10-25T15:56:21",
+ "game": "gta 5",
+ "frames": [
+  {
+   "id": "f01",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 100.0,
+   "time": "1:40.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "yes",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f02",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 140.0,
+   "time": "2:20.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "yes",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f03",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 210.0,
+   "time": "3:30.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "yes",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f04",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 253.0,
+   "time": "4:13.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "yes",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f05",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 280.0,
+   "time": "4:40.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f06",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 640.0,
+   "time": "10:40.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f07",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 700.0,
+   "time": "11:40.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f08",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 730.0,
+   "time": "12:10.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f09",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 167.0,
+   "time": "2:47.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f10",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 360.0,
+   "time": "6:00.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f11",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 890.0,
+   "time": "14:50.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f12",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 518.0,
+   "time": "8:38.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "yes"
+   }
+  },
+  {
+   "id": "f13",
+   "video": "C:\\AI\\gta\\input\\test1.webm",
+   "video_name": "test1.webm",
+   "time_s": 525.0,
+   "time": "8:45.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f14",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 30.0,
+   "time": "0:30.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f15",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 330.0,
+   "time": "5:30.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f16",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 780.0,
+   "time": "13:00.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f17",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 1160.0,
+   "time": "19:20.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f18",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 120.0,
+   "time": "2:00.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f19",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 630.0,
+   "time": "10:30.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f20",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 690.0,
+   "time": "11:30.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f21",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 1060.0,
+   "time": "17:40.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "hidden",
+    "stars": "no",
+    "phone": "no"
+   }
+  },
+  {
+   "id": "f22",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 265.0,
+   "time": "4:25.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "yes"
+   }
+  },
+  {
+   "id": "f23",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 740.0,
+   "time": "12:20.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "yes"
+   }
+  },
+  {
+   "id": "f24",
+   "video": "C:\\AI\\gta\\input\\test2.webm",
+   "video_name": "test2.webm",
+   "time_s": 1145.0,
+   "time": "19:05.0",
+   "w": 1920,
+   "h": 1080,
+   "labels": {
+    "hud": "shown",
+    "stars": "no",
+    "phone": "yes"
+   }
+  }
+ ],
+ "videos": {
+  "C:\\AI\\gta\\input\\test1.webm": {
+   "duration": 924.67375,
+   "width": 1920,
+   "height": 1088,
+   "fps": 59.94,
+   "video_codec": "vp9",
+   "pix_fmt": "yuv420p",
+   "container_crop": {
+    "top": 0,
+    "bottom": 8,
+    "left": 0,
+    "right": 0
+   },
+   "color_transfer": "bt709",
+   "color_range": "tv",
+   "has_audio": true
+  },
+  "C:\\AI\\gta\\input\\test2.webm": {
+   "duration": 1249.731875,
+   "width": 1920,
+   "height": 1088,
+   "fps": 59.94,
+   "video_codec": "vp9",
+   "pix_fmt": "yuv420p",
+   "container_crop": {
+    "top": 0,
+    "bottom": 8,
+    "left": 0,
+    "right": 0
+   },
+   "color_transfer": "bt709",
+   "color_range": "tv",
+   "has_audio": true
+  }
+ },
+ "drawing": {
+  "stars": {
+   "slots": 1,
+   "box": [
+    1698.5,
+    58.5,
+    143.5,
+    138.6
+   ],
+   "clicks": {
+    "top_first": [
+     1752.9,
+     68.4
+    ],
+    "top_last": [
+     1814.8,
+     69
+    ],
+    "low": [
+     1687.8,
+     79.7
+    ],
+    "inner": [
+     1764.8,
+     259.6
+    ]
+   }
+  },
+  "bars": [
+   {
+    "box": [
+     300.2,
+     1008,
+     71.3,
+     16.9
+    ]
+   },
+   {
+    "box": [
+     230.5,
+     1009.2,
+     68.9,
+     15.7
+    ]
+   },
+   {
+    "box": [
+     108.8,
+     1009,
+     121.5,
+     18.3
+    ]
+   }
+  ],
+  "phone": {
+   "grey": [
+    [
+     1586.4,
+     700.3,
+     222.7,
+     44.5
+    ]
+   ],
+   "box": [
+    1477.6,
+    522.1,
+    395.9,
+    257.3
+   ],
+   "dark": [
+    1645.8,
+    848.7,
+    64.3,
+    89.1
+   ],
+   "bright": [
+    1640.9,
+    621.1,
+    79.2,
+    54.4
+   ]
+  }
+ },
+ "overrides": {},
+ "log": [
+  {
+   "event": "page_opened",
+   "time": "2026-10-25T15:56:29"
+  },
+  {
+   "event": "measure",
+   "time": "2026-10-25T16:13:26",
+   "clean": false
+  },
+  {
+   "event": "measure",
+   "time": "2026-10-25T16:17:30",
+   "clean": false
+  },
+  {
+   "event": "measure",
+   "time": "2026-10-25T16:19:44",
+   "clean": false
+  },
+  {
+   "event": "measure",
+   "time": "2026-10-25T16:19:47",
+   "clean": false
+  }
+ ],
+ "last_report": {
+  "rules": {
+   "minimap": {
+    "rows": [
+     {
+      "key": "bar1.rg.r",
+      "what": "bar 1: red beats blue by at least",
+      "shown": [
+       3.3,
+       10.5
+      ],
+      "hidden_near": 0.0,
+      "value": 1.6,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "bar1.rg.g",
+      "what": "bar 1: green beats blue by at least",
+      "shown": [
+       40.4,
+       47.5
+      ],
+      "hidden_near": 34.0,
+      "value": 37.2,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "bar2.gb.g",
+      "what": "bar 2: green beats red by at least",
+      "shown": [
+       27.5,
+       37.2
+      ],
+      "hidden_near": 16.8,
+      "value": 22.1,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "bar2.gb.b",
+      "what": "bar 2: blue beats red by at least",
+      "shown": [
+       41.4,
+       56.2
+      ],
+      "hidden_near": 26.9,
+      "value": 34.1,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "bar3.rg.r",
+      "what": "bar 3: red beats blue by at least",
+      "shown": [
+       42.6,
+       89.4
+      ],
+      "hidden_near": 41.7,
+      "value": 42.1,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "bar3.rg.g",
+      "what": "bar 3: green beats blue by at least",
+      "shown": [
+       33.4,
+       66.1
+      ],
+      "hidden_near": 28.6,
+      "value": 31.0,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "min_sat",
+      "what": "every bar's colour strength (0 = grey, 1 = pure colour) at least",
+      "shown": [
+       0.3267,
+       0.6652
+      ],
+      "hidden_near": 0.3162,
+      "value": 0.321,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "min_distinct",
+      "what": "passing bars differ in colour (distance 0-441) by at least",
+      "shown": [
+       38.84,
+       80.86
+      ],
+      "hidden_near": 10.25,
+      "value": 24.5,
+      "how": "halfway",
+      "kind": "at least"
+     }
+    ],
+    "bad": [],
+    "min_bars": 2,
+    "bars": 3,
+    "missed": [
+     "test1.webm 1:40.0",
+     "test1.webm 2:20.0",
+     "test2.webm 5:30.0"
+    ],
+    "false_alarms": [],
+    "status": "problem",
+    "used": {
+     "shown": 17,
+     "hidden": 7
+    }
+   },
+   "stars": {
+    "rows": [],
+    "bad": [
+     "the inner corner should be a notch between two points of the first star; click it again"
+    ],
+    "off": false,
+    "missed": [],
+    "false_alarms": [],
+    "status": "problem",
+    "used": {
+     "shown": 4,
+     "hidden": 20
+    }
+   },
+   "phone": {
+    "rows": [
+     {
+      "key": "phone.dark",
+      "what": "dark area: its brightest cell (0 = black, 255 = white) at most",
+      "shown": [
+       0.0,
+       0.72
+      ],
+      "hidden_near": 6.15,
+      "value": 3.4,
+      "how": "halfway",
+      "kind": "at most"
+     },
+     {
+      "key": "phone.bright",
+      "what": "bright area: its average brightness at least",
+      "shown": [
+       6.78,
+       26.05
+      ],
+      "hidden_near": 1.43,
+      "value": 4.1,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "phone.grey_min",
+      "what": "grey areas: their darkest cell at least",
+      "shown": [
+       6.0,
+       15.67
+      ],
+      "hidden_near": 0.0,
+      "value": 3.0,
+      "how": "halfway",
+      "kind": "at least"
+     },
+     {
+      "key": "phone.grey_max",
+      "what": "grey areas: their brightest cell at most",
+      "shown": [
+       129.0,
+       240.39
+      ],
+      "hidden_near": null,
+      "value": 255.0,
+      "how": "one side only",
+      "kind": "at most"
+     },
+     {
+      "key": "phone.grey_spread",
+      "what": "grey areas: brightest minus darkest cell at most",
+      "shown": [
+       122.57,
+       224.71
+      ],
+      "hidden_near": null,
+      "value": 255.0,
+      "how": "one side only",
+      "kind": "at most"
+     },
+     {
+      "key": "phone.grey_tint",
+      "what": "grey areas: colour tint (red/green/blue difference) at most",
+      "shown": [
+       6,
+       89
+      ],
+      "hidden_near": 100,
+      "value": 94.5,
+      "how": "halfway",
+      "kind": "at most"
+     }
+    ],
+    "bad": [],
+    "off": false,
+    "missed": [],
+    "false_alarms": [],
+    "status": "check",
+    "used": {
+     "shown": 4,
+     "hidden": 20
+    }
+   }
+  },
+  "frames": [
+   {
+    "id": "f01",
+    "label": "test1.webm 1:40.0",
+    "want": {
+     "hud": "shown",
+     "stars": "yes",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      66,
+      103,
+      65
+     ],
+     [
+      58,
+      93,
+      111
+     ],
+     [
+      75,
+      67,
+      37
+     ]
+    ],
+    "phone": {
+     "face_max": 73.8,
+     "battery_mean": 72.2,
+     "panel_min": 20.0,
+     "panel_max": 196.9,
+     "panel_tint": 37
+    }
+   },
+   {
+    "id": "f02",
+    "label": "test1.webm 2:20.0",
+    "want": {
+     "hud": "shown",
+     "stars": "yes",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      58,
+      96,
+      60
+     ],
+     [
+      49,
+      86,
+      105
+     ],
+     [
+      74,
+      65,
+      35
+     ]
+    ],
+    "phone": {
+     "face_max": 60.9,
+     "battery_mean": 54.8,
+     "panel_min": 21.5,
+     "panel_max": 106.3,
+     "panel_tint": 45
+    }
+   },
+   {
+    "id": "f03",
+    "label": "test1.webm 3:30.0",
+    "want": {
+     "hud": "shown",
+     "stars": "yes",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      61,
+      97,
+      56
+     ],
+     [
+      50,
+      84,
+      100
+     ],
+     [
+      78,
+      65,
+      50
+     ]
+    ],
+    "phone": {
+     "face_max": 81.4,
+     "battery_mean": 131.4,
+     "panel_min": 40.3,
+     "panel_max": 184.8,
+     "panel_tint": 35
+    }
+   },
+   {
+    "id": "f04",
+    "label": "test1.webm 4:13.0",
+    "want": {
+     "hud": "shown",
+     "stars": "yes",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      80,
+      115,
+      72
+     ],
+     [
+      64,
+      100,
+      112
+     ],
+     [
+      83,
+      73,
+      38
+     ]
+    ],
+    "phone": {
+     "face_max": 166.4,
+     "battery_mean": 133.6,
+     "panel_min": 26.0,
+     "panel_max": 205.9,
+     "panel_tint": 67
+    }
+   },
+   {
+    "id": "f05",
+    "label": "test1.webm 4:40.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      69,
+      103,
+      62
+     ],
+     [
+      61,
+      89,
+      103
+     ],
+     [
+      88,
+      70,
+      35
+     ]
+    ],
+    "phone": {
+     "face_max": 110.9,
+     "battery_mean": 104.8,
+     "panel_min": 74.3,
+     "panel_max": 126.0,
+     "panel_tint": 53
+    }
+   },
+   {
+    "id": "f06",
+    "label": "test1.webm 10:40.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      96,
+      135,
+      89
+     ],
+     [
+      89,
+      121,
+      134
+     ],
+     [
+      128,
+      117,
+      77
+     ]
+    ],
+    "phone": {
+     "face_max": 203.5,
+     "battery_mean": 67.9,
+     "panel_min": 105.4,
+     "panel_max": 195.5,
+     "panel_tint": 35
+    }
+   },
+   {
+    "id": "f07",
+    "label": "test1.webm 11:40.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      95,
+      131,
+      86
+     ],
+     [
+      87,
+      120,
+      130
+     ],
+     [
+      155,
+      134,
+      70
+     ]
+    ],
+    "phone": {
+     "face_max": 100.4,
+     "battery_mean": 33.6,
+     "panel_min": 14.2,
+     "panel_max": 71.6,
+     "panel_tint": 42
+    }
+   },
+   {
+    "id": "f08",
+    "label": "test1.webm 12:10.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      85,
+      122,
+      74
+     ],
+     [
+      74,
+      108,
+      120
+     ],
+     [
+      139,
+      121,
+      69
+     ]
+    ],
+    "phone": {
+     "face_max": 241.7,
+     "battery_mean": 47.9,
+     "panel_min": 27.6,
+     "panel_max": 234.3,
+     "panel_tint": 45
+    }
+   },
+   {
+    "id": "f09",
+    "label": "test1.webm 2:47.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      2,
+      5,
+      8
+     ],
+     [
+      6,
+      18,
+      22
+     ],
+     [
+      13,
+      29,
+      33
+     ]
+    ],
+    "phone": {
+     "face_max": 188.9,
+     "battery_mean": 195.1,
+     "panel_min": 118.8,
+     "panel_max": 201.3,
+     "panel_tint": 68
+    }
+   },
+   {
+    "id": "f10",
+    "label": "test1.webm 6:00.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      62,
+      54,
+      50
+     ],
+     [
+      53,
+      50,
+      48
+     ],
+     [
+      195,
+      177,
+      153
+     ]
+    ],
+    "phone": {
+     "face_max": 198.1,
+     "battery_mean": 167.2,
+     "panel_min": 22.2,
+     "panel_max": 207.7,
+     "panel_tint": 204
+    }
+   },
+   {
+    "id": "f11",
+    "label": "test1.webm 14:50.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      209,
+      195,
+      161
+     ],
+     [
+      221,
+      211,
+      185
+     ],
+     [
+      217,
+      206,
+      181
+     ]
+    ],
+    "phone": {
+     "face_max": 231.6,
+     "battery_mean": 66.1,
+     "panel_min": 22.1,
+     "panel_max": 179.9,
+     "panel_tint": 43
+    }
+   },
+   {
+    "id": "f12",
+    "label": "test1.webm 8:38.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "yes"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "yes"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      67,
+      101,
+      59
+     ],
+     [
+      53,
+      79,
+      91
+     ],
+     [
+      82,
+      67,
+      33
+     ]
+    ],
+    "phone": {
+     "face_max": 0.7,
+     "battery_mean": 26.0,
+     "panel_min": 15.7,
+     "panel_max": 240.4,
+     "panel_tint": 89
+    }
+   },
+   {
+    "id": "f13",
+    "label": "test1.webm 8:45.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      69,
+      107,
+      65
+     ],
+     [
+      84,
+      117,
+      126
+     ],
+     [
+      112,
+      100,
+      62
+     ]
+    ],
+    "phone": {
+     "face_max": 224.9,
+     "battery_mean": 217.6,
+     "panel_min": 187.4,
+     "panel_max": 231.7,
+     "panel_tint": 33
+    }
+   },
+   {
+    "id": "f14",
+    "label": "test2.webm 0:30.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      72,
+      107,
+      62
+     ],
+     [
+      60,
+      94,
+      105
+     ],
+     [
+      134,
+      111,
+      45
+     ]
+    ],
+    "phone": {
+     "face_max": 122.2,
+     "battery_mean": 60.5,
+     "panel_min": 43.4,
+     "panel_max": 168.2,
+     "panel_tint": 50
+    }
+   },
+   {
+    "id": "f15",
+    "label": "test2.webm 5:30.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      54,
+      88,
+      53
+     ],
+     [
+      57,
+      71,
+      88
+     ],
+     [
+      98,
+      82,
+      37
+     ]
+    ],
+    "phone": {
+     "face_max": 39.0,
+     "battery_mean": 61.9,
+     "panel_min": 15.4,
+     "panel_max": 58.7,
+     "panel_tint": 13
+    }
+   },
+   {
+    "id": "f16",
+    "label": "test2.webm 13:00.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      76,
+      111,
+      71
+     ],
+     [
+      66,
+      94,
+      108
+     ],
+     [
+      115,
+      109,
+      72
+     ]
+    ],
+    "phone": {
+     "face_max": 136.0,
+     "battery_mean": 142.1,
+     "panel_min": 88.4,
+     "panel_max": 227.1,
+     "panel_tint": 20
+    }
+   },
+   {
+    "id": "f17",
+    "label": "test2.webm 19:20.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      71,
+      108,
+      66
+     ],
+     [
+      56,
+      91,
+      106
+     ],
+     [
+      110,
+      95,
+      52
+     ]
+    ],
+    "phone": {
+     "face_max": 94.8,
+     "battery_mean": 106.0,
+     "panel_min": 65.6,
+     "panel_max": 121.1,
+     "panel_tint": 17
+    }
+   },
+   {
+    "id": "f18",
+    "label": "test2.webm 2:00.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      209,
+      173,
+      124
+     ],
+     [
+      214,
+      180,
+      133
+     ],
+     [
+      212,
+      179,
+      132
+     ]
+    ],
+    "phone": {
+     "face_max": 109.1,
+     "battery_mean": 97.1,
+     "panel_min": 19.6,
+     "panel_max": 110.2,
+     "panel_tint": 18
+    }
+   },
+   {
+    "id": "f19",
+    "label": "test2.webm 10:30.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "phone": {
+     "face_max": 0.0,
+     "battery_mean": 1.4,
+     "panel_min": 0.0,
+     "panel_max": 0.0,
+     "panel_tint": 0
+    }
+   },
+   {
+    "id": "f20",
+    "label": "test2.webm 11:30.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      4,
+      15,
+      21
+     ],
+     [
+      10,
+      26,
+      36
+     ],
+     [
+      11,
+      29,
+      40
+     ]
+    ],
+    "phone": {
+     "face_max": 6.2,
+     "battery_mean": 21.3,
+     "panel_min": 0.0,
+     "panel_max": 113.8,
+     "panel_tint": 33
+    }
+   },
+   {
+    "id": "f21",
+    "label": "test2.webm 17:40.0",
+    "want": {
+     "hud": "hidden",
+     "stars": "no",
+     "phone": "no"
+    },
+    "got": {
+     "hud": "hidden",
+     "phone": "no"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      109,
+      92,
+      75
+     ],
+     [
+      138,
+      110,
+      79
+     ],
+     [
+      129,
+      104,
+      75
+     ]
+    ],
+    "phone": {
+     "face_max": 123.8,
+     "battery_mean": 57.0,
+     "panel_min": 18.0,
+     "panel_max": 138.1,
+     "panel_tint": 100
+    }
+   },
+   {
+    "id": "f22",
+    "label": "test2.webm 4:25.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "yes"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "yes"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      54,
+      88,
+      52
+     ],
+     [
+      42,
+      76,
+      94
+     ],
+     [
+      96,
+      81,
+      35
+     ]
+    ],
+    "phone": {
+     "face_max": 0.0,
+     "battery_mean": 6.8,
+     "panel_min": 6.0,
+     "panel_max": 148.1,
+     "panel_tint": 6
+    }
+   },
+   {
+    "id": "f23",
+    "label": "test2.webm 12:20.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "yes"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "yes"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      80,
+      119,
+      91
+     ],
+     [
+      69,
+      106,
+      124
+     ],
+     [
+      127,
+      113,
+      68
+     ]
+    ],
+    "phone": {
+     "face_max": 0.0,
+     "battery_mean": 9.5,
+     "panel_min": 7.0,
+     "panel_max": 151.0,
+     "panel_tint": 70
+    }
+   },
+   {
+    "id": "f24",
+    "label": "test2.webm 19:05.0",
+    "want": {
+     "hud": "shown",
+     "stars": "no",
+     "phone": "yes"
+    },
+    "got": {
+     "hud": "shown",
+     "phone": "yes"
+    },
+    "star_score": null,
+    "bars": [
+     [
+      67,
+      103,
+      62
+     ],
+     [
+      47,
+      79,
+      94
+     ],
+     [
+      103,
+      86,
+      40
+     ]
+    ],
+    "phone": {
+     "face_max": 0.0,
+     "battery_mean": 8.8,
+     "panel_min": 6.4,
+     "panel_max": 129.0,
+     "panel_tint": 39
+    }
+   }
+  ],
+  "snapped": {
+   "minimap_box": [
+    109,
+    1009,
+    263,
+    16
+   ],
+   "phone": {
+    "box": [
+     1478,
+     522,
+     392,
+     256
+    ],
+    "dark": [
+     1646,
+     774,
+     64,
+     4
+    ],
+    "bright": [
+     1638,
+     622,
+     80,
+     52
+    ],
+    "grey": [
+     [
+      1590,
+      702,
+      216,
+      44
+     ]
+    ]
+   }
+  },
+  "can_save": false,
+  "clean": false,
+  "inherited": [
+   "stretch min_s 1.5 and pad_s 0.5",
+   "minimap min_share 0.2",
+   "minimap min_bars 2 (bars - 1, at least 2)",
+   "phone cell [8, 4]"
+  ]
+ }
+}
