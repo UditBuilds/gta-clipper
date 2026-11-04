@@ -983,6 +983,9 @@ Nothing in the code, the prompts, the thresholds, the rules or the keys was chan
 
 # v10: spreading picks across the video (2026-11-04)
 
+**Where this ended: `--spread v10` is the default, by the owner's second rule, although it failed the first rule on test1
+recall. See [The owner's ratings and the default](#the-owners-ratings-and-the-default).**
+
 This part was committed before any real run of the change. The results follow in a later commit.
 
 ## The problem
@@ -1071,8 +1074,8 @@ that run it counts as dev data.
 ## Results (runs of commit `cfd5688`)
 
 **Pass/fail: FAIL under the rule as the owner wrote it. test1 recall fell from 5/5 to 4/5, and the owner's deviation covers
-strict hits only.** So `--spread v10` is in the code but is not the default; `--spread v9` stays the default. Whether to
-accept the recall drop too is the owner's decision. If the owner accepts it, that is a second deviation, recorded here.
+strict hits only.** So at this point (commit `cfd5688`) `--spread v10` was in the code but was not the default. The owner's
+later decision is under [The owner's ratings and the default](#the-owners-ratings-and-the-default).
 
 | Line of the rule | Result |
 |---|---|
@@ -1151,7 +1154,7 @@ ratings: the owner may have watched the 5 old-rule clips on 2026-11-04 and can r
 
 ## What was not measured
 
-- **Whether the spread clips are good:** that waits for the owner's ratings.
+- **Whether the spread clips are good:** at this point it waited for the owner's ratings; they are below.
 - **Bad picks and recall on the 25:04 video and the fresh recording:** neither has an answer key.
 - **`--spread v10` with `--vlm`:** not run. The candidates come from the same picker, so they would change.
 - **New footage:** all 6 recordings are now dev data, and A was chosen from replays of 5 of them. Nothing here is a
@@ -1164,3 +1167,65 @@ ratings: the owner may have watched the 5 old-rule clips on 2026-11-04 and can r
   shared GPU memory up to 330 MB on the NVIDIA adapter (luid `0x00017d8d`). Run times 40-115 s.
 - `selftest.py` PASS, by default and with `--spread v10` (the same three 15.000 s clips). `hudtest.py`, `evaltest.py`,
   `vlmtest.py` and `calibtest.py` PASS. `spreadtest.py` (new) PASS, 13 checks.
+
+## The owner's ratings and the default
+
+The owner rated all 13 clips on the page (`eval/ratings/Grand Theft Auto V_20261026163544_blind.json` and
+`..._20261026160754_blind.json`). The reasons are the owner's words.
+
+| Recording | Clip | Picked by | Stars in clip | Owner | Reason |
+|---|---|---|---|---|---|
+| 25:04 | 1:51.5-2:21.5 | v9 | 30 s | postable | "intense mission, riding" |
+| 25:04 | 2:33.0-2:51.8 | both | 19 s | postable | none given |
+| 25:04 | 3:01.8-3:31.8 | both | 30.5 s | postable | none given |
+| 25:04 | 4:09.0-4:39.0 | v9 | 30 s | postable | none given |
+| 25:04 | 4:49.0-5:04.0 | v9 | 4 s | not postable | "nothing much this clip has to offer" |
+| 25:04 | 14:17.0-14:32.0 | v10 | 0 s | not postable | none given |
+| 25:04 | 18:16.4-18:31.4 | v10 | 0 s | postable | "good action scenes" |
+| 25:04 | 20:02.0-20:17.0 | v10 | 0 s | postable | none given |
+| fresh | 1:47.2-2:02.2 | v10 | 5 s | postable | "funny and good raining visual" |
+| fresh | 2:12.2-2:42.2 | v10 | 30.5 s | not postable | "nothing much interesting in whole clip" |
+| fresh | 6:06.2-6:21.2 | v10 | 0 s | not postable | "boring" |
+| fresh | 7:10.5-7:25.5 | v10 | 0 s | postable | none given |
+| fresh | 7:35.5-7:50.5 | v10 | 0 s | not postable | none given |
+
+**Postable@5, with 0 unrated.** eval.py's `evaluate` was given an empty key for these two recordings, because eval.py's
+command line stops when a video has no key file.
+
+| Recording | `--spread v9` | `--spread v10` | 5-min blocks, v9 → v10 |
+|---|---|---|---|
+| 25:04 | 4/5 | 4/5 | 1 → 4 |
+| fresh | 2/5 (by replay: the same 5 clips) | 2/5 | 2 → 2 |
+| test1, test2, heldout1, heldout2 | 5/5, 3/5, 3/5, 2/5 | 5/5, 3/5, 3/5, 2/5 | 2, 2, 2, 1 unchanged |
+
+**So v10 spreads the clips without changing Postable@5 on any of the 6 recordings. It does not make more clips postable.**
+On the 25:04 video it takes out 1:51.5 and 4:09.0 (postable, stars throughout) and 4:49.0 (not postable), and puts in 18:16.4
+and 20:02.0 (postable, no stars) and 14:17.0 (not postable, no stars).
+
+### The owner's second rule
+
+In the owner's words: "make v10 default only if at least 2 of the 25:04 clips that v10 adds (not picked by v9) are postable."
+
+v10 adds 3 clips: 14:17.0-14:32.0 (not postable), 18:16.4-18:31.4 (postable), 20:02.0-20:17.0 (postable). **2 of 3 are
+postable, so the rule is met and `--spread v10` is the default from commit `3471dda`.**
+
+What this decision is, plainly:
+- **It is a second deviation, and it overrides the first rule's FAIL.** The first rule's recall line still reads FAIL:
+  test1 recall is 4/5 under the new default, and the shootout range 2:10-2:57 gets no clip. The owner did not change that
+  result. The owner's second rule decides the default instead.
+- **When the rule was set.** The owner calls it pre-set. It first reached this repo and the chat in the same message as the
+  ratings, so nothing in the repo shows that it was fixed before the ratings were given.
+- **The margin is the minimum.** 2 of 3, on one recording. One rating the other way would have kept v9.
+- **The ratings aren't fully blind.** The page showed no score, rank or rule, but the owner may have watched the 5 old-rule
+  clips on 2026-11-04 and can recognise them by their times.
+
+### After the flip
+
+- **The flip does what it should.** At `3471dda`, test1 with no flag (`20261104-160045`) has the same picks and a
+  byte-identical `timeline.csv` as the earlier v10 run `20261104-152836`. With `--spread v9` (`20261104-160201`), the same
+  against the earlier v9 run `20261104-152706`. Pre-flight: 10.8 GB RAM free, 481 MiB of VRAM in use, Ollama not running.
+- **Older results need `--spread v9`.** The results of v3 to v9 in this file were made with that rule.
+- **`--vlm` now gets v10's candidates.** That has not been run with a model. The held-out test (v8) stays a result of the
+  old rule.
+- **`selftest.py` PASS, by default and with `--spread v9`.** `hudtest.py`, `evaltest.py`, `vlmtest.py`, `calibtest.py` and
+  `spreadtest.py` PASS.
