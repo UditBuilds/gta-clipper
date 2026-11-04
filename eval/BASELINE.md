@@ -980,3 +980,90 @@ The rule cancelled the 4b's boring veto of two candidates: heldout1 #1 (12:33.8,
 - Treating the veto as off by default for drives, where the held-out costly vetoes were.
 
 Nothing in the code, the prompts, the thresholds, the rules or the keys was changed because of these results.
+
+# v10: spreading picks across the video (2026-11-04)
+
+This part was committed before any real run of the change. The results follow in a later commit.
+
+## The problem
+
+On 2026-11-04 the 25:04 recording `Grand Theft Auto V_20261026163544` (no answer key, no ratings) gave 5 clips that all
+came from its first 5:04: 3:01.8-3:31.8, 2:33.0-2:51.8, 4:09.0-4:39.0, 1:51.5-2:21.5 and 4:49.0-5:04.0. Stars show for
+the whole of the first four and for 4 s of the fifth. Run: `Grand Theft Auto V_20261026163544\20261104-142909`.
+
+Two causes, measured from that run's `timeline.csv`:
+- **The +3.0 star boost.** Steps with stars average 3.79; other steps average 0.54. 96 % of the steps with stars reach
+  the 2.0 "active" floor only because of the boost. The weakest pick's smoothed score is 3.51. 281 steps reach that, and
+  none of them is after 5:04. The best step after 5:04 is 20:12.5 at 2.07, rank 343 of 3010.
+- **The cap of 2 clips per sequence was dodged.** Two stretches with no minimap, 2:21.5-2:33.0 and 4:02.5-4:09.0, cut
+  the star stretch 1:44.5-4:53.0 into 3 sequences, so 1 + 2 + 2 = 5 picks got through. The cap did fire: it skipped 25
+  peaks. docs/DETAILS.md already listed this under Known limits ("A pause map splits a sequence").
+
+## The acceptance rule
+
+Written in the Phase 1 report, before any real run of a change, but after the replays described below:
+- Bad picks stay 0 on all 4 keyed videos.
+- Strict hits and recall don't drop on any of the 4.
+- The 25:04 video gives 5 clips from at least 3 different 5-minute blocks. A clip's block comes from its start time
+  (`start_s // 300`), so exactly 3 passes.
+- "Before" means a fresh run with the old-behaviour flag. It must reproduce the picks of the saved runs below and of the
+  4 Nov run exactly, or the work stops and the owner is told.
+- A clip the owner has never rated counts as not postable until rated. Postable@5 isn't reported for a video with
+  unrated picks.
+- If the change fails the rule, that is said plainly, it doesn't become the default, and nothing is tuned further.
+
+| Video | Saved run | Strict hits | Recall | Bad picks |
+|---|---|---|---|---|
+| test1 | `20261028-150218` | 5/5 | 5/5 | 0 |
+| test2 | `20261028-150521` | 3/5 | 2/3 | 0 |
+| heldout1 | `20261024-171640` | 5/5 | 3/3 | 0 |
+| heldout2 | `20261024-171740` | 1/4 | 1/1 | 0 |
+
+## The owner's deviation from the rule
+
+**Made by the owner on 2026-11-04, after seeing the Phase 1 replays.** The owner accepts test1 strict hits dropping from
+5/5 to 4/5, because test1 Postable@5 stays 5/5 and option A spreads picks better with a one-line change. Option B was
+found by searching on these same videos and its gap only works at 25-30 s, so the owner did not take it.
+
+Everything else in the rule stays: bad picks 0 on all 4 keyed videos, recall not lower on any, the 25:04 video covers at
+least 3 blocks.
+
+## How the options were reached
+
+About 75 variants were replayed through the real `pick_clips` on the saved timelines of these 5 videos before the rule
+was written. A replay reproduces the real picks of all 5 saved runs exactly. All 5 videos are dev data, so whatever passes
+here fits these videos. It is not a prediction for new footage.
+
+- **A longer minimum gap alone:** no gap from 20 to 300 s met the rule. 60 s reaches 3 blocks, but test1 falls to 4/5
+  strict and recall and test2 to 2/5 strict. test2's two postable chase clips are only 10 s apart.
+- **Scoring stars going up:** can't be measured today. `star_score` matches filled, empty and flashing stars alike, so
+  there is no star count. Boosting only the first 15-90 s of stars never got past 2 blocks. A smaller boost reaches 3
+  blocks only at 0.5 or 0, and test1 recall falls to 3/5 and 2/5.
+- **Caps per 5-minute block:** all failed.
+- **Option A, chosen by the owner:** a stretch with no minimap no longer ends a sequence.
+- **Option B, not taken:** A plus a cap of 3 and a 30 s gap between star clips.
+
+## The change under test
+
+`--spread v10`: an excluded stretch doesn't end an action sequence. Its steps count as quiet, so a stretch of 20 s or more
+still ends one. The cap stays 2 and the quiet time stays 20 s. Nothing else changes. `--spread v9` is the old rule.
+
+## What the replay predicts (written before any real run)
+
+| Video | Picks (start) | Strict hits | Recall | Bad picks | Postable@5 | Blocks |
+|---|---|---|---|---|---|---|
+| test1 | 3:10.2, 0:57.5, 12:02.3, 10:20.3, 12:30.9 | 4/5 | **4/5** (misses 2:10-2:57) | 0 | 5/5 | 2 |
+| test2 | same as the old rule | 3/5 | 2/3 | 0 | 3/5 | 2 |
+| heldout1 | 12:33.8, 11:20.8, 7:52.0, 8:21.0, 5:38.5 | 5/5 | 3/3 | 0 | 3/5 | 2 |
+| heldout2 | same as the old rule | 1/4 | 1/1 | 0 | 2/5 | 1 |
+| 25:04 | 3:01.8, 2:33.0, 20:02.0, 18:16.4, 14:17.0 | no key | no key | no key | unrated | 4 |
+
+**So the replay predicts that A fails the recall line on test1 (5/5 to 4/5).** The owner's deviation names strict hits
+only, and it keeps "recall not lower on any". This section applies that as written: if the real runs match the replay, A
+goes in behind the flag and doesn't become the default, and the decision goes back to the owner.
+
+## The fresh check
+
+`Grand Theft Auto V_20261026160754` has never been run, and has no key and no ratings. After the code is committed it runs
+once with `--spread v10`, as a spread check only: its pick times and blocks are reported, and nothing is tuned on it. After
+that run it counts as dev data.
