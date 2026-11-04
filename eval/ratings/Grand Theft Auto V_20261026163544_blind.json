@@ -1,0 +1,19 @@
+{
+  "video": "Grand Theft Auto V_20261026163544.webm",
+  "rated_by": "owner",
+  "rated": "2026-11-04",
+  "run": "Grand Theft Auto V_20261026163544/20261104-153926",
+  "tool": "gta-clipper v10 (--spread v9 and --spread v10)",
+  "method": "The owner rated these clips on make_rating_page.py's blind page (C:\\AI\\gta\\review\\rating_2026-11-04.html), which lists the clips in source-time order as letters and shows no score, peak, rank or rule. Clips are identified by their time range in the source, in seconds, not by clip number.",
+  "note": "The reasons are the owner's words as pasted; 'no reason given' where there was none. peak_s is the clip's peak_time_s in scores.json. The clips come from two runs: 20261104-153732 (--spread v9) and 20261104-153926 (--spread v10); 2:33.0-2:51.8 and 3:01.8-3:31.8 are in both. Not fully blind: the owner may have watched the --spread v9 clips on 2026-11-04 and can recognise them by their times.",
+  "clips": [
+    {"start_s": 111.5, "end_s": 141.5, "span": "1:51.5-2:21.5", "peak_s": 114.0, "postable": true, "reason": "intense mission, riding"},
+    {"start_s": 153.0, "end_s": 171.75, "span": "2:33.0-2:51.8", "peak_s": 165.0, "postable": true, "reason": "no reason given"},
+    {"start_s": 181.75, "end_s": 211.75, "span": "3:01.8-3:31.8", "peak_s": 197.0, "postable": true, "reason": "no reason given"},
+    {"start_s": 249.0, "end_s": 279.0, "span": "4:09.0-4:39.0", "peak_s": 254.5, "postable": true, "reason": "no reason given"},
+    {"start_s": 289.0, "end_s": 304.0, "span": "4:49.0-5:04.0", "peak_s": 291.0, "postable": false, "reason": "nothing much this clip has to offer"},
+    {"start_s": 857.0, "end_s": 872.0, "span": "14:17.0-14:32.0", "peak_s": 864.0, "postable": false, "reason": "no reason given"},
+    {"start_s": 1096.4, "end_s": 1111.4, "span": "18:16.4-18:31.4", "peak_s": 1101.0, "postable": true, "reason": "good action scenes"},
+    {"start_s": 1202.0, "end_s": 1217.0, "span": "20:02.0-20:17.0", "peak_s": 1213.5, "postable": true, "reason": "no reason given"}
+  ]
+}

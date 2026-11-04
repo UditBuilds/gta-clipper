@@ -980,3 +980,252 @@ The rule cancelled the 4b's boring veto of two candidates: heldout1 #1 (12:33.8,
 - Treating the veto as off by default for drives, where the held-out costly vetoes were.
 
 Nothing in the code, the prompts, the thresholds, the rules or the keys was changed because of these results.
+
+# v10: spreading picks across the video (2026-11-04)
+
+**Where this ended: `--spread v10` is the default, by the owner's second rule, although it failed the first rule on test1
+recall. See [The owner's ratings and the default](#the-owners-ratings-and-the-default).**
+
+This part was committed before any real run of the change. The results follow in a later commit.
+
+## The problem
+
+On 2026-11-04 the 25:04 recording `Grand Theft Auto V_20261026163544` (no answer key, no ratings) gave 5 clips that all
+came from its first 5:04: 3:01.8-3:31.8, 2:33.0-2:51.8, 4:09.0-4:39.0, 1:51.5-2:21.5 and 4:49.0-5:04.0. Stars show for
+the whole of the first four and for 4 s of the fifth. Run: `Grand Theft Auto V_20261026163544\20261104-142909`.
+
+Two causes, measured from that run's `timeline.csv`:
+- **The +3.0 star boost.** Steps with stars average 3.79; other steps average 0.54. 96 % of the steps with stars reach
+  the 2.0 "active" floor only because of the boost. The weakest pick's smoothed score is 3.51. 281 steps reach that, and
+  none of them is after 5:04. The best step after 5:04 is 20:12.5 at 2.07, rank 343 of 3010.
+- **The cap of 2 clips per sequence was dodged.** Two stretches with no minimap, 2:21.5-2:33.0 and 4:02.5-4:09.0, cut
+  the star stretch 1:44.5-4:53.0 into 3 sequences, so 1 + 2 + 2 = 5 picks got through. The cap did fire: it skipped 25
+  peaks. docs/DETAILS.md already listed this under Known limits ("A pause map splits a sequence").
+
+## The acceptance rule
+
+Written in the Phase 1 report, before any real run of a change, but after the replays described below:
+- Bad picks stay 0 on all 4 keyed videos.
+- Strict hits and recall don't drop on any of the 4.
+- The 25:04 video gives 5 clips from at least 3 different 5-minute blocks. A clip's block comes from its start time
+  (`start_s // 300`), so exactly 3 passes.
+- "Before" means a fresh run with the old-behaviour flag. It must reproduce the picks of the saved runs below and of the
+  4 Nov run exactly, or the work stops and the owner is told.
+- A clip the owner has never rated counts as not postable until rated. Postable@5 isn't reported for a video with
+  unrated picks.
+- If the change fails the rule, that is said plainly, it doesn't become the default, and nothing is tuned further.
+
+| Video | Saved run | Strict hits | Recall | Bad picks |
+|---|---|---|---|---|
+| test1 | `20261028-150218` | 5/5 | 5/5 | 0 |
+| test2 | `20261028-150521` | 3/5 | 2/3 | 0 |
+| heldout1 | `20261024-171640` | 5/5 | 3/3 | 0 |
+| heldout2 | `20261024-171740` | 1/4 | 1/1 | 0 |
+
+## The owner's deviation from the rule
+
+**Made by the owner on 2026-11-04, after seeing the Phase 1 replays.** The owner accepts test1 strict hits dropping from
+5/5 to 4/5, because test1 Postable@5 stays 5/5 and option A spreads picks better with a one-line change. Option B was
+found by searching on these same videos and its gap only works at 25-30 s, so the owner did not take it.
+
+Everything else in the rule stays: bad picks 0 on all 4 keyed videos, recall not lower on any, the 25:04 video covers at
+least 3 blocks.
+
+## How the options were reached
+
+About 75 variants were replayed through the real `pick_clips` on the saved timelines of these 5 videos before the rule
+was written. A replay reproduces the real picks of all 5 saved runs exactly. All 5 videos are dev data, so whatever passes
+here fits these videos. It is not a prediction for new footage.
+
+- **A longer minimum gap alone:** no gap from 20 to 300 s met the rule. 60 s reaches 3 blocks, but test1 falls to 4/5
+  strict and recall and test2 to 2/5 strict. test2's two postable chase clips are only 10 s apart.
+- **Scoring stars going up:** can't be measured today. `star_score` matches filled, empty and flashing stars alike, so
+  there is no star count. Boosting only the first 15-90 s of stars never got past 2 blocks. A smaller boost reaches 3
+  blocks only at 0.5 or 0, and test1 recall falls to 3/5 and 2/5.
+- **Caps per 5-minute block:** all failed.
+- **Option A, chosen by the owner:** a stretch with no minimap no longer ends a sequence.
+- **Option B, not taken:** A plus a cap of 3 and a 30 s gap between star clips.
+
+## The change under test
+
+`--spread v10`: an excluded stretch doesn't end an action sequence. Its steps count as quiet, so a stretch of 20 s or more
+still ends one. The cap stays 2 and the quiet time stays 20 s. Nothing else changes. `--spread v9` is the old rule.
+
+## What the replay predicts (written before any real run)
+
+| Video | Picks (start) | Strict hits | Recall | Bad picks | Postable@5 | Blocks |
+|---|---|---|---|---|---|---|
+| test1 | 3:10.2, 0:57.5, 12:02.3, 10:20.3, 12:30.9 | 4/5 | **4/5** (misses 2:10-2:57) | 0 | 5/5 | 2 |
+| test2 | same as the old rule | 3/5 | 2/3 | 0 | 3/5 | 2 |
+| heldout1 | 12:33.8, 11:20.8, 7:52.0, 8:21.0, 5:38.5 | 5/5 | 3/3 | 0 | 3/5 | 2 |
+| heldout2 | same as the old rule | 1/4 | 1/1 | 0 | 2/5 | 1 |
+| 25:04 | 3:01.8, 2:33.0, 20:02.0, 18:16.4, 14:17.0 | no key | no key | no key | unrated | 4 |
+
+**So the replay predicts that A fails the recall line on test1 (5/5 to 4/5).** The owner's deviation names strict hits
+only, and it keeps "recall not lower on any". This section applies that as written: if the real runs match the replay, A
+goes in behind the flag and doesn't become the default, and the decision goes back to the owner.
+
+## The fresh check
+
+`Grand Theft Auto V_20261026160754` has never been run, and has no key and no ratings. After the code is committed it runs
+once with `--spread v10`, as a spread check only: its pick times and blocks are reported, and nothing is tuned on it. After
+that run it counts as dev data.
+
+## Results (runs of commit `cfd5688`)
+
+**Pass/fail: FAIL under the rule as the owner wrote it. test1 recall fell from 5/5 to 4/5, and the owner's deviation covers
+strict hits only.** So at this point (commit `cfd5688`) `--spread v10` was in the code but was not the default. The owner's
+later decision is under [The owner's ratings and the default](#the-owners-ratings-and-the-default).
+
+| Line of the rule | Result |
+|---|---|
+| Bad picks 0 on all 4 keyed videos | pass |
+| Recall not lower on any of the 4 | **FAIL:** test1 5/5 to 4/5, the shootout range 2:10-2:57 gets no clip |
+| Strict hits not lower on any of the 4 (test1 may drop to 4/5, the deviation) | pass: test1 5/5 to 4/5, the others unchanged |
+| The 25:04 video: 5 clips from at least 3 blocks | pass: 5 clips, 4 blocks (old rule: 1) |
+| Fresh old-rule runs reproduce the saved picks | pass, on all 5 videos |
+
+The real runs match the replay's prediction above in every number.
+
+| Video | Rule | Run | Strict hits | Recall | Bad picks | Pick times (in rank order) | 5-min blocks covered |
+|---|---|---|---|---|---|---|---|
+| test1 | v9 | `20261104-152706` | 5/5 | 5/5 | 0 | 3:10.2-3:40.2, 0:57.5-1:27.5, 3:50.2-4:19.0, 2:16.0-2:46.0, 12:02.3-12:17.3 | 2 (0-5, 10-15) |
+| test1 | v10 | `20261104-152836` | 4/5 | **4/5** | 0 | 3:10.2-3:40.2, 0:57.5-1:27.5, 12:02.3-12:17.3, 10:20.3-10:35.3, 12:30.9-12:45.9 | 2 (0-5, 10-15) |
+| test2 | v9 | `20261104-153014` | 3/5 | 2/3 | 0 | 0:00.1-0:15.1, 4:40.0-4:56.5, 0:42.3-0:57.3, 5:06.5-5:21.5, 3:04.5-3:19.5 | 2 (0-5, 5-10) |
+| test2 | v10 | `20261104-153143` | 3/5 | 2/3 | 0 | the same | 2 (0-5, 5-10) |
+| heldout1 | v9 | `20261104-153257` | 5/5 | 3/3 | 0 | 12:33.8-13:03.8, 11:20.8-11:50.8, 9:15.8-9:45.8, 8:50.8-9:05.8, 7:52.0-8:08.5 | 2 (5-10, 10-15) |
+| heldout1 | v10 | `20261104-153421` | 5/5 | 3/3 | 0 | 12:33.8-13:03.8, 11:20.8-11:50.8, 7:52.0-8:08.5, 8:21.0-8:36.0, 5:38.5-5:53.5 | 2 (5-10, 10-15) |
+| heldout2 | v9 | `20261104-153513` | 1/4 | 1/1 | 0 | 4:26.5-4:47.0, 3:47.0-4:02.0, 0:50.9-1:05.9, 1:29.2-1:44.2 | 1 (0-5) |
+| heldout2 | v10 | `20261104-153553` | 1/4 | 1/1 | 0 | the same | 1 (0-5) |
+| 25:04 | v9 | `20261104-153732` | no key | no key | no key | 3:01.8-3:31.8, 2:33.0-2:51.8, 4:09.0-4:39.0, 1:51.5-2:21.5, 4:49.0-5:04.0 | 1 (0-5) |
+| 25:04 | v10 | `20261104-153926` | no key | no key | no key | 3:01.8-3:31.8, 2:33.0-2:51.8, 20:02.0-20:17.0, 18:16.4-18:31.4, 14:17.0-14:32.0 | 4 (0-5, 10-15, 15-20, 20-25) |
+
+Postable@5 on the keyed videos, where every pick already has a rating (0 unrated), is the same under both rules: test1
+5/5, test2 3/5, heldout1 3/5, heldout2 2/5. On the 25:04 video and the fresh recording it isn't reported until the owner
+has rated their clips.
+
+## What the change did
+
+- **The 25:04 video:** blocks went from 1 to 4. The three new picks have no stars and much lower scores: smoothed peaks 2.07,
+  2.00 and 1.89, against 3.51 for the weakest old pick. Whether they are worth posting isn't known yet.
+- **test1:** 3:50.2-4:19.0 and 2:16.0-2:46.0 are out, 10:20.3-10:35.3 and 12:30.9-12:45.9 are in. All four are rated
+  postable. The first 5 minutes now give 2 clips instead of 4, but the blocks covered stay 2.
+  - Recall falls because 2:16.0-2:46.0 was the only clip in the shootout range 2:10-2:57.
+  - Strict hits fall because 12:30.9-12:45.9 starts after the yacht chase range ends at 12:30.
+- **heldout1:** 9:15.8-9:45.8 (rated postable) and 8:50.8-9:05.8 (not) are out, 8:21.0-8:36.0 (not) and 5:38.5-5:53.5
+  (postable) are in. Postable@5 stays 3/5.
+- **test2 and heldout2:** the same picks.
+- **No keyed video covers more blocks.** Only the 25:04 video does. On test1 and heldout1 the clips moved within the same
+  blocks.
+
+## The fresh check
+
+`Grand Theft Auto V_20261026160754` (8:05.9, run `20261104-154018`), once, with `--spread v10`:
+
+| Rank | Clip | Block |
+|---|---|---|
+| 1 | 2:12.2-2:42.2 | 0-5 |
+| 2 | 1:47.2-2:02.2 | 0-5 |
+| 3 | 7:35.5-7:50.5 | 5-10 |
+| 4 | 6:06.2-6:21.2 | 5-10 |
+| 5 | 7:10.5-7:25.5 | 5-10 |
+
+It covers both of the 2 blocks this recording has. **This says nothing for or against A:** the old rule, replayed on this
+run's timeline (not a second run), gives the same 5 picks, with 5 sequences either way. Nothing was tuned on it. It has no
+key, so strict hits, recall and bad picks can't be measured. From now on it is dev data.
+
+## Checks
+
+- **The old rule is unchanged.** Each `--spread v9` run picks exactly the clips of its saved run, with a byte-identical
+  `timeline.csv`, on all 5 videos (saved runs above, and `20261104-142909` for the 25:04 video).
+- **The new rule only moves the sequences and what follows from them.** Between each video's v9 and v10 runs, the
+  `timeline.csv` columns that differ are `sequence` on test2; `sequence`, `clip` and `action` on test1, heldout1 and the
+  25:04 video; none on heldout2.
+
+## Rating page
+
+`C:\AI\gta\review\rating_2026-11-04.html` (outside the repo), built with `make_rating_page.py --unrated-only` from all 11
+runs: 13 clips, 8 from the 25:04 video and 5 from the fresh recording. No keyed clip is on it: every keyed pick already has
+a rating by eval.py's rule. For 3 of the 19 new-rule picks that rating is of another cut of the same moment (test1 3:10.2,
+test2 0:00.1 and 0:42.3), as it has been since PR 5.
+
+The page shows no score, rank or rule, and it mixes the clips of both 25:04 runs. It isn't fully blind for the owner's 25:04
+ratings: the owner may have watched the 5 old-rule clips on 2026-11-04 and can recognise them by their times.
+
+## What was not measured
+
+- **Whether the spread clips are good:** at this point it waited for the owner's ratings; they are below.
+- **Bad picks and recall on the 25:04 video and the fresh recording:** neither has an answer key.
+- **`--spread v10` with `--vlm`:** not run. The candidates come from the same picker, so they would change.
+- **New footage:** all 6 recordings are now dev data, and A was chosen from replays of 5 of them. Nothing here is a
+  prediction for new footage.
+
+## Machine and tests
+
+- Pre-flight before the runs, as its own step: 10.1 GB RAM free, 671 MiB of VRAM in use, Ollama not running.
+- 11 runs, one at a time, with `C:\AI\scripts\gpu_log.ps1` (876 samples): peak 54 C, 0 s above 85 C, peak GPU memory 968 MiB,
+  shared GPU memory up to 330 MB on the NVIDIA adapter (luid `0x00017d8d`). Run times 40-115 s.
+- `selftest.py` PASS, by default and with `--spread v10` (the same three 15.000 s clips). `hudtest.py`, `evaltest.py`,
+  `vlmtest.py` and `calibtest.py` PASS. `spreadtest.py` (new) PASS, 13 checks.
+
+## The owner's ratings and the default
+
+The owner rated all 13 clips on the page (`eval/ratings/Grand Theft Auto V_20261026163544_blind.json` and
+`..._20261026160754_blind.json`). The reasons are the owner's words.
+
+| Recording | Clip | Picked by | Stars in clip | Owner | Reason |
+|---|---|---|---|---|---|
+| 25:04 | 1:51.5-2:21.5 | v9 | 30 s | postable | "intense mission, riding" |
+| 25:04 | 2:33.0-2:51.8 | both | 19 s | postable | none given |
+| 25:04 | 3:01.8-3:31.8 | both | 30.5 s | postable | none given |
+| 25:04 | 4:09.0-4:39.0 | v9 | 30 s | postable | none given |
+| 25:04 | 4:49.0-5:04.0 | v9 | 4 s | not postable | "nothing much this clip has to offer" |
+| 25:04 | 14:17.0-14:32.0 | v10 | 0 s | not postable | none given |
+| 25:04 | 18:16.4-18:31.4 | v10 | 0 s | postable | "good action scenes" |
+| 25:04 | 20:02.0-20:17.0 | v10 | 0 s | postable | none given |
+| fresh | 1:47.2-2:02.2 | v10 | 5 s | postable | "funny and good raining visual" |
+| fresh | 2:12.2-2:42.2 | v10 | 30.5 s | not postable | "nothing much interesting in whole clip" |
+| fresh | 6:06.2-6:21.2 | v10 | 0 s | not postable | "boring" |
+| fresh | 7:10.5-7:25.5 | v10 | 0 s | postable | none given |
+| fresh | 7:35.5-7:50.5 | v10 | 0 s | not postable | none given |
+
+**Postable@5, with 0 unrated.** eval.py's `evaluate` was given an empty key for these two recordings, because eval.py's
+command line stops when a video has no key file.
+
+| Recording | `--spread v9` | `--spread v10` | 5-min blocks, v9 → v10 |
+|---|---|---|---|
+| 25:04 | 4/5 | 4/5 | 1 → 4 |
+| fresh | 2/5 (by replay: the same 5 clips) | 2/5 | 2 → 2 |
+| test1, test2, heldout1, heldout2 | 5/5, 3/5, 3/5, 2/5 | 5/5, 3/5, 3/5, 2/5 | 2, 2, 2, 1 unchanged |
+
+**So v10 spreads the clips without changing Postable@5 on any of the 6 recordings. It does not make more clips postable.**
+On the 25:04 video it takes out 1:51.5 and 4:09.0 (postable, stars throughout) and 4:49.0 (not postable), and puts in 18:16.4
+and 20:02.0 (postable, no stars) and 14:17.0 (not postable, no stars).
+
+### The owner's second rule
+
+In the owner's words: "make v10 default only if at least 2 of the 25:04 clips that v10 adds (not picked by v9) are postable."
+
+v10 adds 3 clips: 14:17.0-14:32.0 (not postable), 18:16.4-18:31.4 (postable), 20:02.0-20:17.0 (postable). **2 of 3 are
+postable, so the rule is met and `--spread v10` is the default from commit `3471dda`.**
+
+What this decision is, plainly:
+- **It is a second deviation, and it overrides the first rule's FAIL.** The first rule's recall line still reads FAIL:
+  test1 recall is 4/5 under the new default, and the shootout range 2:10-2:57 gets no clip. The owner did not change that
+  result. The owner's second rule decides the default instead.
+- **When the rule was set.** In the owner's words: "I wrote the decision rule in a separate Claude chat on 4 Nov, before
+  rating the clips; the repo has no timestamp that proves this."
+- **The margin is the minimum.** 2 of 3, on one recording. One rating the other way would have kept v9.
+- **The ratings aren't fully blind.** The page showed no score, rank or rule, but the owner may have watched the 5 old-rule
+  clips on 2026-11-04 and can recognise them by their times.
+
+### After the flip
+
+- **The flip does what it should.** At `3471dda`, test1 with no flag (`20261104-160045`) has the same picks and a
+  byte-identical `timeline.csv` as the earlier v10 run `20261104-152836`. With `--spread v9` (`20261104-160201`), the same
+  against the earlier v9 run `20261104-152706`. Pre-flight: 10.8 GB RAM free, 481 MiB of VRAM in use, Ollama not running.
+- **Older results need `--spread v9`.** The results of v3 to v9 in this file were made with that rule.
+- **`--vlm` now gets v10's candidates.** That has not been run with a model. The held-out test (v8) stays a result of the
+  old rule.
+- **`selftest.py` PASS, by default and with `--spread v9`.** `hudtest.py`, `evaltest.py`, `vlmtest.py`, `calibtest.py` and
+  `spreadtest.py` PASS.

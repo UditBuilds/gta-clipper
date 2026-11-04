@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/4c7f8082-6576-4eb1-9233-058405f441fa
 
 ![Demo: 6 s of a clip made by gta-clipper](docs/demo.gif)
 
-*Default output of current main on test1: clip 4 of 5, 2:16.0-2:46.0 of the source, rated postable. The GIF shows 6 s
+*Output on test1 with `--spread v9`, the default before v10: clip 4 of 5, 2:16.0-2:46.0 of the source, rated postable. The GIF shows 6 s
 of it (2:32.0-2:38.0, around the clip's peak at 2:35.0).*
 
 ## Result
@@ -91,13 +91,19 @@ Details: [the Postable@5 rules (PR 5)](eval/BASELINE.md#pr-5-eval-fixes-and-post
     2:16.0-2:46.0, which I rated postable. That is the demo clip above. Dev only, and not blind.
 - **GPU decoding (v3).** Decoding on the GPU (NVDEC) cut a whole run from 232.20 s to 81.24 s on test1 and from
   297.20 s to 87.34 s on test2. `timeline.csv` was byte-identical to the CPU run's on both videos.
+- **Spreading the clips across the video (v10), a trade-off.** A short stretch with no minimap no longer ends an action sequence, so
+  a chase can't use one to get past the limit of 2 clips per sequence. On a 25:04 recording the clips went from one
+  5-minute block to four. Postable@5 is unchanged on all 6 recordings (the 4 above and 2 with no answer key). test1's
+  strict hits and recall both fell from 5/5 to 4/5. I made it the default because I rated 2 of the 3 clips it adds on
+  the 25:04 recording postable.
 
 Details: [v1](eval/BASELINE.md#v1-baseline-2026-10-22),
 [v2](eval/BASELINE.md#v2-hud-aware-scoring-compared-with-the-baseline-2026-10-22),
 [v3](eval/BASELINE.md#v3-strict-eval-owner-ratings-spread-phone-gpu-decoding-compared-2026-10-22),
 [the lamp-post crash](eval/BASELINE.md#the-lamp-post-crash-test2-19075-19095),
 [v4 at 15 s](eval/BASELINE.md#v4-with-a-15-s-minimum-2026-10-23),
-[v3 and v4 rescored (PR 5)](eval/BASELINE.md#results-dev-set).
+[v3 and v4 rescored (PR 5)](eval/BASELINE.md#results-dev-set),
+[v10](eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
 
 ## What failed
 
