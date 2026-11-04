@@ -1213,8 +1213,8 @@ What this decision is, plainly:
 - **It is a second deviation, and it overrides the first rule's FAIL.** The first rule's recall line still reads FAIL:
   test1 recall is 4/5 under the new default, and the shootout range 2:10-2:57 gets no clip. The owner did not change that
   result. The owner's second rule decides the default instead.
-- **When the rule was set.** The owner calls it pre-set. It first reached this repo and the chat in the same message as the
-  ratings, so nothing in the repo shows that it was fixed before the ratings were given.
+- **When the rule was set.** In the owner's words: "I wrote the decision rule in a separate Claude chat on 4 Nov, before
+  rating the clips; the repo has no timestamp that proves this."
 - **The margin is the minimum.** 2 of 3, on one recording. One rating the other way would have kept v9.
 - **The ratings aren't fully blind.** The page showed no score, rank or rule, but the owner may have watched the 5 old-rule
   clips on 2026-11-04 and can recognise them by their times.
