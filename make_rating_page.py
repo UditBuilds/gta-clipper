@@ -1,4 +1,4 @@
-"""Build a blind rating page for one gta-clipper run: the clips only, nothing about how they were picked.
+"""Build a blind rating page for gta-clipper runs: the clips only, nothing about how they were picked.
 
 For the held-out test (eval/HELDOUT_PLAN.md step 3) the owner rates every clip of a `--count 10` run before any model
 verdict exists. make_review.py's page can't be used for that: it shows each clip's scores, peak and "why picked", lists
@@ -11,7 +11,11 @@ the clips best first, and its player prints the file names (clip_01_...), which 
 The clip files are copied next to the page under neutral names (<out stem>_clips/A.mp4 ...). No score, peak, rank,
 tool name, run folder, config or model verdict is written to the page or the folder.
 
-Usage:  python make_rating_page.py <run_dir> <out.html>
+With several runs, the same clip in two runs comes once and the clips are mixed in source-time order per video, so the
+page doesn't show which run a clip came from. --unrated-only leaves out clips that already have a rating by eval.py's
+rule.
+
+Usage:  python make_rating_page.py [--unrated-only] <run_dir> [<run_dir> ...] <out.html>
   e.g.  python make_rating_page.py C:\\AI\\gta\\output\\heldout1\\<run> C:\\AI\\gta\\review\\heldout1_rating.html
 """
 
@@ -23,28 +27,54 @@ import string
 import sys
 from pathlib import Path
 
+import eval as ev
+
 
 def hms(seconds):
     m, s = divmod(seconds, 60)
     return f"{int(m)}:{s:04.1f}"
 
 
+def clips_to_rate(runs, unrated_only, load_ratings=ev.load_ratings):
+    """[(video, clip, run_dir)] of runs = [(run_dir, scores)], by video name, then source time (not rank).
+
+    A clip with the same start and end as one already kept (eval.py's same_clip) is dropped, per video. With
+    unrated_only, so is a clip eval.py finds a rating for.
+    """
+    videos = {}
+    for run_dir, scores in runs:
+        video = Path(scores["input"]).stem
+        rated = load_ratings(video) if unrated_only else []
+        kept = videos.setdefault(video, [])
+        for c in scores["clips"]:
+            if not any(ev.same_clip(c, k) for k, _ in kept) and not ev.rating_for(c, rated)[0]:
+                kept.append((c, run_dir))
+    return [(video, c, run_dir) for video in sorted(videos)
+            for c, run_dir in sorted(videos[video], key=lambda k: k[0]["start_s"])]
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Blind rating page: a run's clips with no scores, ranks or verdicts.")
-    ap.add_argument("run_dir", type=Path)
+    ap = argparse.ArgumentParser(description="Blind rating page: runs' clips with no scores, ranks or verdicts.")
+    ap.add_argument("run_dirs", type=Path, nargs="+", metavar="run_dir")
     ap.add_argument("out", type=Path)
+    ap.add_argument("--unrated-only", action="store_true", help="leave out clips that already have a rating (eval.py's rule)")
     args = ap.parse_args()
-    scores = json.loads((args.run_dir / "scores.json").read_text(encoding="utf-8"))
-    video = Path(scores["input"]).stem
-    clips = sorted(scores["clips"], key=lambda c: c["start_s"])  # source-time order, not rank
+    runs = [(d, json.loads((d / "scores.json").read_text(encoding="utf-8"))) for d in args.run_dirs]
+    clips = clips_to_rate(runs, args.unrated_only)
+    if not clips:
+        sys.exit("Nothing to rate: every clip of these runs already has a rating. No page written.")
     if len(clips) > len(string.ascii_uppercase):
         sys.exit("ERROR: more than 26 clips")
+    names = sorted({video for video, _, _ in clips})
     clip_dir = args.out.parent / (args.out.stem + "_clips")
     clip_dir.mkdir(parents=True, exist_ok=True)
-    cards = []
-    for letter, c in zip(string.ascii_uppercase, clips):
-        shutil.copyfile(args.run_dir / c["file"], clip_dir / f"{letter}.mp4")
+    cards, heading = [], None
+    for letter, (video, c, run_dir) in zip(string.ascii_uppercase, clips):
+        shutil.copyfile(run_dir / c["file"], clip_dir / f"{letter}.mp4")
         span = f"{hms(c['start_s'])}-{hms(c['end_s'])}"
+        if len(names) > 1 and video != heading:
+            heading = video
+            cards.append(f'<h2 class="group">Recording: {html.escape(video)}</h2>')
         cards.append(
             f'<article class="clip" data-id="{letter}" data-label="{html.escape(f"{video} {letter} {span}")}">'
             f'<h2>{letter} <span class="meta">{span} in the source, {c["end_s"] - c["start_s"]:.1f} s</span></h2>'
@@ -52,7 +82,8 @@ def main():
             f'<div class="answer"><label><input type="radio" name="{letter}" value="yes"> postable</label> '
             f'<label><input type="radio" name="{letter}" value="no"> not postable</label> '
             f'<input type="text" class="cmt" placeholder="reason"></div></article>')
-    page = (TEMPLATE.replace("{VIDEO}", html.escape(video)).replace("{N}", str(len(clips)))
+    title = names[0] if len(names) == 1 else f"{len(names)} recordings"
+    page = (TEMPLATE.replace("{VIDEO}", html.escape(title)).replace("{N}", str(len(clips)))
             .replace("{CARDS}", "".join(cards)))
     args.out.write_text(page, encoding="utf-8")
     print(f"{args.out}: {len(clips)} clips, copied to {clip_dir}")
@@ -69,6 +100,8 @@ header, main, footer { max-width:1500px; margin:0 auto; padding:16px; }
 h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 6px; }
 .meta { color:var(--muted); font-weight:400; }
 main { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:12px; }
+.group { grid-column:1 / -1; margin:10px 0 0; color:var(--accent); }
+.steps { margin:6px 0 0; padding-left:22px; color:var(--muted); } .steps b { color:var(--text); }
 .clip { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; }
 .clip video { width:100%; aspect-ratio:9/16; max-height:70vh; background:#000; display:block; border-radius:4px; }
 .answer { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:8px; }
@@ -82,12 +115,18 @@ main { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr))
 </style></head><body>
 <header>
 <h1>{VIDEO}: rate {N} clips</h1>
-<p class="meta">The clips are in source-time order. Watch each one, mark it postable or not and give a reason, then press
-<b>Copy ratings</b> at the bottom and paste the text into the chat. Your marks are kept in this browser only.</p>
+<ol class="steps">
+<li><b>Play a clip</b> and watch it to the end. The clips are in the order they happen in the recording, not best first.
+Nothing here says how they were picked, so judge only what you see.</li>
+<li><b>Tick "postable"</b> if you would post this clip as a Short, <b>"not postable"</b> if you wouldn't.</li>
+<li><b>Type a short reason</b> if you can: what made it good or bad. You can leave it empty.</li>
+<li>When all {N} are ticked, press <b>Copy ratings</b> at the bottom and paste the text into the chat.</li>
+</ol>
+<p class="meta">Your ticks are saved in this browser, so you can close the page and come back to it.</p>
 </header>
 <main>{CARDS}</main>
 <footer>
-<div class="bar"><button id="copy">Copy ratings</button><span id="copied" class="meta"></span></div>
+<div class="bar"><button id="copy">Copy ratings</button><span id="left" class="meta"></span><span id="copied" class="meta"></span></div>
 <textarea id="out" readonly></textarea>
 </footer>
 <script>
@@ -106,6 +145,8 @@ function render() {
   });
   save(s);
   document.getElementById("out").value = `Ratings: ${n} of ${cards.length} rated\\n` + lines.join("\\n");
+  const left = cards.length - n;
+  document.getElementById("left").textContent = left ? `${left} still to tick.` : "All ticked: press Copy ratings.";
 }
 const saved = load();
 cards.forEach(c => { const x = saved[c.dataset.id]; if (x) {

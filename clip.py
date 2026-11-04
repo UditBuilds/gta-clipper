@@ -1,4 +1,4 @@
-"""Gameplay auto-clipper v7.
+"""Gameplay auto-clipper v10.
 
 Finds the loudest, busiest moments in a gameplay recording and cuts them into
 vertical 1080x1920 Shorts clips. Python standard library + ffmpeg only.
@@ -17,11 +17,14 @@ v7 gives the veto the wanted stars measured above, two ways (both off by default
 boring_driving_or_walking veto when the clip has at least vlm.STAR_RULE_MIN_S of stars.
 v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile, profiles/<name>.json, chosen with
 --profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
+v10 adds --spread v10 (off by default; --spread v9 is the old rule): a stretch with no minimap no longer ends an action
+sequence, so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
 Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-gap S] [--crop] [--no-hud]
-                       [--profile NAME] [--cpu-decode] [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
+                       [--profile NAME] [--spread v9|v10] [--cpu-decode]
+                       [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
                        [--vlm-hint none|stars] [--vlm-rule none|stars]
 """
 
@@ -74,6 +77,8 @@ CHANNELS = "rgb"         # names of the colour channels in a profile's bar rules
 # --- Spreading picks (v3). Chosen before looking at any eval result; not tuned to the test videos. ---
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
 MAX_PER_SEQ = 2          # most clips taken from one action sequence
+SPREADS = ("v9", "v10")  # --spread: what ends an action sequence, see action_sequences()
+DEFAULT_SPREAD = "v9"
 
 # --- Clip edges (v4). Set by the owner before any v4 run; not tuned to the test videos. The shortest clip
 # (--min-len, 15 s) is the owner's judgement of a postable length: the 8 s clips were "too short". ---
@@ -598,18 +603,20 @@ def gaussian_smooth(values, sigma_steps):
     return out
 
 
-def action_sequences(combined, excluded):
+def action_sequences(combined, excluded, spread=DEFAULT_SPREAD):
     """Sequence number per step (None for quiet and excluded steps), and each sequence's (start_s, end_s).
 
     A step is active when its combined score reaches MIN_PEAK_SCORE, the score a clip needs somewhere in it.
-    A sequence is a run of active steps; it ends at an excluded stretch or at SEQ_QUIET seconds without an
-    active step. Shorter lulls stay inside the sequence.
+    A sequence is a run of active steps; it ends at SEQ_QUIET seconds without an active step. Shorter lulls stay
+    inside the sequence. Spread v9 also ends it at any excluded stretch. Spread v10 doesn't: excluded steps just count
+    as quiet, so a short pause map leaves a chase in one sequence and a stretch of SEQ_QUIET or more still ends it.
     """
     seq, spans, last = [None] * len(combined), [], None
     gap = round(SEQ_QUIET / BUCKET)
     for i, (c, ex) in enumerate(zip(combined, excluded)):
         if ex:
-            last = None
+            if spread == "v9":
+                last = None
             continue
         if c < MIN_PEAK_SCORE:
             continue
@@ -952,6 +959,10 @@ def main():
     ap.add_argument("--profile", default=DEFAULT_PROFILE,
                     help=f"v9: HUD profile, profiles/NAME.json (default {DEFAULT_PROFILE}: GTA V on PS5; "
                          "calibrate.py makes new ones)")
+    ap.add_argument("--spread", choices=SPREADS, default=DEFAULT_SPREAD,
+                    help=f"what ends an action sequence, which gives at most {MAX_PER_SEQ} clips (default "
+                         f"{DEFAULT_SPREAD}). v9: {SEQ_QUIET:g} s of quiet or any stretch with no minimap. v10: only "
+                         f"{SEQ_QUIET:g} s of quiet, so a short pause map doesn't split a chase")
     ap.add_argument("--cpu-decode", action="store_true",
                     help="decode on the CPU even if the GPU can (the scores are the same; for comparisons)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"output root (default {DEFAULT_OUT})")
@@ -1084,7 +1095,7 @@ def main():
     # Excluded steps score 0, so they can't pull a smoothed peak towards them either.
     combined = [0.0 if excluded[i] else wa * za[i] + wv * zv[i] + boost[i] for i in range(n)]
     smooth = gaussian_smooth(combined, SMOOTH_SIGMA / BUCKET)
-    seq, seq_spans = action_sequences(combined, excluded)
+    seq, seq_spans = action_sequences(combined, excluded, args.spread)
     # v4 picks on the same score, except that phone steps keep theirs (only walls score 0), so action during a
     # call can be found and the phone cut out of the clip afterwards. combined and smoothed stay as in v3.
     pick = [0.0 if walls[i] else wa * za[i] + wv * zv[i] + boost[i] for i in range(n)]
@@ -1094,7 +1105,8 @@ def main():
            "combined": combined[i], "smoothed": smooth[i], "star_score": star_sc[i], "stars": stars[i],
            "minimap": seen[i], "excluded": excluded[i], "star_boost": boost[i], "sequence": seq[i],
            "phone": phone[i]} for i in range(n)]
-    print(f"Action sequences: {len(seq_spans)} (split at {SEQ_QUIET:g} s quiet gaps and excluded stretches); "
+    print(f"Action sequences: {len(seq_spans)} (spread {args.spread}: split at {SEQ_QUIET:g} s quiet gaps"
+          f"{' and excluded stretches' if args.spread == 'v9' else ', excluded stretches count as quiet'}); "
           f"at most {MAX_PER_SEQ} clips each")
 
     # v6: with --vlm the picker makes 2 x --count candidates. The greedy picker only uses the count to stop, so
@@ -1161,14 +1173,14 @@ def main():
 
     total = time.perf_counter() - t_start
     scores = {
-        "tool": "gta-clipper v9",
+        "tool": "gta-clipper v10",
         "created": datetime.now().isoformat(timespec="seconds"),
         "input": str(args.video.resolve()),
         "input_info": info,
         "settings": {"count": args.count, "min_len": args.min_len, "max_len": args.max_len,
                      "min_gap": args.min_gap, "crop": args.crop, "no_hud": args.no_hud, "encoder": encoder,
                      "decoder": decoder, "decoder_reason": why, "vlm": args.vlm, "vlm_hint": args.vlm_hint,
-                     "vlm_rule": args.vlm_rule, "profile": prof.name},
+                     "vlm_rule": args.vlm_rule, "profile": prof.name, "spread": args.spread},
         "hud": {"state": hud_state, "reference_size": list(prof.frame), "samples_per_s": HUD_FPS,
                 "star_box": prof.star_box, "star_tips_x": prof.star_tips_x, "star_tip_y": prof.star_tip_y,
                 "star_radius": prof.star_radius, "star_inner": prof.star_inner, "star_min_score": prof.star_min_score,

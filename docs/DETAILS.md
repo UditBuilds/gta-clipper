@@ -116,6 +116,9 @@ Only reasoned about, or not tested:
    chosen before looking at any eval result: 20 s was then the default shortest clip, so a lull that long held
    nothing worth a clip. v4 keeps them unchanged although the shortest clip is now 15 s. Phone stretches still end
    a sequence, as in v3.
+   **`--spread v10` (off by default):** an excluded stretch no longer ends a sequence. Its steps count as quiet, so a
+   stretch of 20 s or more still ends one, but a short pause map inside a chase doesn't. The cap and the 20 s don't
+   change. For what it did and what it cost, see [BASELINE v10](../eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
 
@@ -146,6 +149,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--min-gap` | 10 | seconds between the end of one clip and the start of the next |
 | `--crop` | off | plain centre crop instead of the full frame over a blurred background (cuts off the minimap) |
 | `--no-hud` | off | ignore the GTA V HUD: no exclusions and no star boost, so it scores like v1 |
+| `--spread` | `v9` | what ends an action sequence: `v9` 20 s of quiet or any excluded stretch; `v10` only 20 s of quiet, excluded stretches counting as quiet |
 | `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
 | `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
@@ -226,6 +230,16 @@ the peak, "why picked" and the rank (also in the clip file names), so it can't b
 
 The clip files are copied next to the page as `A.mp4`, `B.mp4` ... No score, peak, rank, tool name, run folder, config
 or model verdict is written to the page or the folder. Marks are kept in the browser only.
+
+It takes several runs, even of different recordings, and `--unrated-only` leaves out clips that already have a rating by
+eval.py's rule (v10):
+
+```powershell
+.\.venv\Scripts\python.exe make_rating_page.py --unrated-only <run> <run> ... C:\AI\gta\review\spread_rating.html
+```
+
+The same clip in two runs comes once, and the clips are mixed in source-time order per recording, so the page doesn't show
+which run a clip came from.
 
 ## Stage 2: vision-model veto (v6, optional)
 
@@ -369,6 +383,12 @@ footage or run folder is needed:
 
 ```powershell
 .\.venv\Scripts\python.exe evaltest.py
+```
+
+`--spread` and the rating page's choice of clips are checked on made-up scores and clips, also with no footage:
+
+```powershell
+.\.venv\Scripts\python.exe spreadtest.py
 ```
 
 The v6 veto and v7's measured stars are checked on made-up model answers, with no Ollama, footage or ffmpeg:
@@ -591,7 +611,7 @@ Every pick of these runs has an owner rating.
 - **A pause map splits a sequence.** Any excluded stretch ends an action sequence, even a 2 s pause map in the
   middle of a chase. test1's two pause maps cut its police stretch into three sequences. So that stretch still gives
   4 of the 5 picks (2 + 0 + 2), even with the cap of 2 per sequence. The fifth pick now goes to the yacht chase,
-  which v2 missed.
+  which v2 missed. `--spread v10` removes this; it is off by default (see step 6 of the scoring).
 - **In a wanted-star stretch the whole stretch is "action" (v4).** The +3.0 boost makes every step with stars
   active, so the action runs as long as the stars do: 54-76 s in test1. Those clips are the 30 s centred on the
   peak, so their edges come from the 30 s cap, the 10 s gap to another clip or a wall, not from where something
