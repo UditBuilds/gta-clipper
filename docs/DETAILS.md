@@ -116,9 +116,10 @@ Only reasoned about, or not tested:
    chosen before looking at any eval result: 20 s was then the default shortest clip, so a lull that long held
    nothing worth a clip. v4 keeps them unchanged although the shortest clip is now 15 s. Phone stretches still end
    a sequence, as in v3.
-   **`--spread v10` (off by default):** an excluded stretch no longer ends a sequence. Its steps count as quiet, so a
-   stretch of 20 s or more still ends one, but a short pause map inside a chase doesn't. The cap and the 20 s don't
-   change. For what it did and what it cost, see [BASELINE v10](../eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
+   **`--spread v10` (off by default):** an excluded stretch, phone stretches included, no longer ends a sequence. Its
+   steps count as quiet, so a stretch of 20 s or more still ends one, but a short pause map inside a chase doesn't. The
+   cap and the 20 s don't change. It is off because it failed its acceptance rule on test1 recall. For what it did and
+   what it cost, see [BASELINE v10](../eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
 
@@ -235,7 +236,7 @@ It takes several runs, even of different recordings, and `--unrated-only` leaves
 eval.py's rule (v10):
 
 ```powershell
-.\.venv\Scripts\python.exe make_rating_page.py --unrated-only <run> <run> ... C:\AI\gta\review\spread_rating.html
+.\.venv\Scripts\python.exe make_rating_page.py --unrated-only <run> <run> ... C:\AI\gta\review\rating.html
 ```
 
 The same clip in two runs comes once, and the clips are mixed in source-time order per recording, so the page doesn't show
