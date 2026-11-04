@@ -159,6 +159,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
 | `--vlm-hint` | `none` | `stars`: the prompt tells the model each candidate's measured seconds of wanted stars ([v7](#v7-measured-wanted-stars-optional)) |
 | `--vlm-rule` | `none` | `stars`: a `boring_driving_or_walking` veto is cancelled when the clip has at least 5.0 s of measured stars ([v7](#v7-measured-wanted-stars-optional)) |
+| `--burn-hooks` | off | a run folder instead of a video: puts the hooks typed in its `hooks.txt` on its clips, no detection ([Hook banner and voice](#hook-banner-and-voice)) |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
 
@@ -199,6 +200,52 @@ Each run gets its own folder, so earlier runs are never overwritten:
   action span covers the step; the span can reach past the clip where the phone was cut or the 30 s cap applied).
   In `scores.json`, the `edges` block has the v4 settings, and each clip has its `action_span_s`, the `window_s`
   before the phone was cut out, and `phone_cut_s` (seconds removed).
+- `hooks.txt` has one line per clip, for typing a hook ([Hook banner and voice](#hook-banner-and-voice)).
+
+## Hook banner and voice
+
+A separate step puts text on finished clips. It runs no detection, picks nothing and only reads the original clips.
+
+1. Open the run folder's `hooks.txt` and type each hook after `hook:`. An empty hook means no banner.
+   `clip_01 | 3:01.8–3:31.8 | stars: yes | hook: BHAI POLICE NE GHER LIYA!`
+2. Optional: put a voice file in the run folder, named `clip_01_vo.m4a` or `clip_01_vo.wav`.
+3. Run `.\.venv\Scripts\python.exe clip.py --burn-hooks "<run folder>"`. It writes `clip_01_final.mp4` and so on. Running
+   it again replaces only the `_final` files. A folder with no `hooks.txt` (a run made before this step existed) gets
+   one, and the command stops so you can fill it in.
+
+`stars: yes` means the clip has measured wanted stars (`stars_s` above 0 in `scores.json`). `hooks.py` holds the code and
+`hooktest.py` checks it.
+
+**Banner.** White Impact with a black outline, written to `clip_NN_hook.ass` and burned with ffmpeg's `ass` filter. It is
+in full from the clip's first frame and ends at 3.0 s with a 0.2 s fade out.
+
+**Position.** Every pixel stays inside x 60-959, y 380-655. That is the Shorts safe zone (top 380, bottom 380, right 120
+and left 60 px are dead zones), and in the default layout it is the blurred band above the game picture, which is
+1080x608 at rows 656-1263. The text is centred on x 510, not 540, because the left and right dead zones differ. A `--crop`
+clip has no band, so the same box lies over the game. For a recording that isn't 16:9 the box can overlap the game too.
+
+**Size.** The code draws the text and reads the pixel box with ffmpeg's `bbox` filter, outline included, and takes the
+largest size from 40 to 140 that stays inside the box. It tries 1 line and 2 lines, and the bigger size wins (1 line on a
+tie). The 2 lines split where they are closest in length, whatever the words mean. A hook that doesn't fit at size 40
+stops the command before anything is encoded, and the error names the clip.
+
+**Text.** Emoji are removed, because libass draws them as one-colour outlines and some come out wrong (a flag as two
+letters). Hindi and the Rupee sign stay, drawn in fallback fonts. A hook that is only emoji gets no banner. `{`, `}` and
+`\` are escaped, so they draw as typed. Hook text is never printed, because an emoji would crash Python on piped output.
+
+**Voice.** The voice is normalised (`loudnorm`, -14 LUFS, true peak -3 dB). The game drops to 25% only while the voice
+sounds, with a 0.3 s ramp on each side, and is at full volume before and after. Silence at the two ends of the voice file
+doesn't count, a pause between words does. A voice longer than the clip is cut, with a warning. If both file types are
+there, `.m4a` is used, with a warning.
+
+**What gets re-encoded.** Only what changes:
+
+| Hook | Voice | Picture | Audio |
+|---|---|---|---|
+| empty | none | the file is copied byte for byte | same |
+| typed | none | re-encoded (same settings as the clips) | stream copy |
+| empty | yes | stream copy | mixed, AAC 192k |
+| typed | yes | re-encoded | mixed, AAC 192k |
 
 ## Review sheet
 
