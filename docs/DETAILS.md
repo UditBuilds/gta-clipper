@@ -116,10 +116,13 @@ Only reasoned about, or not tested:
    chosen before looking at any eval result: 20 s was then the default shortest clip, so a lull that long held
    nothing worth a clip. v4 keeps them unchanged although the shortest clip is now 15 s. Phone stretches still end
    a sequence, as in v3.
-   **`--spread v10` (off by default):** an excluded stretch, phone stretches included, no longer ends a sequence. Its
-   steps count as quiet, so a stretch of 20 s or more still ends one, but a short pause map inside a chase doesn't. The
-   cap and the 20 s don't change. It is off because it failed its acceptance rule on test1 recall. For what it did and
-   what it cost, see [BASELINE v10](../eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
+   **v10 (the default; `--spread v9` is the rule above):** an excluded stretch, phone stretches included, no longer ends
+   a sequence. Its steps count as quiet, so a stretch of 20 s or more still ends one, but a short pause map inside a
+   chase doesn't. The cap and the 20 s don't change. It lowers test1's recall from 5/5 to 4/5; the owner made it the
+   default anyway, see [BASELINE v10](../eval/BASELINE.md#v10-spreading-picks-across-the-video-2026-11-04).
+   Every result in `eval/BASELINE.md` before v10, and the clip examples elsewhere in this file, come from the v9 rule;
+   `--spread v9` reproduces them. `--vlm` takes its candidates from the same picker, so they follow this rule too, but
+   v10 has not been run with a model.
 7. A clip must contain at least one step scoring 2.0 or more. Quiet stretches are never picked,
    so you can get fewer clips than `--count`. The run prints a NOTE when that happens.
 
@@ -150,7 +153,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--min-gap` | 10 | seconds between the end of one clip and the start of the next |
 | `--crop` | off | plain centre crop instead of the full frame over a blurred background (cuts off the minimap) |
 | `--no-hud` | off | ignore the GTA V HUD: no exclusions and no star boost, so it scores like v1 |
-| `--spread` | `v9` | what ends an action sequence: `v9` 20 s of quiet or any excluded stretch; `v10` only 20 s of quiet, excluded stretches counting as quiet |
+| `--spread` | `v10` | what ends an action sequence: `v10` only 20 s of quiet, excluded stretches counting as quiet; `v9` (the rule before v10) 20 s of quiet or any excluded stretch |
 | `--cpu-decode` | off | decode on the CPU even when the GPU could; the scores are the same (for comparisons) |
 | `--out` | `C:\AI\gta\output` | output root |
 | `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
@@ -609,10 +612,12 @@ Every pick of these runs has an owner rating.
   - Any step with stars outranks almost everything without them.
   - 4 of the 8 action ranges in the answer keys never show stars: the yacht chase, the house pull, the gang chase,
     and the crash and car switch. They compete on loudness and picture change alone.
-- **A pause map splits a sequence.** Any excluded stretch ends an action sequence, even a 2 s pause map in the
+- **With `--spread v9`, a pause map splits a sequence.** Any excluded stretch ends an action sequence, even a 2 s pause map in the
   middle of a chase. test1's two pause maps cut its police stretch into three sequences. So that stretch still gives
   4 of the 5 picks (2 + 0 + 2), even with the cap of 2 per sequence. The fifth pick now goes to the yacht chase,
-  which v2 missed. `--spread v10` removes this; it is off by default (see step 6 of the scoring).
+  which v2 missed. `--spread v10`, the default, removes this.
+- **`--spread v10` can miss a range inside a long chase.** The cap of 2 now holds across short pause maps, so test1's police
+  stretch gives 2 clips, and its shootout range 2:10-2:57 gets none. test1's recall is 4/5 with v10 and 5/5 with v9.
 - **In a wanted-star stretch the whole stretch is "action" (v4).** The +3.0 boost makes every step with stars
   active, so the action runs as long as the stars do: 54-76 s in test1. Those clips are the 30 s centred on the
   peak, so their edges come from the 30 s cap, the 10 s gap to another clip or a wall, not from where something

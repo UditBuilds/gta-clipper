@@ -17,8 +17,8 @@ v7 gives the veto the wanted stars measured above, two ways (both off by default
 boring_driving_or_walking veto when the clip has at least vlm.STAR_RULE_MIN_S of stars.
 v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile, profiles/<name>.json, chosen with
 --profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
-v10 adds --spread v10 (off by default; --spread v9 is the old rule): a stretch with no minimap no longer ends an action
-sequence, so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
+v10 (--spread, default v10; --spread v9 is the old rule): a stretch with no minimap no longer ends an action sequence,
+so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
@@ -78,7 +78,7 @@ CHANNELS = "rgb"         # names of the colour channels in a profile's bar rules
 SEQ_QUIET = 20.0         # seconds with no step reaching MIN_PEAK_SCORE that end an action sequence
 MAX_PER_SEQ = 2          # most clips taken from one action sequence
 SPREADS = ("v9", "v10")  # --spread: what ends an action sequence, see action_sequences()
-DEFAULT_SPREAD = "v9"
+DEFAULT_SPREAD = "v10"   # the owner's choice, eval/BASELINE.md v10; it lowers test1's recall, see there
 
 # --- Clip edges (v4). Set by the owner before any v4 run; not tuned to the test videos. The shortest clip
 # (--min-len, 15 s) is the owner's judgement of a postable length: the 8 s clips were "too short". ---
