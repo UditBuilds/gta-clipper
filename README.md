@@ -91,7 +91,7 @@ Details: [the Postable@5 rules (PR 5)](eval/BASELINE.md#pr-5-eval-fixes-and-post
     2:16.0-2:46.0, which I rated postable. That is the demo clip above. Dev only, and not blind.
 - **GPU decoding (v3).** Decoding on the GPU (NVDEC) cut a whole run from 232.20 s to 81.24 s on test1 and from
   297.20 s to 87.34 s on test2. `timeline.csv` was byte-identical to the CPU run's on both videos.
-- **Spreading the clips across the video (v10).** A short stretch with no minimap no longer ends an action sequence, so
+- **Spreading the clips across the video (v10), a trade-off.** A short stretch with no minimap no longer ends an action sequence, so
   a chase can't use one to get past the limit of 2 clips per sequence. On a 25:04 recording the clips went from one
   5-minute block to four. Postable@5 is unchanged on all 6 recordings (the 4 above and 2 with no answer key). test1's
   strict hits and recall both fell from 5/5 to 4/5. I made it the default because I rated 2 of the 3 clips it adds on
