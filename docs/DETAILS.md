@@ -159,6 +159,7 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--vlm` | `off` | `qwen3-vl:4b-instruct` or `qwen3-vl:8b-instruct`: a local vision model may veto candidates ([Stage 2](#stage-2-vision-model-veto-v6-optional)) |
 | `--vlm-hint` | `none` | `stars`: the prompt tells the model each candidate's measured seconds of wanted stars ([v7](#v7-measured-wanted-stars-optional)) |
 | `--vlm-rule` | `none` | `stars`: a `boring_driving_or_walking` veto is cancelled when the clip has at least 5.0 s of measured stars ([v7](#v7-measured-wanted-stars-optional)) |
+| `--burn-hooks` | off | a run folder instead of a video: puts the hooks typed in its `hooks.txt` on its clips, no detection ([Hook banner and voice](#hook-banner-and-voice)) |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
 
@@ -199,6 +200,30 @@ Each run gets its own folder, so earlier runs are never overwritten:
   action span covers the step; the span can reach past the clip where the phone was cut or the 30 s cap applied).
   In `scores.json`, the `edges` block has the v4 settings, and each clip has its `action_span_s`, the `window_s`
   before the phone was cut out, and `phone_cut_s` (seconds removed).
+- `hooks.txt` has one line per clip, for typing a hook ([Hook banner and voice](#hook-banner-and-voice)).
+
+## Hook banner and voice
+
+A separate step (`hooks.py`, checked by `hooktest.py`) puts text on finished clips. It runs no detection and only reads
+the original clips.
+
+1. Type each hook after `hook:` in the run folder's `hooks.txt`. An empty hook means no banner. `stars: yes` means
+   `stars_s` is above 0 in `scores.json`.
+   `clip_01 | 3:01.8–3:31.8 | stars: yes | hook: BHAI POLICE NE GHER LIYA!`
+2. Optional: add a voice file named `clip_01_vo.m4a` or `clip_01_vo.wav`.
+3. Run `.\.venv\Scripts\python.exe clip.py --burn-hooks "<run folder>"`. It writes `clip_01_final.mp4` and so on, and
+   running it again replaces only those. A folder with no `hooks.txt` gets one, and the command stops so you can fill it in.
+
+- **Banner:** white Impact with a black outline, in full from the first frame, ending at 3.0 s with a 0.2 s fade out. It
+  stays inside x 60-959, y 380-655: the Shorts safe zone and, in the default layout, the blurred band above the game
+  picture (rows 656-1263). A `--crop` clip has no band, so the same box lies over the game.
+- **Size:** the largest from 40 to 140 that fits, measured from the drawn pixels, on 1 line or 2, whichever is bigger. A
+  hook that doesn't fit at 40 stops the command before anything is encoded.
+- **Text:** emoji are removed, because libass draws them as one-colour outlines and some come out wrong. Hindi and the
+  Rupee sign stay. `{`, `}` and `\` draw as typed.
+- **Voice:** normalised to -14 LUFS. The game drops to 25% only while the voice sounds, with a 0.3 s ramp on each side.
+- **Re-encoding:** only what changes. An empty hook with no voice is a byte-for-byte copy, a hook alone copies the audio,
+  and a voice alone copies the picture.
 
 ## Review sheet
 

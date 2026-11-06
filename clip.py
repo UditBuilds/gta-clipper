@@ -19,6 +19,8 @@ v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile,
 --profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
 v10 (--spread, default v10; --spread v9 is the old rule): a stretch with no minimap no longer ends an action sequence,
 so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
+Each run also writes hooks.txt; --burn-hooks puts the hooks typed there on the finished clips (hooks.py). It runs no
+detection and picks nothing.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
@@ -26,6 +28,7 @@ Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-ga
                        [--profile NAME] [--spread v9|v10] [--cpu-decode]
                        [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
                        [--vlm-hint none|stars] [--vlm-rule none|stars]
+        python clip.py --burn-hooks <run folder>
 """
 
 import argparse
@@ -44,6 +47,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import hooks
 import vlm
 
 HERE = Path(__file__).resolve().parent
@@ -944,10 +948,25 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
                           "vlm_unload": round(t_unload, 2)}
 
 
+def burn_hooks(run_dir):
+    """--burn-hooks: everything is in hooks.py; this only finds the tools it shares with a normal run."""
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        fail("ffmpeg/ffprobe not found on PATH (install: winget install Gyan.FFmpeg)")
+    encoder, enc_args = pick_encoder(ffmpeg)
+    try:
+        hooks.burn_run(run_dir, ffmpeg, ffprobe, encoder, enc_args)
+    except hooks.HookError as e:
+        fail(str(e))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Cut the most action-heavy moments of a gameplay video "
                                              "into vertical 1080x1920 clips.")
-    ap.add_argument("video", type=Path)
+    ap.add_argument("video", type=Path, nargs="?")
+    ap.add_argument("--burn-hooks", type=Path, metavar="RUN_FOLDER",
+                    help="put the hooks typed in the folder's hooks.txt on its finished clips, and mix in any "
+                         "clip_NN_vo.m4a or .wav: writes clip_NN_final.mp4, no detection (give no video)")
     ap.add_argument("--count", type=int, default=5, help="clips to make (default 5)")
     ap.add_argument("--min-len", type=float, default=15.0, help="shortest clip, seconds (default 15)")
     ap.add_argument("--max-len", type=float, default=30.0, help="longest clip, seconds (default 30)")
@@ -977,6 +996,13 @@ def main():
                          f"{vlm.STAR_RULE_MIN_S:g} s of measured wanted stars (needs --vlm and the HUD rules)")
     args = ap.parse_args()
 
+    if args.burn_hooks:
+        if args.video:
+            fail("give a video or --burn-hooks, not both")
+        burn_hooks(args.burn_hooks)
+        return
+    if args.video is None:
+        ap.error("the following arguments are required: video")
     if not args.video.is_file():
         fail(f"video not found: {args.video}")
     if args.count < 1 or args.min_len <= 0 or args.min_gap < 0 or args.max_len < args.min_len:
@@ -1219,8 +1245,10 @@ def main():
     if vlm_block:
         scores["vlm"] = vlm_block
     (run_dir / "scores.json").write_text(json.dumps(scores, indent=2), encoding="utf-8")
+    hooks.write_hooks_txt(run_dir, clips)
     print(f"Done in {total:.1f} s (audio {t_audio:.1f}, picture {t_video:.1f} decoded on "
           f"{'GPU' if decoder == 'cuda' else 'CPU'}, encode {t_encode:.1f}). Scores: {run_dir / 'scores.json'}")
+    print(f"Hooks: type them in {run_dir / hooks.HOOKS_FILE}, then run clip.py --burn-hooks \"{run_dir}\"")
 
 
 if __name__ == "__main__":

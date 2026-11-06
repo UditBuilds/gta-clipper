@@ -153,6 +153,7 @@ Ollama is needed only for `--vlm`.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe clip.py C:\path\to\recording.mp4       # 5 clips, 15-30 s each
+.\.venv\Scripts\python.exe clip.py --burn-hooks "<run folder>"    # after typing hooks in its hooks.txt: writes clip_NN_final.mp4
 .\.venv\Scripts\python.exe eval.py C:\AI\gta\output\test1\<run>   # score a run against its answer key
 .\.venv\Scripts\python.exe selftest.py                            # builds a synthetic video and checks the clips
 ```
