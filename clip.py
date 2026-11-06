@@ -19,8 +19,8 @@ v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile,
 --profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
 v10 (--spread, default v10; --spread v9 is the old rule): a stretch with no minimap no longer ends an action sequence,
 so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
-Each run also writes hooks.txt; --burn-hooks puts the hooks typed there on the finished clips (hooks.py). It runs no
-detection and picks nothing.
+Each run also writes hooks.txt; --burn-hooks puts the hooks typed there on the finished clips, with a cold open and a zoom
+where a peak is typed (hooks.py). It runs no detection and picks nothing.
 
 The picture analysis decodes on the GPU (ffmpeg -hwaccel cuda) when a 1-frame test works, else on the CPU.
 
@@ -28,7 +28,8 @@ Usage:  python clip.py <video> [--count N] [--min-len S] [--max-len S] [--min-ga
                        [--profile NAME] [--spread v9|v10] [--cpu-decode]
                        [--vlm off|qwen3-vl:4b-instruct|qwen3-vl:8b-instruct]
                        [--vlm-hint none|stars] [--vlm-rule none|stars]
-        python clip.py --burn-hooks <run folder>
+        python clip.py --burn-hooks <run folder> [--hook-style box|shadow|outline] [--hook-duration S|full]
+                       [--no-cold-open] [--no-zoom]
 """
 
 import argparse
@@ -948,16 +949,30 @@ def veto_step(ffmpeg, video, model, model_info, candidates, count, run_dir, rang
                           "vlm_unload": round(t_unload, 2)}
 
 
-def burn_hooks(run_dir):
+def burn_hooks(args):
     """--burn-hooks: everything is in hooks.py; this only finds the tools it shares with a normal run."""
     ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
         fail("ffmpeg/ffprobe not found on PATH (install: winget install Gyan.FFmpeg)")
     encoder, enc_args = pick_encoder(ffmpeg)
     try:
-        hooks.burn_run(run_dir, ffmpeg, ffprobe, encoder, enc_args)
+        hooks.burn_run(args.burn_hooks, ffmpeg, ffprobe, encoder, enc_args, args.hook_style, args.hook_duration,
+                       not args.no_cold_open, not args.no_zoom)
     except hooks.HookError as e:
         fail(str(e))
+
+
+def hook_duration(value):
+    """--hook-duration: seconds above 0, or "full", which is the whole clip however long it is."""
+    if value.lower() == "full":
+        return math.inf
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = 0.0
+    if not 0 < seconds < math.inf:
+        raise argparse.ArgumentTypeError('give a number of seconds above 0, or "full"')
+    return seconds
 
 
 def main():
@@ -967,6 +982,14 @@ def main():
     ap.add_argument("--burn-hooks", type=Path, metavar="RUN_FOLDER",
                     help="put the hooks typed in the folder's hooks.txt on its finished clips, and mix in any "
                          "clip_NN_vo.m4a or .wav: writes clip_NN_final.mp4, no detection (give no video)")
+    ap.add_argument("--hook-style", choices=tuple(hooks.STYLES), default=hooks.DEFAULT_STYLE,
+                    help=f"--burn-hooks: banner look (default {hooks.DEFAULT_STYLE}). box: white rounded box, black text. "
+                         "shadow: bold white, drop shadow. outline: white Impact, black outline")
+    ap.add_argument("--hook-duration", type=hook_duration, default=hooks.DEFAULT_SECONDS, metavar="SECONDS|full",
+                    help=f"--burn-hooks: how long the banner stays (default {hooks.DEFAULT_SECONDS:g}); full is the whole clip")
+    ap.add_argument("--no-cold-open", action="store_true",
+                    help="--burn-hooks: ignore the peaks typed in hooks.txt for the cold open")
+    ap.add_argument("--no-zoom", action="store_true", help="--burn-hooks: ignore the peaks typed in hooks.txt for the zoom")
     ap.add_argument("--count", type=int, default=5, help="clips to make (default 5)")
     ap.add_argument("--min-len", type=float, default=15.0, help="shortest clip, seconds (default 15)")
     ap.add_argument("--max-len", type=float, default=30.0, help="longest clip, seconds (default 30)")
@@ -999,8 +1022,11 @@ def main():
     if args.burn_hooks:
         if args.video:
             fail("give a video or --burn-hooks, not both")
-        burn_hooks(args.burn_hooks)
+        burn_hooks(args)
         return
+    if (args.hook_style != hooks.DEFAULT_STYLE or args.hook_duration != hooks.DEFAULT_SECONDS or args.no_cold_open
+            or args.no_zoom):
+        fail("--hook-style, --hook-duration, --no-cold-open and --no-zoom only apply with --burn-hooks")
     if args.video is None:
         ap.error("the following arguments are required: video")
     if not args.video.is_file():
