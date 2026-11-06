@@ -158,6 +158,10 @@ python -m venv .venv
 .\.venv\Scripts\python.exe selftest.py                            # builds a synthetic video and checks the clips
 ```
 
+`--burn-hooks` also takes `--hook-style box|shadow|outline` (default `box`) and `--hook-duration SECONDS|full` (default 3).
+For a cold open and a punch-in zoom on a clip, type a peak after its hook, in seconds from the start of that clip:
+`hook: Don't do this | peak: 14.2`. No peak means neither. `--no-cold-open` and `--no-zoom` turn them off.
+
 Each run writes its clips, `scores.json` and `timeline.csv` to `C:\AI\gta\output\<video>\<YYYYMMDD-HHMMSS>\` (`--out`
 changes the root). The test videos are not in the repo. Every flag, the output files, the HUD rules, the vision-model
 stage and the known limits are in [docs/DETAILS.md](docs/DETAILS.md); every result is in
