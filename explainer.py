@@ -475,19 +475,21 @@ def text_width(text):
     return sum(1.7 if c in "MW" else 0.55 if c in "IJ1.,:;'! " else 1.0 for c in text)
 
 
-def fit_lines(texts, max_chars, size):
-    """Where to break the words onto a second line (None: no need), and a size that keeps the widest line on screen."""
+def fit_lines(texts, max_chars, size, keep_together=()):
+    """Where to break the words onto a second line (None: no need), and a size that keeps the widest line on screen.
+    keep_together holds the indexes of words that shouldn't start the second line."""
     break_at = None
     if text_width(" ".join(texts)) > max_chars and len(texts) > 1:
-        break_at = min(range(1, len(texts)),
-                       key=lambda i: max(text_width(" ".join(texts[:i])), text_width(" ".join(texts[i:]))))
+        places = [i for i in range(1, len(texts)) if i not in keep_together] or range(1, len(texts))
+        break_at = min(places, key=lambda i: max(text_width(" ".join(texts[:i])), text_width(" ".join(texts[i:]))))
     pieces = [texts] if break_at is None else [texts[:break_at], texts[break_at:]]
     widest = max(text_width(" ".join(p)) for p in pieces)
     return break_at, size if widest <= max_chars else int(size * max_chars / widest)
 
 
 def caption_text(words):
-    break_at, size = fit_lines([w["text"] for w in words], CAPTION_CHARS, CAPTION_SIZE)
+    inside_a_tag = {i for i in range(1, len(words)) if words[i]["tag"] is not None and words[i]["tag"] == words[i - 1]["tag"]}
+    break_at, size = fit_lines([w["text"] for w in words], CAPTION_CHARS, CAPTION_SIZE, inside_a_tag)
     parts = []
     for i, w in enumerate(words):
         if i:

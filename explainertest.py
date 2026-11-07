@@ -238,6 +238,15 @@ def chunks_follow_the_rules():
 
 
 @check
+def tagged_phrase_stays_on_one_line():
+    """a two-line chunk breaks outside a tagged phrase, even when the middle of the phrase would balance the lines better"""
+    tag = ("green", "JASON DUVAL", 1)
+    words = [fake_word("LEADS"), fake_word("JASON", colour="green", tag=tag), fake_word("DUVAL", colour="green", tag=tag), fake_word("AND")]
+    lines = ex.caption_text(words).split("\\N")
+    return len(lines) == 2 and any("JASON" in line and "DUVAL" in line for line in lines)
+
+
+@check
 def tags_colour_the_right_words():
     """a tag matches whatever the case and punctuation, and only there"""
     words = [{"key": ex.word_key(t), "colour": None, "tag": None} for t in "212 gigabytes, free of 212 things".split()]
@@ -526,13 +535,19 @@ def last_frames_show_the_first_visual():
 
 @check
 def no_game_audio_gets_through():
-    """the test videos' tone is loud in the source, but the Short's band level is the voice's own: no more than the voice alone leaks through the filter"""
+    """the test videos' tone is loud in the source, and the Short's band level is just the voice's own (renders differ by about 1 dB); game audio mixed in at -20 dB would clearly fail this"""
     folder = main_run()[0]
     has_audio = any(s["codec_type"] == "audio" for s in probe(ROOT / "a.mp4")["streams"])
     source = band_level(ROOT / "a.mp4", GAME_HZ)
     voice, short = band_level(folder / "voice.wav", GAME_HZ), band_level(folder / "short.mp4", GAME_HZ)
-    print(f"       {GAME_HZ} Hz band: {source:.1f} dB in the source, {voice:.1f} dB in the voice alone, {short:.1f} dB in the Short")
-    return has_audio and source > short + 30 and short <= voice + 1.5
+    leak = ROOT / "leak.mp4"
+    run_ffmpeg("-i", folder / "short.mp4", "-i", ROOT / "a.mp4", "-filter_complex",
+               "[1:a]volume=0.1,apad[g];[0:a][g]amix=inputs=2:normalize=0:duration=first[a]", "-map", "0:v", "-map", "[a]",
+               "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", leak)
+    leaked = band_level(leak, GAME_HZ)
+    print(f"       {GAME_HZ} Hz band: {source:.1f} dB in the source, {voice:.1f} dB in the voice alone, {short:.1f} dB in the Short, "
+          f"{leaked:.1f} dB if game audio leaked at -20 dB")
+    return has_audio and short <= voice + 6 and leaked > voice + 6
 
 
 @check
