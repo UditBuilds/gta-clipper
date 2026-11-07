@@ -160,6 +160,10 @@ python -m venv .venv          # project-local; nothing to pip install (standard 
 | `--vlm-hint` | `none` | `stars`: the prompt tells the model each candidate's measured seconds of wanted stars ([v7](#v7-measured-wanted-stars-optional)) |
 | `--vlm-rule` | `none` | `stars`: a `boring_driving_or_walking` veto is cancelled when the clip has at least 5.0 s of measured stars ([v7](#v7-measured-wanted-stars-optional)) |
 | `--burn-hooks` | off | a run folder instead of a video: puts the hooks typed in its `hooks.txt` on its clips, no detection ([Hook banner and voice](#hook-banner-and-voice)) |
+| `--hook-style` | `box` | with `--burn-hooks`: `box` is a white rounded box with black text, `shadow` is bold white with a drop shadow, `outline` is white Impact with a black outline |
+| `--hook-duration` | 3 | with `--burn-hooks`: seconds the banner stays, or `full` for the whole clip |
+| `--no-cold-open` | off | with `--burn-hooks`: no cold open, even where a peak is typed |
+| `--no-zoom` | off | with `--burn-hooks`: no zoom, even where a peak is typed |
 
 Encoding uses `h264_nvenc` when a 1-frame test encode succeeds, and `libx264` otherwise.
 
@@ -210,20 +214,35 @@ the original clips.
 1. Type each hook after `hook:` in the run folder's `hooks.txt`. An empty hook means no banner. `stars: yes` means
    `stars_s` is above 0 in `scores.json`.
    `clip_01 | 3:01.8–3:31.8 | stars: yes | hook: BHAI POLICE NE GHER LIYA!`
-2. Optional: add a voice file named `clip_01_vo.m4a` or `clip_01_vo.wav`.
-3. Run `.\.venv\Scripts\python.exe clip.py --burn-hooks "<run folder>"`. It writes `clip_01_final.mp4` and so on, and
+2. Optional: type a peak after the hook, in seconds from the start of that clip (the time a player shows on `clip_01_3m01s.mp4`).
+   `clip_01 | 3:01.8–3:31.8 | stars: yes | hook: Don't do this | peak: 14.2`
+3. Optional: add a voice file named `clip_01_vo.m4a` or `clip_01_vo.wav`.
+4. Run `.\.venv\Scripts\python.exe clip.py --burn-hooks "<run folder>"`. It writes `clip_01_final.mp4` and so on, and
    running it again replaces only those. A folder with no `hooks.txt` gets one, and the command stops so you can fill it in.
 
-- **Banner:** white Impact with a black outline, in full from the first frame, ending at 3.0 s with a 0.2 s fade out. It
-  stays inside x 60-959, y 380-655: the Shorts safe zone and, in the default layout, the blurred band above the game
-  picture (rows 656-1263). A `--crop` clip has no band, so the same box lies over the game.
-- **Size:** the largest from 40 to 140 that fits, measured from the drawn pixels, on 1 line or 2, whichever is bigger. A
-  hook that doesn't fit at 40 stops the command before anything is encoded.
-- **Text:** emoji are removed, because libass draws them as one-colour outlines and some come out wrong. Hindi and the
-  Rupee sign stay. `{`, `}` and `\` draw as typed.
-- **Voice:** normalised to -14 LUFS. The game drops to 25% only while the voice sounds, with a 0.3 s ramp on each side.
-- **Re-encoding:** only what changes. An empty hook with no voice is a byte-for-byte copy, a hook alone copies the audio,
-  and a voice alone copies the picture.
+- **Banner:** `--hook-style box` (default), `shadow` or `outline`, in full from the final clip's first frame, for
+  `--hook-duration` seconds (default 3) with a 0.2 s fade out, or to the end with `full`. It stays inside x 60-959, y 380-655:
+  the Shorts safe zone and, in the default layout, the blurred band above the game picture (rows 656-1263). A `--crop` clip
+  has no band, so the same box lies over the top of the game.
+- **Size:** the largest that fits, from 40 to 84 in Segoe UI Bold (`box`, `shadow`) or to 140 in Impact (`outline`), measured
+  from the drawn pixels, on 1 line or 2, whichever is bigger. A hook that doesn't fit at 40 stops the command before anything
+  is encoded.
+- **Text:** the case stays as typed. Emoji are removed and the log says so, because libass draws them as one-colour outlines
+  and some come out wrong. Hindi and the Rupee sign stay. `{`, `}` and `\` draw as typed.
+- **Peak:** only a typed peak counts. `peak_time_s` in `scores.json` is never used, because it is the biggest jump in picture
+  and loudness, which is often a camera swing or a light flash and not the payoff. No peak means no cold open and no zoom,
+  and the log says so. A peak that isn't a plain number, or is past the end of the clip, stops the command before anything is
+  encoded. A peak in the first 2 s gets a warning, because the same moment then plays again almost at once.
+- **Cold open:** 0.15 s before the peak to 0.65 s after it plays at the very start, then a hard cut to the clip from its normal
+  start, so the final clip is 0.8 s longer. A 15 ms fade on each side of the cut stops it clicking. Near an end of the clip the
+  0.8 s moves to stay inside it. `--no-cold-open` turns it off.
+- **Zoom:** one zoom when the moment plays in the clip proper, from 1.0 to 1.15 over 0.3 s, a 0.25 s hold, then 0.4 s back,
+  starting 0.15 s before the peak. The whole frame zooms, so in the default layout the stars and minimap slide partly off the
+  edges for about a second, and the game picture grows to about rows 610-1310. The banner stays still. `--no-zoom` turns it off.
+- **Voice:** normalised to -14 LUFS, and it starts on the final clip's first frame, over the cold open if there is one. The
+  game drops to 25% only while the voice sounds, with a 0.3 s ramp on each side.
+- **Re-encoding:** only what changes. An empty hook with no peak and no voice is a byte-for-byte copy, a hook or a zoom without
+  a voice or cold open copies the audio, and a voice alone copies the picture.
 
 ## Review sheet
 

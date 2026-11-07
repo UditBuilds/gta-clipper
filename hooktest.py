@@ -1,10 +1,10 @@
-"""Checks for hooks.py: hooks.txt, the text and .ass writing, and clip.py --burn-hooks on a small made-up run folder.
+"""Checks for hooks.py: hooks.txt, the text and .ass writing, and clip.py --burn-hooks on small made-up run folders.
 
-The folder's name holds an apostrophe, brackets, a comma and a semicolon, and one hook holds emoji, Hindi, braces, a
+One folder's name holds an apostrophe, brackets, a comma and a semicolon, and one hook holds emoji, Hindi, braces, a
 backslash, commas and quotes. --burn-hooks runs with Python's plain Windows settings (cp1252 when output is piped).
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error). The last line
-is RESULT: PASS or FAIL; exit code 0 or 1. Needs ffmpeg and ffprobe on PATH; about 15 s.
+is RESULT: PASS or FAIL; exit code 0 or 1. Needs ffmpeg and ffprobe on PATH; about 1 minute.
 
 Usage:  python hooktest.py
 """
@@ -31,6 +31,10 @@ ROOT = Path(_TMP.name)
 FANCY_HOOK = 'BHAI \U0001F525 {POLICE}, "NE" \\N GHER \u092D\u093E\u0908 | \U0001F46E\u200D\u2642\uFE0F!'
 GAME_HZ, VOICE_HZ = 1000, 200
 VOICE_START, VOICE_END = 1.0, 3.0  # where the made-up voice file sounds
+FPS = 30
+MARK_X, MARK_Y = 200, 300          # a white square in the marked clips, off centre, so a zoom moves it
+FLASH_N = range(90, 96)            # the frames (3.0-3.2 s) of a marked clip with a white block low down and a loud tone
+PEAK = 3.0
 
 
 def check(fn):
@@ -108,11 +112,51 @@ def escaping_matches_what_libass_needs():
 @check
 def ass_file_keeps_the_text_in_the_last_field():
     """Dialogue has 10 fields with commas in the hook; no fade in, 200 ms fade out, first 3 s, box centre"""
-    doc = hooks.ass_document(["AAJ, KAL", '"PARSON"'], 100)
+    doc = hooks.ass_document(["AAJ, KAL", '"PARSON"'], 100, "outline")
     fields = next(line for line in doc.splitlines() if line.startswith("Dialogue:")).split(",", 9)
     return (fields[1] == "0:00:00.00" and fields[2] == "0:00:03.00" and len(fields) == 10
             and fields[9] == '{\\an5\\pos(510,518)\\fad(0,200)}AAJ, KAL\\N"PARSON"'
             and "PlayResX: 1080" in doc and "PlayResY: 1920" in doc and "Hook,Impact,100," in doc)
+
+
+@check
+def outline_style_is_the_pr12_banner():
+    """--hook-style outline writes exactly the .ass file PR 12 wrote"""
+    return hooks.ass_document(["AAJ"], 100, "outline") == (
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding\nStyle: Hook,Impact,100,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,"
+        "1,9,0,5,0,0,0,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:03.00,Hook,,0,0,0,,{\\an5\\pos(510,518)\\fad(0,200)}AAJ\n")
+
+
+@check
+def a_peak_after_the_hook_is_read():
+    """a peak comes off the end of the hook; a | in the hook stays; no hook is fine; 'peak:' with no | is just hook text"""
+    want = [("Don't do this | peak: 14.2", ("Don't do this", 14.2)), ("A | B | PEAK:3", ("A | B", 3.0)), ("A | B", ("A | B", None)),
+            ("| peak: .5", ("", 0.5)), ("Peak: 5 stars", ("Peak: 5 stars", None)), ("", ("", None))]
+    return all(hooks.split_peak(raw, "clip_01") == result for raw, result in want)
+
+
+@check
+def a_peak_that_is_no_number_stops():
+    """a clock time, a comma, a minus sign, text or nothing after peak: is an error, not banner text"""
+    return all(raises_hook_error(hooks.split_peak, f"X | peak: {v}", "clip_01") for v in ("3:17", "14,2", "-1", "soon", "", "nan"))
+
+
+@check
+def cold_open_window_stays_in_the_clip():
+    """0.15 s before to 0.65 s after the peak, moved in at either end of the clip, always 0.8 s if the clip has it"""
+    return (hooks.cold_open_window(14.2, 30.0) == (14.05, 0.8) and hooks.cold_open_window(0.0, 30.0) == (0.0, 0.8)
+            and hooks.cold_open_window(30.0, 30.0) == (29.2, 0.8) and hooks.cold_open_window(0.3, 0.5) == (0.0, 0.5))
+
+
+@check
+def zoom_stays_after_the_cold_open_and_inside_the_clip():
+    """0.15 s before the peak; not before the join; finished by the end"""
+    return (hooks.zoom_start(10.0, 0.8, 30.8) == 9.85 and hooks.zoom_start(0.8, 0.8, 30.8) == 0.8
+            and hooks.zoom_start(30.8, 0.8, 30.8) == 29.85)
 
 
 @check
@@ -124,38 +168,38 @@ def two_lines_split_evenly():
 
 # --- Drawing with ffmpeg ---
 
-def fit_box(text):
-    fit = hooks.fit_banner(FFMPEG, text)
-    with tempfile.TemporaryDirectory() as folder:
-        return fit, hooks.banner_box(FFMPEG, fit[0], fit[1], folder)
-
-
 @check
 def bigger_layout_wins_and_stays_in_the_box():
-    """5 letters stay on 1 line at the top size; 25 letters take 2 lines at the top size; 80 take 2 smaller lines"""
-    short, short_box = fit_box("BHAI!")
-    mid, mid_box = fit_box("BHAI POLICE NE GHER LIYA!")
-    long, long_box = fit_box("BHAI YE TOH POLICE WALE PURE SHEHAR MEIN PEECHE PAD GAYE AUR AB BACHNA MUSHKIL HAI")
-    return (len(short[0]) == 1 and short[1] == hooks.MAX_SIZE and len(mid[0]) == 2 and mid[1] == hooks.MAX_SIZE
-            and len(long[0]) == 2 and hooks.MIN_SIZE < long[1] < hooks.MAX_SIZE
-            and all(hooks.inside_box(b) for b in (short_box, mid_box, long_box)))
+    """in every style: 5 letters stay on 1 line at the top size; a middling hook (25 letters in Impact, 36 in the narrower
+    size of Segoe UI) takes 2 lines at the top size; 80 take 2 smaller lines"""
+    for style, s in hooks.STYLES.items():
+        middling = "BHAI POLICE NE GHER LIYA!" if style == "outline" else "BHAI POLICE NE GHER LIYA AB BHAG JAA"
+        short = hooks.fit_banner(FFMPEG, "BHAI!", style)
+        mid = hooks.fit_banner(FFMPEG, middling, style)
+        long = hooks.fit_banner(FFMPEG, "BHAI YE TOH POLICE WALE PURE SHEHAR MEIN PEECHE PAD GAYE AUR AB BACHNA MUSHKIL HAI", style)
+        if not (len(short[0]) == 1 and short[1] == s["max_size"] and len(mid[0]) == 2 and mid[1] == s["max_size"]
+                and len(long[0]) == 2 and hooks.MIN_SIZE < long[1] < s["max_size"]
+                and all(hooks.inside_box(hooks.padded(f[2], style)) for f in (short, mid, long))):
+            return False
+    return True
 
 
 @check
 def too_long_does_not_fit():
-    """a hook that can't fit at the smallest size gives no fit"""
-    return hooks.fit_banner(FFMPEG, " ".join(["PAAGALPANTI"] * 30)) is None
+    """a hook that can't fit at the smallest size gives no fit, in any style"""
+    return all(hooks.fit_banner(FFMPEG, " ".join(["PAAGALPANTI"] * 30), style) is None for style in hooks.STYLES)
 
 
 @check
 def missing_font_is_reported():
-    """Impact is found here; a font that doesn't exist gives a warning"""
-    saved, good = hooks.FONT, hooks.font_problem(FFMPEG)
-    hooks.FONT = "NoSuchFontAtAll"
+    """each style's font is found here; a font that doesn't exist gives a warning"""
+    good = [hooks.font_problem(FFMPEG, style) for style in hooks.STYLES]
+    saved = hooks.STYLES["outline"]["font"]
+    hooks.STYLES["outline"]["font"] = "NoSuchFontAtAll"
     try:
-        return good is None and bool(hooks.font_problem(FFMPEG))
+        return good == [None] * len(hooks.STYLES) and bool(hooks.font_problem(FFMPEG, "outline"))
     finally:
-        hooks.FONT = saved
+        hooks.STYLES["outline"]["font"] = saved
 
 
 @check
@@ -183,12 +227,12 @@ def ff(*args, cwd=None):
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args], cwd=cwd, check=True, capture_output=True)
 
 
-def burn(run_dir):
+def burn(run_dir, *flags):
     """clip.py --burn-hooks with Python's plain Windows settings: piped output is cp1252 unless told otherwise."""
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
     env["PYTHONUTF8"] = "0"
-    return subprocess.run([sys.executable, str(HERE / "clip.py"), "--burn-hooks", str(run_dir)], env=env, capture_output=True,
-                          text=True, encoding="cp1252", errors="replace")
+    return subprocess.run([sys.executable, str(HERE / "clip.py"), "--burn-hooks", str(run_dir), *flags], env=env,
+                          capture_output=True, text=True, encoding="cp1252", errors="replace")
 
 
 def sha(path):
@@ -201,15 +245,32 @@ def make_clip(path, audio=True):
     ff(*picture, *sound, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", str(path))
 
 
-def make_run(name, clips_with_audio):
+def make_marked_clip(path, audio=True):
+    """A white square that a zoom moves. In FLASH_N, a white block low down and a loud tone, to follow the moment around."""
+    picture = ["-f", "lavfi", "-i", f"color=c=0x404040:s=1080x1920:r={FPS}:d=6,"
+               f"drawbox=x={MARK_X}:y={MARK_Y}:w=40:h=40:color=white:t=fill,"
+               "drawbox=x=100:y=1500:w=880:h=300:color=white:t=fill:enable='between(t,3,3.19)'"]
+    sound = ["-f", "lavfi", "-i", f"sine=frequency={GAME_HZ}:duration=6", "-ac", "2", "-af",
+             "volume='if(between(t,3,3.19),1,0.02)':eval=frame", "-c:a", "aac", "-b:a", "192k"] if audio else []
+    ff(*picture, *sound, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", str(path))
+
+
+def make_run(name, clips_with_audio, maker=make_clip):
+    """A run folder. Its scores.json has a saved peak on every clip, which must never have any effect."""
     run_dir = ROOT / name
     run_dir.mkdir()
     entries = []
     for i, audio in enumerate(clips_with_audio, 1):
-        entries.append({"rank": i, "file": f"clip_{i:02d}_0m00s.mp4", "start_s": 0.0, "end_s": 6.0, "stars_s": 0})
-        make_clip(run_dir / entries[-1]["file"], audio)
+        entries.append({"rank": i, "file": f"clip_{i:02d}_0m00s.mp4", "start_s": 0.0, "end_s": 6.0, "stars_s": 0,
+                        "peak_time_s": PEAK})
+        maker(run_dir / entries[-1]["file"], audio)
     (run_dir / "scores.json").write_text(json.dumps({"clips": entries}), encoding="utf-8")
     return run_dir
+
+
+def type_hooks(run_dir, *hook_fields):
+    lines = [f"clip_{i:02d} | t | stars: no | hook: {h}\n" for i, h in enumerate(hook_fields, 1)]
+    (run_dir / "hooks.txt").write_text("".join(lines), encoding="utf-8")
 
 
 def make_voice(path, total=4.0):
@@ -251,6 +312,25 @@ def burn_survives_plain_windows_settings():
     """emoji, Hindi and an odd folder name don't crash it on piped cp1252 output, and no hook text is printed"""
     _, _, second, third, *_ = burned()
     return second.returncode == 0 and third.returncode == 0 and "POLICE" not in second.stdout
+
+
+@check
+def emoji_are_stripped_and_logged():
+    """the default style leaves emoji out of the .ass file, keeps the Hindi, and says so in the log"""
+    run_dir, _, second, *_ = burned()
+    doc = (run_dir / "clip_01_hook.ass").read_text(encoding="utf-8")
+    return ("emoji removed" in second.stdout and "\U0001F525" not in doc and "\U0001F46E" not in doc and "भाई" in doc
+            and "Style: Hook,Segoe UI," in doc)
+
+
+@check
+def no_typed_peak_means_no_cold_open_and_no_zoom():
+    """a clip with a saved peak_time_s and nothing typed says so in the log, keeps its length and is a byte-exact copy"""
+    run_dir, _, second, *_ = burned()
+    seconds, _ = hooks.probe(FFPROBE, "clip_02_final.mp4", run_dir)
+    return ("no peak: no cold open, no zoom" in second.stdout and abs(seconds - 6.0) < 0.1
+            and json.loads((run_dir / "scores.json").read_text(encoding="utf-8"))["clips"][1]["peak_time_s"] == PEAK
+            and sha(run_dir / "clip_02_final.mp4") == sha(run_dir / "clip_02_0m00s.mp4"))
 
 
 @check
@@ -385,6 +465,247 @@ def an_open_final_and_stray_voice_files_are_explained():
     return (first.returncode == 0 and first.stdout.count("WARNING") == 2 and locked.returncode == 1
             and "open in another program" in locked.stderr and "Traceback" not in locked.stderr
             and not list(run_dir.glob("*.tmp.mp4")))
+
+
+# --- Peaks, styles and durations ---
+
+@functools.lru_cache(maxsize=None)
+def peaked(*flags):
+    """Marked clips burned with these flags. Clip 1: hook and peak. Clip 2: peak only. Clip 3: peak, no game audio."""
+    run_dir = make_run(f"peaked {len(flags)} {hashlib.md5(' '.join(flags).encode()).hexdigest()[:6]}", [True, True, False],
+                       make_marked_clip)
+    type_hooks(run_dir, f"BHAI BHAG | peak: {PEAK}", f"| peak: {PEAK}", f"BHAI | peak: {PEAK}")
+    return run_dir, burn(run_dir, *flags)
+
+
+def frame_count(path):
+    r = subprocess.run([FFPROBE, "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets",
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
+    return int(r.stdout.strip())
+
+
+def flash_on(path, n):
+    """Is frame n of a marked clip showing the white block low down?"""
+    frame = gray_frame(path, n)
+    return frame[1650 * 1080 + 540] > 200
+
+
+def mark_left(path, n):
+    """The left edge of the white square on frame n of a marked clip, searched in rows clear of the banner."""
+    frame = gray_frame(path, n)
+    return min(x for y in range(100, 370, 4) for x in range(1080) if frame[y * 1080 + x] > 180)
+
+
+@check
+def cold_open_plays_the_moment_first_then_the_whole_clip():
+    """0.8 s added; the flash (source frames 90-95) shows from frame 4 and again from frame 24 + 90; frame 24 is frame 0"""
+    run_dir, r = peaked()
+    out = run_dir / "clip_02_final.mp4"
+    src = run_dir / "clip_02_0m00s.mp4"
+    return (r.returncode == 0 and frame_count(out) == 180 + 24 and not flash_on(out, 3) and flash_on(out, 5) and flash_on(out, 9)
+            and not flash_on(out, 11) and not flash_on(out, 24) and not flash_on(out, 113) and flash_on(out, 115)
+            and flash_on(out, 119) and not flash_on(out, 121) and changed_box(gray_frame(src, 0), gray_frame(out, 24)) is None)
+
+
+@check
+def cold_open_sound_stays_with_its_picture():
+    """the loud tone sounds with the flash in the cold open and again in the clip, and is quiet between them"""
+    run_dir, _ = peaked()
+    out = mono(run_dir / "clip_02_final.mp4")
+    loud = tone(out, 0.16, 0.30, GAME_HZ)
+    return loud > 0.05 and near(tone(out, 3.83, 3.97, GAME_HZ), loud, 0.2) and tone(out, 0.4, 0.75, GAME_HZ) < 0.1 * loud
+
+
+@check
+def banner_is_there_from_frame_0_of_the_cold_open():
+    """frame 0 is source frame 86 plus only the banner, inside the box"""
+    run_dir, _ = peaked()
+    return hooks.inside_box(changed_box(gray_frame(run_dir / "clip_01_0m00s.mp4", 86), gray_frame(run_dir / "clip_01_final.mp4", 0)))
+
+
+@check
+def zoom_happens_once_around_the_peak():
+    """the square sits at its place, moves out by the zoom of 1.15 at the hold, and is back after; no more than one zoom"""
+    run_dir, _ = peaked()
+    out = run_dir / "clip_02_final.mp4"
+    want = 540 + (MARK_X - 540) * 1.15
+    lefts = [mark_left(out, n) for n in range(0, 204, 6)]
+    moved = [i for i, x in enumerate(lefts) if x < MARK_X - 3]
+    return (mark_left(out, 105) == MARK_X and abs(mark_left(out, 123) - want) <= 3 and mark_left(out, 145) == MARK_X
+            and moved == list(range(moved[0], moved[-1] + 1)) and len(moved) * 6 <= hooks.ZOOM_S * FPS)
+
+
+@check
+def no_game_audio_still_gets_cold_open_and_zoom():
+    """a clip with no audio stream keeps having none, with the picture joined and zoomed"""
+    run_dir, _ = peaked()
+    out = run_dir / "clip_03_final.mp4"
+    _, has_audio = hooks.probe(FFPROBE, "clip_03_final.mp4", run_dir)
+    return not has_audio and frame_count(out) == 204 and abs(mark_left(out, 123) - (540 + (MARK_X - 540) * 1.15)) <= 3
+
+
+@check
+def no_cold_open_keeps_the_length_and_still_zooms():
+    """--no-cold-open: 6 s, the zoom at the clip's own peak, and the audio stream copied"""
+    run_dir, r = peaked("--no-cold-open")
+    out = run_dir / "clip_02_final.mp4"
+    return (r.returncode == 0 and frame_count(out) == 180 and abs(mark_left(out, 100) - (540 + (MARK_X - 540) * 1.15)) <= 3
+            and stream_md5(out, "0:a:0") == stream_md5(run_dir / "clip_02_0m00s.mp4", "0:a:0"))
+
+
+@check
+def no_zoom_keeps_the_cold_open_and_does_not_zoom():
+    """--no-zoom: 0.8 s added and the square never moves"""
+    run_dir, r = peaked("--no-zoom")
+    out = run_dir / "clip_02_final.mp4"
+    return r.returncode == 0 and frame_count(out) == 204 and all(mark_left(out, n) == MARK_X for n in (0, 100, 123, 130, 200))
+
+
+@check
+def both_off_is_the_pr12_path():
+    """--no-cold-open --no-zoom with a typed peak: no hook is a byte-exact copy, a hook copies the audio"""
+    run_dir, r = peaked("--no-cold-open", "--no-zoom")
+    return (r.returncode == 0 and sha(run_dir / "clip_02_final.mp4") == sha(run_dir / "clip_02_0m00s.mp4")
+            and stream_md5(run_dir / "clip_01_final.mp4", "0:a:0") == stream_md5(run_dir / "clip_01_0m00s.mp4", "0:a:0"))
+
+
+@check
+def banner_stays_still_during_the_zoom():
+    """--hook-duration full over a zoom: the banner's rows are the same before the zoom and at the hold"""
+    run_dir, r = peaked("--hook-duration", "full")
+    out = run_dir / "clip_01_final.mp4"
+    a, b = gray_frame(out, 105), gray_frame(out, 123)
+    return r.returncode == 0 and max(abs(p - q) for p, q in zip(a[380 * 1080:656 * 1080], b[380 * 1080:656 * 1080])) < 30
+
+
+@check
+def full_banner_reaches_the_last_frame_of_a_cold_open_clip():
+    """--hook-duration full with a cold open: the banner is still there on the very last frame"""
+    run_dir, _ = peaked("--hook-duration", "full")
+    src, out = run_dir / "clip_01_0m00s.mp4", run_dir / "clip_01_final.mp4"
+    return hooks.inside_box(changed_box(gray_frame(src, 179), gray_frame(out, 203)))
+
+
+@functools.lru_cache(maxsize=None)
+def voice_run():
+    """Plain clips with a steady tone. Clip 1: voice and peak. Clip 2: peak only, for the sound at the cut."""
+    run_dir = make_run("voice and peak", [True, True])
+    make_voice(run_dir / "clip_01_vo.wav")
+    type_hooks(run_dir, f"BHAI | peak: {PEAK}", f"| peak: {PEAK}")
+    return run_dir, burn(run_dir)
+
+
+@check
+def voice_starts_at_frame_0_of_the_final_clip():
+    """with a cold open the voice still sounds at its own times, and the game ducks then and comes back"""
+    run_dir, r = voice_run()
+    src, out = mono(run_dir / "clip_01_0m00s.mp4"), mono(run_dir / "clip_01_final.mp4")
+    full = tone(src, 0.2, 5.5, GAME_HZ)
+    during = tone(out, VOICE_START + 0.3, VOICE_END - 0.3, VOICE_HZ)
+    return (r.returncode == 0 and tone(out, 0.2, VOICE_START - 0.05, VOICE_HZ) < 0.05 * during
+            and tone(out, VOICE_START + 0.03, VOICE_START + 0.2, VOICE_HZ) > 0.5 * during
+            and near(tone(out, VOICE_START + 0.3, VOICE_END - 0.3, GAME_HZ), full * 0.25)
+            and near(tone(out, VOICE_END + 0.5, 6.5, GAME_HZ), full))
+
+
+@check
+def sound_dips_briefly_at_the_cut():
+    """the steady tone drops at the cold open's cut for a few milliseconds and is full just before and after it"""
+    run_dir, _ = voice_run()
+    out = mono(run_dir / "clip_02_final.mp4")
+    def level(start, end):
+        part = out[int(start * 48000):int(end * 48000)]
+        return math.sqrt(sum(x * x for x in part) / len(part))
+    full = level(0.5, 0.75)
+    return level(0.796, 0.805) < 0.6 * full and near(level(0.83, 0.9), full) and near(level(0.7, 0.78), full)
+
+
+@functools.lru_cache(maxsize=None)
+def styled(style):
+    run_dir = make_run(f"style {style}", [True])
+    type_hooks(run_dir, "BHAI BHAG")
+    r = burn(run_dir, "--hook-style", style)
+    return run_dir, r, gray_frame(run_dir / "clip_01_0m00s.mp4", 0), gray_frame(run_dir / "clip_01_final.mp4", 0)
+
+
+@check
+def box_style_is_a_white_rounded_box_with_black_text():
+    """white inside the margin, black text inside it, the corner still shows the picture behind, all inside the safe box"""
+    _, r, src, out = styled("box")
+    x1, x2, y1, y2 = changed_box(src, out)
+    inside = out[(y1 + y2) // 2 * 1080 + x1:(y1 + y2) // 2 * 1080 + x2]
+    return (r.returncode == 0 and hooks.inside_box((x1, x2, y1, y2)) and out[(y1 + y2) // 2 * 1080 + x1 + 10] > 225
+            and min(inside) < 40 and out[(y1 + 2) * 1080 + x1 + 2] == src[(y1 + 2) * 1080 + x1 + 2])
+
+
+def share_of(frame, box, test):
+    x1, x2, y1, y2 = box
+    pixels = [frame[y * 1080 + x] for y in range(y1, y2 + 1) for x in range(x1, x2 + 1)]
+    return sum(1 for p in pixels if test(p)) / len(pixels)
+
+
+@check
+def shadow_style_has_no_box():
+    """white text with dark around it and no white box: far fewer white pixels than the box style"""
+    _, r, src, out = styled("shadow")
+    box = changed_box(src, out)
+    return (r.returncode == 0 and hooks.inside_box(box) and share_of(out, box, lambda p: p > 225) < 0.45
+            and share_of(out, box, lambda p: p < 30) > 0.02)
+
+
+@check
+def outline_style_still_draws():
+    """white Impact with a black outline, inside the safe box"""
+    _, r, src, out = styled("outline")
+    box = changed_box(src, out)
+    return r.returncode == 0 and hooks.inside_box(box) and share_of(out, box, lambda p: p < 30) > 0.1
+
+
+@check
+def hook_duration_sets_how_long_the_banner_stays():
+    """1 s: there at 0.5 s and gone at 1.3 s. full: there on the last frame"""
+    run_dir = make_run("durations", [True])
+    type_hooks(run_dir, "BHAI BHAG")
+    src, out = run_dir / "clip_01_0m00s.mp4", run_dir / "clip_01_final.mp4"
+    one = burn(run_dir, "--hook-duration", "1")
+    shows = changed_box(gray_frame(src, 15), gray_frame(out, 15)) is not None
+    gone = changed_box(gray_frame(src, 39), gray_frame(out, 39)) is None
+    full = burn(run_dir, "--hook-duration", "FULL")
+    return (one.returncode == 0 and full.returncode == 0 and shows and gone
+            and changed_box(gray_frame(src, 179), gray_frame(out, 179)) is not None)
+
+
+@check
+def bad_flags_stop():
+    """a duration of 0 or a word is refused; the new flags without --burn-hooks are refused"""
+    run_dir = make_run("bad flags", [True])
+    type_hooks(run_dir, "BHAI")
+    no_burn = subprocess.run([sys.executable, str(HERE / "clip.py"), "nosuch.mp4", "--no-zoom"], capture_output=True, text=True)
+    return (burn(run_dir, "--hook-duration", "0").returncode == 2 and burn(run_dir, "--hook-duration", "soon").returncode == 2
+            and burn(run_dir, "--hook-duration", "nan").returncode == 2 and burn(run_dir, "--hook-style", "fancy").returncode == 2
+            and no_burn.returncode == 1 and "only apply with --burn-hooks" in no_burn.stderr + no_burn.stdout
+            and not list(run_dir.glob("*final*")))
+
+
+@check
+def bad_peak_stops_before_any_encode():
+    """a peak past the clip's end or written as a clock time stops with an error naming the clip, and nothing is written"""
+    run_dir = make_run("bad peak", [True, True])
+    type_hooks(run_dir, "BHAI", "BHAI | peak: 99")
+    past = burn(run_dir)
+    type_hooks(run_dir, "BHAI", "BHAI | peak: 0:03")
+    clock = burn(run_dir)
+    return (past.returncode == 1 and "clip_02" in past.stderr and clock.returncode == 1 and "clip_02" in clock.stderr
+            and not list(run_dir.glob("*final*")))
+
+
+@check
+def early_peak_warns_and_still_burns():
+    """a peak in the first 2 s is the owner's choice: a warning, and the cold open is still made"""
+    run_dir = make_run("early peak", [True])
+    type_hooks(run_dir, "| peak: 0.5")
+    r = burn(run_dir)
+    return r.returncode == 0 and "WARNING" in r.stdout and frame_count(run_dir / "clip_01_final.mp4") == 204
 
 
 @check
