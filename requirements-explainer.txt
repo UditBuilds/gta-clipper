@@ -1,0 +1,4 @@
+# For explainer.py only, installed into .venv-tts. clip.py and the rest of the repo stay standard-library only.
+# kokoro-onnx 0.6.x has the word timing but needs Python below 3.14, so .venv-tts runs on Python 3.13.
+kokoro-onnx==0.6.1
+onnxruntime==1.31.1
