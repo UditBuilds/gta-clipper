@@ -166,3 +166,68 @@ Each run writes its clips, `scores.json` and `timeline.csv` to `C:\AI\gta\output
 changes the root). The test videos are not in the repo. Every flag, the output files, the HUD rules, the vision-model
 stage and the known limits are in [docs/DETAILS.md](docs/DETAILS.md); every result is in
 [eval/BASELINE.md](eval/BASELINE.md).
+
+## Explainer Shorts
+
+`explainer.py` is a separate tool that turns a script file into a finished 1080x1920 Short: a Kokoro voice, word-timed
+captions, fast cuts over your screenshots, clips and text cards, and an ending that loops. It needs a few packages, which
+go in their own `.venv-tts` on Python 3.13, because kokoro-onnx 0.6 (the release with word timing) doesn't allow 3.14.
+`clip.py` stays standard-library only.
+
+Install once:
+
+```powershell
+py -V:Astral/CPython3.13.15 -m venv .venv-tts
+.\.venv-tts\Scripts\python.exe -m pip install -r requirements-explainer.txt
+New-Item -ItemType Directory -Force C:\AI\gta\models\kokoro
+$base = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1"
+curl.exe -L -o C:\AI\gta\models\kokoro\kokoro-v1.0.onnx "$base/kokoro-v1.0.onnx"
+curl.exe -L -o C:\AI\gta\models\kokoro\voices-v1.0.bin "$base/voices-v1.0.bin"
+```
+
+Take the model from the `model-files-v1.1` release: the older release has a file with the same name and no timing, and
+`explainer.py` stops if it finds that one. SHA-256 of the two files:
+`beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a` (model) and
+`bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d` (voices).
+
+Render:
+
+```powershell
+.\.venv-tts\Scripts\python.exe explainer.py examples\explainer_sample.json
+```
+
+That writes `short.mp4`, `voice.wav`, `captions.ass` and `log.json` to
+`C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`. `.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in
+about a minute.
+
+A script is a JSON file, and paths are relative to `C:\AI\gta\`:
+
+```json
+{
+  "title": "GTA 6 pre-load is live",
+  "voice": "am_puck", "speed": 1.18,
+  "open_card": "PRE-LOAD IS LIVE",
+  "music": null,
+  "lines": [
+    {"say": "GTA 6 pre-loads today, and you need 212 gigabytes free.",
+     "visuals": ["input/recording.webm@0:42", "rockstar/shot_07.jpg@0.3", "card:CLEAR YOUR DRIVE"],
+     "green": ["212 GIGABYTES"], "red": []}
+  ]
+}
+```
+
+- A line's visuals share its time evenly. `am_puck` at speed 1.18 says about 3.3 words per second, so a 60-70 s Short is
+  about 200-230 words.
+- A visual is a video with an optional `@start` time, an image with an optional `@framing` from 0 (left edge) to 1 (right
+  edge), or `card:SOME TEXT`. Images get a varied slow zoom or pan. Videos fill the frame with their sides cropped, and
+  their own audio is always dropped.
+- A clip too short for its slot loops only if its last and first frames nearly match, and otherwise holds its last frame.
+  Rockstar's character clips all hold, so give them short slots.
+- `green` and `red` list words or phrases from that line's `say`, which must match or the render stops.
+- `music` is a file that loops about 18 LU under the voice.
+- Numbers are safe to write as digits, but write "70 dollars", not "$70", which is read as "dollar seventy".
+- A missing file, a bad time or a tag that isn't in the line stops the run before anything renders. Under 55 s or over
+  75 s only warns. `log.json` records the durations, the visual on screen each second, and any warnings.
+
+Font: [Anton](fonts/OFL.txt), SIL Open Font License. Kokoro's weights are Apache-2.0. `phonemizer` and eSpeak NG, which it
+installs, are GPL-3.0.
