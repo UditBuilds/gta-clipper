@@ -1,6 +1,6 @@
 """Checks for explainer.py: the script checks, word timing, captions, the timeline, Ken Burns, focus, pans, card marks
-and short clips on small made-up files, then three real renders of short scripts using ffmpeg-made test videos and
-test images.
+and short clips, music picking, ducking and sound effects on small made-up files, then real renders of short scripts
+using ffmpeg-made test videos, test images and test-tone music.
 
 The test videos carry a loud 13.5 kHz tone, which a voice at Kokoro's 24 kHz can't contain (it stops at 12 kHz), so
 any of that tone in the Short is game audio that got through. Their colours avoid the caption colours for the same
@@ -141,6 +141,15 @@ def band_level(path, hz, start=0.0, seconds=None):
     return float(m.group(1)) if m else -math.inf
 
 
+def low_level(path, start=0.0, seconds=None):
+    """The loudest moment (dB) under about 70 Hz, where the hit's thump is and the voice has almost nothing."""
+    span = ["-t", str(seconds)] if seconds else []
+    err = stderr_of("-ss", start, *span, "-i", path, "-vn", "-af", ",".join(["lowpass=f=70"] * 4) + ",volumedetect",
+                    "-f", "null", "-")
+    m = re.search(r"max_volume: (-?[\d.]+|-inf) dB", err)
+    return float(m.group(1)) if m else -math.inf
+
+
 # --- Reading the script ---
 
 @check
@@ -224,6 +233,129 @@ def bad_json_and_bad_settings_stop():
     bad = run_tool(not_json), run_tool(fast), run_tool(ROOT / "absent.json")
     return (ex.load_script(bom, ROOT)["voice"] == ex.DEFAULT_VOICE and all(r.returncode == 2 for r in bad)
             and "not valid JSON" in bad[0].stderr and "speed" in bad[1].stderr and "can't read" in bad[2].stderr)
+
+
+@functools.cache
+def music_folder():
+    """ROOT/music with a 20 s and a 2 s track (the music test tone) and a file that isn't audio."""
+    assets()
+    folder = ROOT / ex.MUSIC_DIR
+    folder.mkdir(exist_ok=True)
+    run_ffmpeg(*tone(MUSIC_HZ, 20), "-c:a", "pcm_s16le", folder / "long.wav")
+    run_ffmpeg(*tone(MUSIC_HZ, 2), "-c:a", "pcm_s16le", folder / "short.wav")
+    (folder / "notes.txt").write_text("not audio", encoding="utf-8")
+    return folder
+
+
+def one_line(**fields):
+    return dict(title="T", lines=[{"say": "Hi there.", "visuals": ["shot.png"]}], **fields)
+
+
+@check
+def sound_settings_are_read():
+    """music by name (the music folder first, then the root), "auto" in any case, null or false; music_volume and sfx; with nothing set: no music, volume 1, sound effects on"""
+    music_folder()
+    read = lambda **fields: ex.load_script(write_script("sound.json", **one_line(**fields)), ROOT)
+    default, named, rooted = read(), read(music="long.wav", music_volume=0.5, sfx=False), read(music="music.wav")
+    auto, off, none = read(music="Auto"), read(music=False), read(music=None)
+    return (default["music"] is None and default["music_volume"] == 1.0 and default["sfx"] is True
+            and named["music"] == ROOT / "music" / "long.wav" and named["music_volume"] == 0.5 and named["sfx"] is False
+            and rooted["music"] == ROOT / "music.wav" and auto["music"] == "auto" and off["music"] is None
+            and none["music"] is None)
+
+
+@check
+def bad_sound_settings_stop():
+    """an unknown voice (the error lists only the English voices), a missing music file, a music_volume too big or not a number, music that isn't text and sfx that isn't true or false: all listed, exit 2, nothing written"""
+    music_folder()
+    out = ROOT / "bad_sound_out"
+    first = run_tool(write_script("bad_sound.json", **one_line(voice="am_nobody", music="missing.mp3", music_volume=5,
+                                                              sfx="yes")), out)
+    second = run_tool(write_script("bad_sound2.json", **one_line(music=42, music_volume="loud")), out)
+    wanted = ["voice 'am_nobody' doesn't exist", "af_heart", "bm_george", "music file not found: 'missing.mp3'",
+              "music_volume is how loud", "sfx is true"]
+    missing = [w for w in wanted if w not in first.stderr]
+    missing += [w for w in ("music is a file in", "music_volume is how loud") if w not in second.stderr]
+    if missing:
+        print(f"       missing from the errors: {missing}")
+    return (first.returncode == second.returncode == 2 and not missing and "ef_dora" not in first.stderr
+            and not out.exists())
+
+
+@check
+def auto_music_picks_from_the_music_folder():
+    """"auto" picks a track from the music folder, the same one each time for a title, a long enough one when there is one, any of them when none is; an empty or missing folder means none; a named file is used as it is"""
+    music_folder()
+    a, b = ex.pick_music("auto", ROOT, 10, "one title"), ex.pick_music("auto", ROOT, 10, "another title")
+    again = [ex.pick_music("auto", ROOT, 30, "same")[0] for _ in range(3)]
+    spread = {ex.pick_music("auto", ROOT, 30, f"title {i}")[0].name for i in range(20)}
+    empty = ROOT / "empty_root"
+    (empty / ex.MUSIC_DIR).mkdir(parents=True, exist_ok=True)
+    named = ex.pick_music(ROOT / "music.wav", ROOT, 10, "x")
+    print(f"       10 s Short: {a[0].name} ({a[1]}); 30 s Shorts over 20 titles use {sorted(spread)}")
+    return (a[0].name == b[0].name == "long.wav" and "2 track(s)" in a[1] and len(set(again)) == 1
+            and spread == {"long.wav", "short.wav"} and ex.pick_music("auto", empty, 10, "x") == (None, None)
+            and ex.pick_music("auto", ROOT / "nowhere", 10, "x") == (None, None)
+            and named == (ROOT / "music.wav", "named in the script") and ex.pick_music(None, ROOT, 10, "x") == (None, None))
+
+
+@check
+def music_dips_under_speech_and_lifts_in_long_pauses():
+    """the music stays down through speech and through a 0.2 s sentence break, comes up 4 dB in a 0.8 s pause, and is all the way down again before the speech comes back"""
+    rng = np.random.default_rng(3)
+    speech = lambda s: rng.uniform(-0.3, 0.3, int(s * ex.RATE)).astype(np.float32)
+    quiet = lambda s: np.zeros(int(s * ex.RATE), np.float32)
+    curve = ex.duck_curve(np.concatenate([speech(1), quiet(0.2), speech(1), quiet(0.8), speech(1)]))
+    at = lambda s: float(curve[int(round(s / 0.01))])
+    print(f"       lift at 1.1 s (short break) {at(1.1):.2f} dB, 2.6 s (long pause) {at(2.6):.2f} dB, 2.98 s {at(2.98):.2f} dB")
+    return (curve[:220].max() == 0 and abs(at(2.6) - ex.GAP_LIFT_DB) < 1e-6 and at(2.98) == 0
+            and curve[300:].max() == 0 and len(curve) == 400)
+
+
+@check
+def sound_effects_follow_lines_pans_and_cards():
+    """a whoosh when a line starts or a pan begins, a hit when a card appears (it wins over a whoosh at the same moment or just before), nothing on the first frame or in the loop ending"""
+    image, pan = {"source": "img", "kind": "image"}, {"source": "ramp.png (pan right)", "kind": "image", "pan": "right"}
+    card = visual("card:X")
+    lines = [{"visuals": [image, card]}, {"visuals": [image, pan]}, {"visuals": [card, image]}, {"visuals": [pan]}]
+    events = ex.plan_sfx(ex.plan_slots(lines, [0, 2, 4, 6], 9 * FPS))
+    close = ex.plan_sfx([{"line": 0, "start": 0, "end": 60, "visual": image}, {"line": 1, "start": 60, "end": 66, "visual": image},
+                         {"line": 1, "start": 66, "end": 120, "visual": card}])
+    got = [(e["kind"], e["at_s"]) for e in events]
+    print(f"       {got}; a line starting 0.2 s before a card: {[(e['kind'], e['at_s']) for e in close]}")
+    return (got == [("hit", 1.0), ("whoosh", 2.0), ("whoosh", 3.0), ("hit", 4.0), ("whoosh", 6.0)]
+            and [(e["kind"], e["at_s"]) for e in close] == [("hit", 2.2)] and "line 4 starts" in events[-1]["why"])
+
+
+def momentary_max(path):
+    """The loudest 400 ms of a file (EBU R128 momentary loudness), in LUFS."""
+    err = stderr_of("-i", path, "-af", "ebur128", "-f", "null", "-")
+    return max(float(x) for x in re.findall(r"M:\s*(-?[\d.]+)", err))
+
+
+@check
+def sound_effects_sit_under_the_voice():
+    """the loudest 400 ms of a whoosh is 10-16 LU under the voice's -14 LUFS and of a hit 6-12 LU under; neither has anything at the test tones; a hit starts and a whoosh peaks on its moment"""
+    def level(sound, name):  # stereo, the same on both sides, as it goes into the mix
+        import wave
+        path = ROOT / name
+        padded = np.concatenate([np.zeros(ex.RATE // 2, np.float32), sound, np.zeros(ex.RATE, np.float32)])
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(ex.RATE)
+            w.writeframes((np.repeat(padded[:, None], 2, 1) * 32767).astype(np.int16).tobytes())
+        return momentary_max(path), band_level(path, GAME_HZ), band_level(path, MUSIC_HZ)
+    whoosh, hit = level(ex.whoosh(0), "whoosh.wav"), level(ex.hit(0), "hit.wav")
+    track = ex.sfx_track([{"kind": "hit", "at_s": 1.0}, {"kind": "whoosh", "at_s": 2.0}], 3 * ex.RATE)
+    loud = np.abs(track)
+    hit_start = np.flatnonzero(loud > loud[:int(1.5 * ex.RATE)].max() * 0.05)[0] / ex.RATE
+    envelope = np.convolve(loud ** 2, np.ones(480) / 480, "same")
+    whoosh_peak = (int(1.5 * ex.RATE) + np.argmax(envelope[int(1.5 * ex.RATE):])) / ex.RATE
+    print(f"       loudest 400 ms: whoosh {whoosh[0]:.1f} LUFS, hit {hit[0]:.1f} LUFS (voice -14); at the test tones "
+          f"{max(whoosh[1:] + hit[1:]):.0f} dB; hit starts {hit_start:.3f} s (1.0), whoosh peaks {whoosh_peak:.3f} s (2.0)")
+    return (-30 <= whoosh[0] <= -24 and -26 <= hit[0] <= -20 and max(whoosh[1:] + hit[1:]) < -70
+            and abs(hit_start - 1.0) < 0.003 and abs(whoosh_peak - 2.0) < 0.06)
 
 
 @check
@@ -331,6 +463,52 @@ def text_stays_in_the_safe_area():
     x1, x2, y1, y2 = min(b[0] for b in boxes), max(b[1] for b in boxes), min(b[2] for b in boxes), max(b[3] for b in boxes)
     print(f"       text reaches x {x1}-{x2}, y {y1}-{y2} (allowed x {SAFE[0]}-{SAFE[1]}, y {SAFE[2]}-{SAFE[3]})")
     return len(boxes) > at and x1 >= SAFE[0] and x2 <= SAFE[1] and y1 >= SAFE[2] and y2 <= SAFE[3]
+
+
+GREY = 128
+
+
+def ink_boxes(events, count, name):
+    """Each event drawn over mid grey, one a second from second 0, and the box (x1, x2, y1, y2) around everything that
+    isn't grey half a second in, after the pop: the fill, the black outline and the shadow."""
+    folder = ROOT / name
+    folder.mkdir(exist_ok=True)
+    (folder / "t.ass").write_text(ex.ass_document(events), encoding="utf-8")
+    shutil.copy(ex.FONT_FILE, folder)
+    raw = subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", f"color=0x808080:s={W}x{H}:r=2:d={count}", "-vf",
+                          "ass=t.ass:fontsdir=.,select='mod(n\\,2)'", "-fps_mode", "passthrough", "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], cwd=folder, capture_output=True, check=True).stdout
+    frames = np.frombuffer(raw, np.uint8).reshape(-1, H, W, 3)
+    boxes = []
+    for frame in frames:
+        ink = (np.abs(frame.astype(np.int16) - GREY).max(axis=2) > 12)
+        rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+        boxes.append((cols[0], cols[-1], rows[0], rows[-1]) if len(rows) else None)
+    return boxes
+
+
+@check
+def outline_and_shadow_stay_in_the_safe_area_and_off_the_cards():
+    """drawn over grey, so the black outline and the shadow count too: the widest captions stay in Shorts' safe area, and a two-line caption's top sits below the bottom of the tallest card, open card and crossed-out bar"""
+    captions = [["WWWWWWWWWWWWWWWW"], ["MMMM", "WWWW", "MMMM", "WWWW"], ["CONGRATULATIONS,", "EVERYBODY"],
+                ["ABSOLUTELY-UNBELIEVABLE-THING"], ["GALLERY", "ALREADY", "SHOWS", "YOU"]]
+    tall = ["MMMM|~WWWWWWWWWWWW~|*MMMMMMMMMMMMM*", "~WWWWWWWWWWWWWWWW~|MMMM|WWWW", "THE LONGEST WAIT IN THE WHOLE SERIES"]
+    events = [ex.dialogue(2, i, i + 1, "Caption", ex.caption_text([fake_word(w) for w in c])) for i, c in enumerate(captions)]
+    at = len(events)
+    for y in (ex.OPEN_CARD_Y, ex.CARD_Y):
+        for t in tall:
+            events += ex.title_events(1, at, at + 1, t, y, ex.POP)
+            at += 1
+    boxes = ink_boxes(events, at, "ink")
+    caption_boxes, card_boxes = boxes[:len(captions)], boxes[len(captions):]
+    x1, x2 = min(b[0] for b in caption_boxes), max(b[1] for b in caption_boxes)
+    y1, y2 = min(b[2] for b in caption_boxes), max(b[3] for b in caption_boxes)
+    two_line_top = min(b[2] for b, c in zip(caption_boxes, captions) if len(ex.caption_text([fake_word(w) for w in c]).split("\\N")) == 2)
+    card_bottom = max(b[3] for b in card_boxes)
+    print(f"       captions with outline and shadow reach x {x1}-{x2}, y {y1}-{y2} (allowed x {SAFE[0]}-{SAFE[1]}, "
+          f"y {SAFE[2]}-{SAFE[3]}); lowest card ink y {card_bottom}, highest two-line caption ink y {two_line_top}")
+    return (None not in boxes and x1 >= SAFE[0] and x2 <= SAFE[1] and y1 >= SAFE[2] and y2 <= SAFE[3]
+            and card_bottom < two_line_top)
 
 
 @check
@@ -635,12 +813,17 @@ def main_run():
     return folder, json.loads((folder / "log.json").read_text(encoding="utf-8")), result.stdout
 
 
+def plain(line):
+    """An .ass line without its {style commands}, so its words read in a row."""
+    return re.sub(r"\{[^}]*\}", "", line)
+
+
 def caption_starts(folder, needle=None):
     """The start time, in seconds, of each caption event, or just those holding the text."""
     out = []
     for line in (folder / "captions.ass").read_text(encoding="utf-8").splitlines():
         m = re.match(r"Dialogue: 2,(\d+):(\d+):(\d+\.\d+),", line)
-        if m and (needle is None or needle in line):
+        if m and (needle is None or needle in plain(line)):
             out.append(int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)))
     return out
 
@@ -682,7 +865,7 @@ def video_length_matches_the_voice():
 def captions_hold_the_tag_colours():
     """the .ass has 212 GIGABYTES in neon green and DANGER in red, and untagged words have no colour of their own"""
     text = (main_run()[0] / "captions.ass").read_text(encoding="utf-8")
-    white_line = next(line for line in text.splitlines() if "THE FIRST" in line)
+    white_line = next(line for line in text.splitlines() if "THE FIRST" in plain(line))
     return ("{\\c&H14FF39&}212" in text and "{\\c&H14FF39&}GIGABYTES" in text and "{\\c&H2A2AFF&}DANGER" in text
             and "\\c&H14FF39&" not in white_line and "\\c&H2A2AFF&" not in white_line and "Anton" in text)
 
@@ -760,6 +943,16 @@ def voice_is_about_minus_14_lufs():
     voice, short = ex.measure_loudness(folder / "voice.wav"), ex.measure_loudness(folder / "short.mp4")
     print(f"       voice {voice[0]:.1f} LUFS, peak {voice[1]:.1f} dB; Short {short[0]:.1f} LUFS, peak {short[1]:.1f} dB")
     return abs(voice[0] + 14) <= 1 and abs(short[0] + 14) <= 1 and short[1] <= -1.0
+
+
+@check
+def voice_has_no_slow_drift():
+    """Kokoro's slow swell under 20 Hz (straight from the model it held about a third of the voice's energy) is gone from voice.wav, so it can't use up the limiter's room"""
+    samples, rate = voice_samples(main_run()[0])
+    power = np.abs(np.fft.rfft(samples)) ** 2
+    below = 10 * np.log10(power[np.fft.rfftfreq(len(samples), 1 / rate) < 20].sum() / power.sum())
+    print(f"       under 20 Hz: {below:.1f} dB of the voice's energy; mean sample {samples.mean():+.4f}")
+    return below < -30 and abs(samples.mean()) < 0.002
 
 
 def voice_samples(folder):
@@ -916,6 +1109,106 @@ def music_stays_well_under_the_voice():
     final = log["loudness"]["final_lufs"]
     print(f"       {MUSIC_HZ} Hz band: {start:.1f} dB near the start, {end:.1f} dB near the end, {none:.1f} dB with no music; mix {final:.1f} LUFS")
     return -50 < start < -24 and abs(start - end) < 3 and none < start - 25 and abs(final + 14) <= 1
+
+
+YELLOW = (255, 230, 0)
+
+
+def ass_seconds(text):
+    h, m, s = text.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+@check
+def spoken_word_is_highlighted():
+    """in the .ass every untagged word turns yellow at its own start (from the log's word times, to the ms) and back when the next starts, tagged words keep their colour; on screen the yellow moves from word to word inside one chunk"""
+    folder, log, _ = main_run()
+    words = log["word_times"]
+    found = []  # (start of the event, the word's tags, the word)
+    for line in (folder / "captions.ass").read_text(encoding="utf-8").splitlines():
+        m = re.match(r"Dialogue: 2,([\d:.]+),", line)
+        if m:
+            found += [(ass_seconds(m.group(1)), tags, word)
+                      for tags, word in re.findall(r"\{([^}]*)\}([^{}\s\\]+)\{\\c&HFFFFFF&\}", line)]
+    late, untagged = [], 0
+    for (start, tags, word), timed in zip(found, words):
+        if ex.HIGHLIGHT not in tags:
+            continue
+        untagged += 1
+        on = 0 if tags.startswith(f"\\c{ex.HIGHLIGHT}") else int(re.match(r"\\t\((\d+),", tags).group(1))
+        if word != timed["text"] or abs(on - round((timed["start_s"] - start) * 1000)) > 1:
+            late.append((word, on))
+    tagged_plain = all(ex.HIGHLIGHT not in t for _, t, w in found if w in ("212", "GIGABYTES", "DANGER"))
+    # On screen: the first chunk with three untagged words, a moment into its second and third word.
+    chunk = next(i for i in range(len(found) - 2) if found[i][0] == found[i + 1][0] == found[i + 2][0]
+                 and all(ex.HIGHLIGHT in found[i + k][1] for k in range(3)))
+    short = folder / "short.mp4"
+    lit = [count_near(frame_at(short, words[chunk + k]["start_s"] + 0.06)[1100:1540], YELLOW, 40) for k in (1, 2)]
+    masks = [np.abs(frame_at(short, words[chunk + k]["start_s"] + 0.06)[1100:1540] - np.array(YELLOW)).max(axis=2) <= 40
+             for k in (1, 2)]
+    overlap = int((masks[0] & masks[1]).sum())
+    print(f"       {untagged} untagged words, {len(late)} off their time {late[:5]}; on screen: yellow px {lit} for "
+          f"{words[chunk + 1]['text']} then {words[chunk + 2]['text']}, {overlap} px yellow in both")
+    return (len(found) == len(words) and untagged >= 15 and not late and tagged_plain and min(lit) > 1500
+            and overlap < min(lit) * 0.1)
+
+
+@functools.cache
+def sound_run():
+    """Music picked by "auto" from the music folder, and sound effects: a card in line 1, a pan in line 2."""
+    music_folder()
+    script = write_script("sound_fx.json", title="Sound test", music="auto", lines=[
+        {"say": "This first line has a card in the middle of it, which lands with a hit.", "visuals": ["b.mp4@1", "card:BIG NEWS"]},
+        {"say": "The second line starts with a whoosh, and then a slow pan gets one of its own.",
+         "visuals": ["shot.png", {"file": "ramp.png", "pan": "right", "weight": 2}]}])
+    result = run_tool(script)
+    assert result.returncode == 0, result.stderr[-500:]
+    folder = Path(re.search(r"Run folder: (.+)", result.stdout).group(1).strip())
+    return folder, json.loads((folder / "log.json").read_text(encoding="utf-8")), result.stdout
+
+
+@check
+def music_and_sound_effects_render():
+    """"auto" picks the long track, the music fades in, a hit lands on the card and whooshes on line 2 and its pan (as in the log and the console), the hit really is in the sound, and the mix is -14 LUFS with peaks under -1 dB"""
+    folder, log, stdout = sound_run()
+    short = folder / "short.mp4"
+    visuals = log["visuals"]
+    card, line2, pan = (next(v for v in visuals if v["source"] == "card:BIG NEWS"), next(v for v in visuals if v["line"] == 2),
+                        next(v for v in visuals if v.get("pan")))
+    want = [("hit", card["start_s"]), ("whoosh", line2["start_s"]), ("whoosh", pan["start_s"])]
+    got = [(e["kind"], e["at_s"]) for e in log["sfx"]]
+    start, settled = band_level(short, MUSIC_HZ, 0.0, 0.1), band_level(short, MUSIC_HZ, 0.6, 1.0)
+    hit_band, voice_band = low_level(short, card["start_s"], 0.3), low_level(folder / "voice.wav", card["start_s"], 0.3)
+    loud = log["loudness"]
+    print(f"       music {Path(log['music']['file']).name} ({log['music']['chosen']}); sfx {got}; music band "
+          f"{start:.1f} dB in the first 0.1 s, {settled:.1f} dB after; under 70 Hz at the hit {hit_band:.1f} dB, "
+          f"{voice_band:.1f} dB in the voice alone; {loud['final_lufs']} LUFS, peak {loud['final_true_peak_db']} dB")
+    return (Path(log["music"]["file"]).name == "long.wav" and "automatically" in log["music"]["chosen"]
+            and all(k == wk and abs(a - wa) < 0.002 for (k, a), (wk, wa) in zip(got, want)) and len(got) == 3
+            and start < settled - 6 and hit_band > voice_band + 10 and abs(loud["final_lufs"] + 14) <= 1
+            and loud["final_true_peak_db"] <= -1.0 and "Music: long.wav (picked automatically" in stdout
+            and "Sound effects: 2 whooshes, 1 hits" in stdout and "Loudness: -1" in stdout)
+
+
+@check
+def auto_with_no_music_folder_still_renders():
+    """"auto" with no music folder renders without music and says so; sfx false means no sound effects; the voice is the mix's level"""
+    assets()
+    root = ROOT / "no_music_root"
+    root.mkdir(exist_ok=True)
+    shutil.copy(ROOT / "shot.png", root)
+    script = write_script("no_music.json", title="No music", music="auto", sfx=False,
+                          lines=[{"say": "There is no music folder here at all.", "visuals": ["shot.png"]}])
+    result = subprocess.run([sys.executable, str(HERE / "explainer.py"), str(script), "--root", str(root), "--out", str(OUT)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode:
+        print(f"       {result.stderr[-300:]}")
+        return False
+    folder = Path(re.search(r"Run folder: (.+)", result.stdout).group(1).strip())
+    log = json.loads((folder / "log.json").read_text(encoding="utf-8"))
+    return (log["music"]["file"] is None and log["sfx"] == [] and any("has no audio files" in w for w in log["warnings"])
+            and "Music: none" in result.stdout and "Sound effects: off" in result.stdout
+            and band_level(folder / "short.mp4", MUSIC_HZ) < -70 and abs(log["loudness"]["final_lufs"] + 14) <= 1)
 
 
 def main():

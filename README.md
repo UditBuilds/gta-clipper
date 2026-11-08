@@ -169,8 +169,9 @@ stage and the known limits are in [docs/DETAILS.md](docs/DETAILS.md); every resu
 
 ## Explainer Shorts
 
-`explainer.py` is a separate tool that turns a script file into a finished 1080x1920 Short: a Kokoro voice, word-timed
-captions, fast cuts over your screenshots, clips and text cards, and an ending that loops. It needs a few packages, which
+`explainer.py` is a separate tool that turns a script file into a finished 1080x1920 Short: a Kokoro voice, captions that
+light up each word as it is said, a music bed that ducks under the voice, sound effects, fast cuts over your screenshots,
+clips and text cards, and an ending that loops. It needs a few packages, which
 go in their own `.venv-tts` on Python 3.13, because kokoro-onnx 0.6 (the release with word timing) doesn't allow 3.14.
 `clip.py` stays standard-library only.
 
@@ -196,8 +197,9 @@ Render:
 .\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload.json
 ```
 
-That writes `short.mp4`, `voice.wav`, `captions.ass` and `log.json` to
-`C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`, and prints the runtime, the number of shots and their average length.
+That writes `short.mp4`, `voice.wav` (the voice alone), `captions.ass` and `log.json` to
+`C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`, and prints the runtime, the shots, the music and sound effects used and
+the final loudness.
 `.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in about a minute. `examples\explainer_sample.json` is
 the longer PR 14 demo, in the short string form.
 
@@ -208,7 +210,7 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
   "title": "GTA 6 pre-load is live",
   "voice": "am_puck", "speed": 1.0,
   "open_card": null,
-  "music": null,
+  "music": "auto", "music_volume": 1.0, "sfx": true,
   "lines": [
     {"say": "GTA 6 pre-loads today, and you need 212 gigabytes free.",
      "visuals": [
@@ -242,7 +244,21 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
 - A clip too short for its slot loops only if its last and first frames nearly match, and otherwise holds its last frame.
   Rockstar's character clips last 1-1.5 s and all hold, so give them short slots.
 - `green` and `red` list words or phrases from that line's `say`, which must match or the render stops.
-- `music` is a file that loops about 18 LU under the voice.
+- **Captions** show 2-4 words at a time, and the word being said turns yellow, timed from Kokoro's own sound durations.
+  Words in `green` and `red` keep their colour. They have a black outline and a soft shadow, so they read on bright and
+  dark pictures and on video alike, and they stay inside Shorts' safe area and below every card.
+- **Voice.** `voice` is any of Kokoro's English voices (`af_`, `am_`, `bf_`, `bm_`); the default is `am_puck`. A name
+  that doesn't exist stops the run and lists them.
+- **Music.** `music` is a file name in `C:\AI\gta\music\` (or a path under `C:\AI\gta\`), `"auto"` to pick one from
+  that folder, or `null` for none (the default). `"auto"` picks the same track every time for the same title and prefers
+  one long enough not to loop; with an empty folder it warns and renders without music. The music fades in over 0.5 s,
+  fades out over the last 1 s, and sits 16 LU under the voice while it speaks, rising 4 dB in pauses of 0.3 s or more
+  (Kokoro's sentence breaks are shorter, so mostly it stays down). `music_volume` scales it: 1 is normal, 0.5 is 6 dB
+  quieter, 2 (the most) is 6 dB louder.
+- **Sound effects** are made by the tool, no downloaded files: a soft whoosh when a line starts or a pan begins, and a
+  hit when a card appears (a hit wins if both land together). Never on every cut, never on the first frame. A whoosh is
+  about 13 LU under the voice, a hit about 8. `"sfx": false` turns them off.
+- The final mix (voice, music, effects) is brought to -14 LUFS with peaks under -1 dB, and both are printed.
 - Numbers are safe to write as digits, but write "70 dollars", not "$70", which is read as "dollar seventy".
 - A missing file, a bad time, a bad shot setting or a tag that isn't in the line stops the run before anything renders.
   `log.json` records the durations, every shot with its focus, pan speed and weight, the visual on screen each second,

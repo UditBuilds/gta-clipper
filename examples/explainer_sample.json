@@ -3,7 +3,8 @@
   "voice": "am_puck",
   "speed": 1.18,
   "open_card": "EVERY PLACE IN GTA 6",
-  "music": null,
+  "music": "auto",
+  "sfx": true,
   "lines": [
     {"say": "GTA 6 lands on November 19, and Rockstar's official gallery already shows you where you'll be living.",
      "visuals": ["rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_15.jpg",

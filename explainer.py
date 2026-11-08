@@ -1,4 +1,5 @@
-"""Turn a script file into a finished 1080x1920 explainer Short: Kokoro voice, word-timed captions, fast cuts, loop ending.
+"""Turn a script file into a finished 1080x1920 explainer Short: Kokoro voice, captions lit word by word, a ducked music bed,
+sound effects, fast cuts and a loop ending.
 
 A script is a JSON file (see examples/nov10_preload.json). Each line says something over one or more shots, which share
 that line's time by their weights (equal unless a shot says otherwise). A shot is a video, an image or a text card,
@@ -52,10 +53,33 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 TAIL_DB, TAIL_KEEP_S, TAIL_FADE_S, GAP_S = -45, 0.04, 0.02, 0.12
 BURST_GAP, BURST_LONG, BURST_DB = 7, 10, -30  # 10 ms frames: this far from the speech, shorter and fainter than this: not speech
 TARGET_LUFS, LUFS_TOLERANCE = -14.0, 0.3
-LIMIT = 0.84                         # about -1.5 dB, the voice's ceiling
-MUSIC_LUFS = -32.0                   # 18 LU under the voice, so the mix's loudness barely moves
+LIMIT = 0.84                         # about -1.5 dB, the ceiling of the voice and of the final mix
+VOICE_HIGHPASS_HZ = 50               # the voice has almost nothing under this (about -30 dB)
 NOT_A_SOUND = set(' ;:,.!?¡¿—…"«»“”()ˈˌ')  # in the phonemes, but nothing to align words on
 MIN_MATCH = 0.6                      # below this the phonemes of the words and the sentence are too unlike to trust
+ENGLISH = ("af_", "am_", "bf_", "bm_")  # Kokoro's US and UK voices; the rest speak other languages
+
+# Sound. Everything is mixed at 48 kHz in numpy, then the mix is brought to -14 LUFS with the voice's limiter.
+RATE = 48000
+F32 = ["-f", "f32le", "-ar", str(RATE), "-ac", "2"]  # how ffmpeg reads the raw stereo float files
+MUSIC_DIR = "music"                  # inside the root: where "auto" picks from, and where a bare name is looked up first
+MUSIC_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac"}
+# The music sits 16 LU under the voice while it speaks and rises GAP_LIFT_DB in a pause of LIFT_GAP_S or more. Kokoro's
+# sentence breaks are about 0.2 s, so it doesn't pump on each one. The whole voice is known, so the dip can look ahead:
+# it starts DUCK_LEAD_S before speech returns and is all the way down by then.
+MUSIC_LUFS, GAP_LIFT_DB, LIFT_GAP_S = -30.0, 4.0, 0.3
+SPEECH_DB = -40                      # 10 ms of the voice this far under its loudest moment is a pause
+DUCK_LEAD_S, DUCK_HOLD_S = 0.08, 0.06
+DUCK_DOWN_S, DUCK_UP_S = 0.06, 0.25  # how long a whole dip and a whole rise take
+MUSIC_FADE_IN_S, MUSIC_FADE_OUT_S = 0.5, 1.0
+MUSIC_PRESENCE = "equalizer=f=2500:t=q:w=1:g=-3"  # a small dip in the music where the voice's consonants are
+MAX_MUSIC_VOLUME = 2.0               # music_volume: 1 is the level above, 0.5 is 6 dB quieter, 2 is 6 dB louder
+# Sound effects, made here from noise and sine waves. A whoosh peaks on the cut when a line starts or a pan begins; a
+# hit lands on a card. Not on every cut. All are cut above 8 kHz: they don't need it, and it keeps them off the voice's
+# "s" sounds. The levels are measured as loudness under the voice (explainertest.py checks them).
+WHOOSH_S, WHOOSH_PEAK_S, WHOOSH_DB = 0.6, 0.36, -14.5   # length, where its loudest moment is, peak level
+HIT_S, HIT_DB = 0.5, -15.0
+SFX_LOWPASS_HZ, SFX_SPACING_S, SFX_EARLIEST_S = 8000, 0.3, 0.1
 
 # Captions. Shorts covers the top 380, bottom 380, right 120 and left 60 px (the same zones as hooks.py), so x centres
 # on 510. Anton has one weight, so bold stays 0: bold would ask libass for a faked one.
@@ -68,6 +92,10 @@ TITLE_SIZE, TITLE_OUTLINE, TITLE_CHARS, OPEN_CARD_S = 260, 14, 13, 2.0
 OPEN_CARD_Y, CARD_Y = 650, 720
 WHITE = "&HFFFFFF&"
 COLOURS = {"green": "&H14FF39&", "red": "&H2A2AFF&"}  # ASS colours are blue-green-red: #39FF14 and #FF2A2A
+HIGHLIGHT = "&H00E6FF&"              # #FFE600: the word being said. Tagged words keep their green or red.
+# A soft shadow under the captions' black outline, so they also read on a bright, busy picture: px, and ASS alpha
+# (00 solid, FF clear).
+CAPTION_SHADOW, SHADOW_ALPHA = 5, "70"
 POP = "\\fscx88\\fscy88\\t(0,70,\\fscx106\\fscy106)\\t(70,130,\\fscx100\\fscy100)"
 OPEN_POP = POP + "\\fad(0,120)"
 CARD_COLOUR = "0x12121C"
@@ -97,6 +125,7 @@ FOCUS_NAMES = {"left": 1 / 6, "center": 0.5, "centre": 0.5, "right": 5 / 6}
 FOCUS_Y_NAMES = {"top": 1 / 6, "middle": 0.5, "center": 0.5, "centre": 0.5, "bottom": 5 / 6}
 PAN_DIRECTIONS = {"right": (0.0, 1.0), "left": (1.0, 0.0)}   # right: from the left edge to the right edge
 SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight"}
+SCRIPT_KEYS = {"title", "voice", "speed", "open_card", "music", "music_volume", "sfx", "lines"}
 OFF_CENTRE = 0.1                     # a subject further than this from the crop's middle gets zooms only, never a drift
 PAN_BLUR = 0.14                      # a pan's motion blur, as a share of its step per frame: a camera's half-open shutter
 
@@ -340,7 +369,7 @@ def load_script(path, root):
         raise ScriptError(f"{path} is not valid JSON: {e}") from None
     if not isinstance(script, dict):
         raise ScriptError(f"{path} must hold one JSON object")
-    problems = [f"unknown setting {k!r}" for k in script if k not in {"title", "voice", "speed", "open_card", "music", "lines"}]
+    problems = [f"unknown setting {k!r}" for k in script if k not in SCRIPT_KEYS]
 
     title = script.get("title")
     if not isinstance(title, str) or not re.search(r"[A-Za-z0-9]", title):
@@ -348,6 +377,9 @@ def load_script(path, root):
     voice = script.get("voice", DEFAULT_VOICE)
     if not isinstance(voice, str):
         problems.append("voice must be a voice name such as am_puck")
+    elif kokoro_voices() and voice not in kokoro_voices():
+        english = [v for v in kokoro_voices() if v.startswith(ENGLISH)]
+        problems.append(f"voice {voice!r} doesn't exist. The English voices: {', '.join(english)}")
     speed = script.get("speed", DEFAULT_SPEED)
     if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0.5 <= speed <= 2.0:
         problems.append("speed must be a number from 0.5 to 2.0")
@@ -359,14 +391,17 @@ def load_script(path, root):
             card_lines(open_card.strip().upper())
         except ScriptError as e:
             problems.append(f"open_card: {e}")
-    music = script.get("music")
-    music_path = None
-    if music is not None:
-        music_path = root / str(music)
-        if not music_path.is_file():
-            problems.append(f"music file not found: {music_path}")
-        elif stream_of(probe(music_path), "audio") is None:
-            problems.append(f"{music_path.name}: ffprobe finds no audio in it")
+    music, music_problem = parse_music(script.get("music"), root)
+    if music_problem:
+        problems.append(music_problem)
+    music_volume = script.get("music_volume", 1.0)
+    if (isinstance(music_volume, bool) or not isinstance(music_volume, (int, float))
+            or not 0 < music_volume <= MAX_MUSIC_VOLUME):
+        problems.append(f"music_volume is how loud the music is next to normal: 1 is normal, 0.5 quieter, "
+                        f"up to {MAX_MUSIC_VOLUME:g} louder")
+    sfx = script.get("sfx", True)
+    if not isinstance(sfx, bool):
+        problems.append("sfx is true (whooshes and hits) or false (none)")
 
     lines = script.get("lines")
     if not isinstance(lines, list) or not lines:
@@ -405,7 +440,64 @@ def load_script(path, root):
     if problems:
         raise ScriptError("the script needs fixing:\n  " + "\n  ".join(problems))
     return {"title": title, "slug": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "voice": voice, "speed": speed,
-            "open_card": open_card.strip().upper() if open_card else None, "music": music_path, "lines": parsed}
+            "open_card": open_card.strip().upper() if open_card else None, "music": music,
+            "music_volume": float(music_volume), "sfx": sfx, "lines": parsed}
+
+
+def find_music(root, name):
+    """A named music file: in the music folder first, then anywhere under the root. None if it is in neither."""
+    for path in (root / MUSIC_DIR / name, root / name):
+        if path.is_file():
+            return path
+    return None
+
+
+def parse_music(value, root):
+    """The music setting as None (no music), "auto" or a file's path, and a problem to report (or None)."""
+    if value is None or value is False:
+        return None, None
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto", None
+    if not isinstance(value, str) or not value.strip():
+        return None, f'music is a file in {root / MUSIC_DIR}, "auto" to pick one from there, or null for none'
+    path = find_music(root, value.strip())
+    if path is None:
+        return None, f"music file not found: {value!r} is in neither {root / MUSIC_DIR} nor {root}"
+    if stream_of(probe(path), "audio") is None:
+        return None, f"{path.name}: ffprobe finds no audio in it"
+    return path, None
+
+
+@functools.lru_cache(maxsize=None)
+def kokoro_voices():
+    """The voice names in Kokoro's voices file, or none if it's missing (load_kokoro says so then)."""
+    import numpy as np
+    if not VOICES.is_file():
+        return ()
+    with np.load(VOICES) as voices:
+        return tuple(sorted(voices.files))
+
+
+def music_tracks(root):
+    """Every file in the music folder that has audio, by name."""
+    folder = root / MUSIC_DIR
+    if not folder.is_dir():
+        return []
+    return sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in MUSIC_EXTS
+                   and stream_of(probe(p), "audio") is not None), key=lambda p: p.name.lower())
+
+
+def pick_music(choice, root, seconds, seed):
+    """The track to use, and how it was chosen. "auto" picks from the music folder, the same one each time for the same
+    title, and prefers a track long enough to play without looping. None if there is no music."""
+    if choice != "auto":
+        return choice, ("named in the script" if choice else None)
+    tracks = music_tracks(root)
+    if not tracks:
+        return None, None
+    long_enough = [p for p in tracks if float(probe(p).get("format", {}).get("duration", 0)) >= seconds]
+    pool = long_enough or tracks
+    return random.Random(seed).choice(pool), f"picked automatically from {len(tracks)} track(s)"
 
 
 def script_warnings(script):
@@ -563,27 +655,217 @@ def save_wav(path, audio, rate):
         w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
 
 
-def measure_loudness(path):
-    """Integrated loudness (LUFS) and true peak (dB) of a file."""
-    err = ffmpeg(["-i", path, "-vn", "-af", "loudnorm=print_format=json", "-f", "null", "-"], loglevel="info")
+def measure_loudness(path, fmt=()):
+    """Integrated loudness (LUFS) and true peak (dB) of a file. fmt says how to read a raw one (F32)."""
+    err = ffmpeg([*fmt, "-i", path, "-vn", "-af", "loudnorm=print_format=json", "-f", "null", "-"], loglevel="info")
     m = json.loads(err[err.rindex("{"):err.rindex("}") + 1])
     return float(m["input_i"]), float(m["input_tp"])
 
 
-def normalise_voice(raw, out):
-    """voice.wav at about -14 LUFS, by gain and a limiter. Two-pass loudnorm falls back to its dynamic mode on this voice
-    (the peaks leave no room) and lands near -15. It is stereo, the same on both sides, because ffmpeg's own mono to
-    stereo step lowers the level by 3 dB. Each pass starts again from raw, so the limiter runs only once."""
-    level = measure_loudness(raw)[0] + 3.0  # raw is mono: a stereo copy measures 3 dB higher
+def normalise(inputs, out, level, shape=""):
+    """The input at about -14 LUFS in a 48 kHz stereo WAV, by gain and a limiter. Two-pass loudnorm falls back to its
+    dynamic mode on this voice (the peaks leave no room) and lands near -15. Each pass starts again from the input, so
+    the limiter runs only once. level is the input's loudness; shape is any filter to run first."""
     gain = 0.0
     for _ in range(4):
         gain += TARGET_LUFS - level
-        ffmpeg(["-i", raw, "-af", f"aresample=48000,pan=stereo|c0=c0|c1=c0,volume={gain:.2f}dB,"
+        ffmpeg([*inputs, "-af", f"{shape}volume={gain:.2f}dB,"
                 f"alimiter=limit={LIMIT}:level=disabled:attack=3:release=40:latency=1", "-c:a", "pcm_s16le", out])
         level = measure_loudness(out)[0]
         if abs(TARGET_LUFS - level) <= LUFS_TOLERANCE:
             break
     return level
+
+
+def normalise_voice(raw, out):
+    """voice.wav at about -14 LUFS. It is stereo, the same on both sides, because ffmpeg's own mono to stereo step
+    lowers the level by 3 dB. Kokoro's output drifts up by about 0.04 while it speaks (a swell under 20 Hz, a third of
+    its energy): nobody hears it, but it uses up the limiter's room, so a high-pass at VOICE_HIGHPASS_HZ takes it out."""
+    level = measure_loudness(raw)[0] + 3.0  # raw is mono: a stereo copy measures 3 dB higher
+    return normalise(["-i", raw], out, level, f"highpass=f={VOICE_HIGHPASS_HZ},aresample={RATE},pan=stereo|c0=c0|c1=c0,")
+
+
+def read_wav(path):
+    """A 16-bit WAV as float samples, one column per channel."""
+    import numpy as np
+    with wave.open(str(path)) as w:
+        channels, raw = w.getnchannels(), w.readframes(w.getnframes())
+    return np.frombuffer(raw, np.int16).reshape(-1, channels).astype(np.float32) / 32768
+
+
+# --- Music and sound effects ---
+
+def duck_curve(voice, rate=RATE):
+    """How far the music rises over its level under the voice, in dB, one value per 10 ms: 0 while the voice speaks,
+    up to GAP_LIFT_DB in a pause of LIFT_GAP_S or more. Taken from the voice's own sound, so it works the same over any
+    shot. The dip starts DUCK_LEAD_S before the speech comes back and is all the way down by then."""
+    import numpy as np
+    frame = int(0.01 * rate)
+    count = -(-len(voice) // frame)
+    padded = np.zeros(count * frame, dtype=np.float32)
+    padded[:len(voice)] = voice
+    rms = np.sqrt((padded.reshape(-1, frame) ** 2).mean(1))
+    speech = rms >= rms.max() * 10 ** (SPEECH_DB / 20) if rms.max() > 0 else np.zeros(count, bool)
+    edges = np.flatnonzero(np.diff(np.concatenate(([1], speech.astype(int), [1]))))
+    for a, b in zip(edges[::2], edges[1::2]):  # each pause, from a to b
+        if b - a < LIFT_GAP_S / 0.01:
+            speech[a:b] = True
+    near = np.concatenate(([0], np.cumsum(speech)))
+    lead, hold = round(DUCK_LEAD_S / 0.01), round(DUCK_HOLD_S / 0.01)
+    i = np.arange(count)
+    ducked = near[np.minimum(i + lead + 1, count)] - near[np.maximum(i - hold, 0)] > 0
+    target = np.where(ducked, 0.0, GAP_LIFT_DB)
+    up, down = GAP_LIFT_DB * 0.01 / DUCK_UP_S, GAP_LIFT_DB * 0.01 / DUCK_DOWN_S
+    curve = np.empty(count)
+    level = target[0]
+    for n, want in enumerate(target):
+        level = min(want, level + up) if want > level else max(want, level - down)
+        curve[n] = level
+    return curve
+
+
+def fade(n, seconds, rate=RATE):
+    """A smooth rise from 0 to 1 over the first samples of n."""
+    import numpy as np
+    ramp = np.ones(n)
+    k = min(int(seconds * rate), n)
+    ramp[:k] = np.sin(np.linspace(0, np.pi / 2, k)) ** 2
+    return ramp
+
+
+def music_bed(music, voice, volume, work):
+    """The music under this voice: looped or cut to its length, a small dip where consonants sit, 16 LU under the
+    voice while it speaks, up a little in its pauses, faded in and out. Returns the samples and what was done."""
+    import numpy as np
+    raw = work / "music.f32"
+    seconds = len(voice) / RATE
+    ffmpeg(["-stream_loop", "-1", "-i", music, "-t", f"{seconds:.3f}", "-vn", "-af", f"aresample={RATE},{MUSIC_PRESENCE}",
+            *F32, raw])
+    level = measure_loudness(raw, F32)[0]
+    track = np.zeros((len(voice), 2), dtype=np.float32)
+    decoded = np.fromfile(raw, np.float32).reshape(-1, 2)[:len(voice)]
+    track[:len(decoded)] = decoded
+    gain_db = (MUSIC_LUFS - level if math.isfinite(level) else 0.0) + 20 * math.log10(volume)
+    curve = duck_curve(voice[:, 0])
+    lift = np.interp(np.arange(len(voice)) / RATE, (np.arange(len(curve)) + 0.5) * 0.01, curve)
+    gain = 10 ** ((gain_db + lift) / 20) * fade(len(voice), MUSIC_FADE_IN_S) * fade(len(voice), MUSIC_FADE_OUT_S)[::-1]
+    lifted = float((curve > GAP_LIFT_DB / 2).sum() * 0.01)
+    return track * gain[:, None].astype(np.float32), {"music_lufs": round(level, 1), "gain_db": round(gain_db, 2),
+                                                      "lifted_s": round(lifted, 2)}
+
+
+def lowpass(x, hz, rate=RATE):
+    """Everything above hz gone, fading out over half an octave so nothing rings."""
+    import numpy as np
+    f = np.fft.rfftfreq(len(x), 1 / rate)
+    keep = np.clip(1 - np.log2(np.maximum(f, 1) / hz) * 2, 0, 1)
+    return np.fft.irfft(np.fft.rfft(x) * keep, len(x))
+
+
+def swept_noise(rng, seconds, centre, octaves, rate=RATE):
+    """Noise through a band-pass whose middle moves: centre(t) gives it in Hz, octaves is its width. Done frame by frame
+    in the frequency domain."""
+    import numpy as np
+    size, hop = 1024, 256
+    n = int(seconds * rate)
+    noise = rng.standard_normal(n + size)
+    window = np.hanning(size)
+    freqs = np.maximum(np.fft.rfftfreq(size, 1 / rate), 1)
+    out, weight = np.zeros(n + size), np.zeros(n + size)
+    for start in range(0, n, hop):
+        band = np.exp(-0.5 * (np.log2(freqs / centre((start + size / 2) / rate)) / octaves) ** 2)
+        out[start:start + size] += np.fft.irfft(np.fft.rfft(noise[start:start + size] * window) * band, size) * window
+        weight[start:start + size] += window ** 2
+    return out[:n] / np.maximum(weight[:n], 0.1)
+
+
+def whoosh(seed):
+    """A soft whoosh: noise whose pitch climbs to the cut and falls away after it, quiet at the edges."""
+    import numpy as np
+    t = np.arange(int(WHOOSH_S * RATE)) / RATE
+    rise, fall = WHOOSH_PEAK_S, WHOOSH_S - WHOOSH_PEAK_S
+    centre = lambda s: 350 * (2400 / 350) ** (s / rise) if s < rise else 2400 * (800 / 2400) ** ((s - rise) / fall)
+    sound = swept_noise(np.random.default_rng(seed), WHOOSH_S, centre, 0.55)
+    shape = np.where(t < rise, (t / rise) ** 2, np.exp(-(t - rise) / 0.09)) * fade(len(t), 0.02)[::-1]
+    return finish(sound * shape, WHOOSH_DB)
+
+
+def hit(seed):
+    """A punchy hit: a falling thump, some body at 150-400 Hz that a phone's speaker can play, and a short knock at
+    1-4 kHz for the attack, lightly saturated so it carries."""
+    import numpy as np
+    t = np.arange(int(HIT_S * RATE)) / RATE
+    thump = np.sin(2 * np.pi * np.cumsum(50 + 130 * np.exp(-t / 0.03)) / RATE) * np.exp(-t / 0.15)
+    body = np.sin(2 * np.pi * 260 * t) * np.exp(-t / 0.04)
+    knock = swept_noise(np.random.default_rng(seed), HIT_S, lambda s: 2200, 0.8) * np.exp(-t / 0.008)
+    knock /= max(np.abs(knock).max(), 1e-9)
+    sound = np.tanh(1.8 * (thump + 0.7 * body + 0.45 * knock)) * fade(len(t), 0.03)[::-1]
+    return finish(sound, HIT_DB)
+
+
+def finish(sound, peak_db):
+    """Cut above SFX_LOWPASS_HZ, then set the loudest sample to peak_db."""
+    import numpy as np
+    sound = lowpass(sound, SFX_LOWPASS_HZ)
+    return (sound / max(np.abs(sound).max(), 1e-9) * 10 ** (peak_db / 20)).astype(np.float32)
+
+
+def plan_sfx(slots):
+    """When each sound effect plays and why: a whoosh when a line starts or a pan begins, a hit when a card appears.
+    A hit wins over a whoosh at the same moment. Nothing on the first frame, which is also where the loop starts again,
+    and nothing in the loop ending."""
+    events, started = [], set()
+    for slot in slots:
+        if slot.get("loop_tail"):
+            continue
+        at, visual, line = slot["start"] / FPS, slot["visual"], slot["line"] + 1
+        if visual["kind"] == "card":
+            events.append({"kind": "hit", "at_s": at, "why": f"line {line}: {visual['source']} appears"})
+        elif slot["line"] not in started:
+            events.append({"kind": "whoosh", "at_s": at, "why": f"line {line} starts"})
+        elif visual.get("pan"):
+            events.append({"kind": "whoosh", "at_s": at, "why": f"line {line}: a pan begins"})
+        started.add(slot["line"])
+    events = [e for e in events if e["at_s"] >= SFX_EARLIEST_S]
+    kept = []
+    for e in events:  # in time order already: a whoosh too near a hit, or near another whoosh, goes
+        near = [k for k in kept if e["at_s"] - k["at_s"] < SFX_SPACING_S]
+        if near and e["kind"] == "whoosh":
+            continue
+        if near and near[-1]["kind"] == "whoosh":
+            kept.remove(near[-1])
+        kept.append(e)
+    return [{**e, "at_s": round(e["at_s"], 3)} for e in kept]
+
+
+def sfx_track(events, n):
+    """The sound effects as one mono track n samples long. A whoosh's loudest moment and a hit's start land on their
+    moment."""
+    import numpy as np
+    track = np.zeros(n + int(max(WHOOSH_S, HIT_S) * RATE), dtype=np.float32)
+    for i, e in enumerate(events):
+        sound = hit(i) if e["kind"] == "hit" else whoosh(i)
+        start = round(e["at_s"] * RATE) - (round(WHOOSH_PEAK_S * RATE) if e["kind"] == "whoosh" else 0)
+        cut = max(0, -start)
+        track[start + cut:start + len(sound)] += sound[cut:]
+    return track[:n]
+
+
+def mix_audio(voice_wav, music, volume, events, work):
+    """The voice, the music bed and the sound effects in one WAV at -14 LUFS. Returns its path and what went in."""
+    import numpy as np
+    voice = read_wav(voice_wav)
+    mix, info = voice.copy(), {}
+    if music:
+        bed, info = music_bed(music, voice, volume, work)
+        mix += bed
+    if events:
+        mix += sfx_track(events, len(voice))[:, None]
+    mixed = work / "mix.f32"
+    mix.astype(np.float32).tofile(mixed)
+    out = work / "mix.wav"
+    info["mix_lufs"] = normalise([*F32, "-i", mixed], out, measure_loudness(mixed, F32)[0])
+    return out, info
 
 
 # --- Captions ---
@@ -643,14 +925,27 @@ def fit_lines(texts, max_chars, size, keep_together=()):
 
 
 def caption_text(words):
+    """A chunk's text. Each untagged word turns HIGHLIGHT while it is being said and back to white when the next word
+    starts; the last stays lit until the chunk goes. It is one event with timed colour changes (\\t, in ms from the
+    event's start as ass_time rounds it), so the chunk pops in once and the highlight never jumps."""
     inside_a_tag = {i for i in range(1, len(words)) if words[i]["tag"] is not None and words[i]["tag"] == words[i - 1]["tag"]}
     break_at, size = fit_lines([w["text"] for w in words], CAPTION_CHARS, CAPTION_SIZE, inside_a_tag)
+    shown_from = round(words[0]["start"] * 100) / 100
+    at = lambda seconds: max(0, round((seconds - shown_from) * 1000))
     parts = []
     for i, w in enumerate(words):
         if i:
             parts.append("\\N" if i == break_at else " ")
         text = escape_ass(w["text"])
-        parts.append(f"{{\\c{COLOURS[w['colour']]}}}{text}{{\\c{WHITE}}}" if w["colour"] else text)
+        if w["colour"]:
+            parts.append(f"{{\\c{COLOURS[w['colour']]}}}{text}{{\\c{WHITE}}}")
+            continue
+        on = at(w["start"])
+        tags = f"\\c{HIGHLIGHT}" if on == 0 else f"\\t({on},{on + 1},\\c{HIGHLIGHT})"
+        if i + 1 < len(words):
+            off = max(at(words[i + 1]["start"]), on + 1)
+            tags += f"\\t({off},{off + 1},\\c{WHITE})"
+        parts.append(f"{{{tags}}}{text}{{\\c{WHITE}}}")
     return f"{{\\fs{size}{POP}}}" + "".join(parts)
 
 
@@ -727,12 +1022,13 @@ def ass_document(events):
               "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
               "MarginR, MarginV, Encoding")
 
-    def style(name, size, outline, alignment, margin_v):
-        return (f"Style: {name},{FONT},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,{outline},"
-                f"0,{alignment},{SAFE_LEFT},{SAFE_RIGHT},{margin_v},1")
+    def style(name, size, outline, alignment, margin_v, shadow=0):
+        back = f"&H{SHADOW_ALPHA}000000" if shadow else "&H00000000"
+        return (f"Style: {name},{FONT},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,{back},0,0,0,0,100,100,0,0,1,{outline},"
+                f"{shadow},{alignment},{SAFE_LEFT},{SAFE_RIGHT},{margin_v},1")
     return "\n".join(["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}", "WrapStyle: 2",
                       "ScaledBorderAndShadow: yes", "YCbCr Matrix: TV.709", "", "[V4+ Styles]", fields,
-                      style("Caption", CAPTION_SIZE, CAPTION_OUTLINE, 2, H - CAPTION_BOTTOM),
+                      style("Caption", CAPTION_SIZE, CAPTION_OUTLINE, 2, H - CAPTION_BOTTOM, CAPTION_SHADOW),
                       style("Title", TITLE_SIZE, TITLE_OUTLINE, 5, 0), "", "[Events]",
                       "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events, ""])
 
@@ -1014,16 +1310,6 @@ def render_segment(slot, out, encode):
     ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
 
 
-def music_graph(music, total_s):
-    """The music's gain (to about 18 LU under the voice) and the filter that loops, trims and mixes it as input 2."""
-    level = measure_loudness(music)[0]
-    gain = MUSIC_LUFS - level if math.isfinite(level) else 0.0
-    fade = max(total_s - 0.4, 0)
-    return gain, (f"[2:a]atrim=0:{total_s:.3f},volume={gain:.2f}dB,afade=t=out:st={fade:.3f}:d=0.4,"
-                  "aformat=channel_layouts=stereo[m];[1:a]aformat=channel_layouts=stereo[v];"
-                  "[v][m]amix=inputs=2:normalize=0:duration=first[a]")
-
-
 def font_warning(work):
     """A warning if libass ended up with another font: it would swap one in without saying so."""
     (work / "check.ass").write_text(ass_document([dialogue(0, 0, 1, "Caption", "TEST")]), encoding="utf-8")
@@ -1039,8 +1325,6 @@ def render(script_path, root, out_root):
         raise ScriptError("ffmpeg and ffprobe must be on PATH")
     script = load_script(script_path, root)
     kokoro = load_kokoro()
-    if script["voice"] not in kokoro.get_voices():
-        raise ScriptError(f"voice {script['voice']!r} doesn't exist. Voices: {', '.join(kokoro.get_voices())}")
     warnings = script_warnings(script)
     run_dir = Path(out_root) / script["slug"] / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1077,6 +1361,14 @@ def render(script_path, root, out_root):
         if font_problem:
             warnings.append(font_problem)
 
+        t = time.perf_counter()
+        music, music_note = pick_music(script["music"], root, voice_s, script["slug"])
+        if script["music"] == "auto" and music is None:
+            warnings.append(f'music is "auto" but {root / MUSIC_DIR} has no audio files, so this Short has no music')
+        sfx = plan_sfx(slots) if script["sfx"] else []
+        mix, sound = mix_audio(run_dir / "voice.wav", music, script["music_volume"], sfx, work)
+        timing["sound"] = round(time.perf_counter() - t, 1)
+
         encoder, piece_args, final_args = pick_encoder()
         t = time.perf_counter()
         names = [f"seg_{i:04d}.mp4" for i in range(len(slots))]
@@ -1088,17 +1380,10 @@ def render(script_path, root, out_root):
         (work / "segments.txt").write_text("".join(f"file '{n}'\n" for n in names), encoding="utf-8")
 
         t = time.perf_counter()
-        inputs = ["-f", "concat", "-safe", "0", "-i", "segments.txt", "-i", run_dir / "voice.wav"]
+        inputs = ["-f", "concat", "-safe", "0", "-i", "segments.txt", "-i", mix]
         graph = "[0:v]ass=../captions.ass:fontsdir=.,format=yuv420p[p]"
-        audio_out = "1:a"
-        music_gain = None
-        if script["music"]:
-            music_gain, mix = music_graph(script["music"], total_s)
-            inputs += ["-stream_loop", "-1", "-i", script["music"]]
-            graph += ";" + mix
-            audio_out = "[a]"
-        ffmpeg([*inputs, "-filter_complex", graph, "-map", "[p]", "-map", audio_out, "-frames:v", total_frames,
-                "-r", FPS, *final_args, *COLOUR_TAGS, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        ffmpeg([*inputs, "-filter_complex", graph, "-map", "[p]", "-map", "1:a", "-frames:v", total_frames,
+                "-r", FPS, *final_args, *COLOUR_TAGS, "-c:a", "aac", "-b:a", "192k", "-ar", RATE, "-ac", "2",
                 "-movflags", "+faststart", run_dir / "short.mp4"], cwd=work)
         timing["final"] = round(time.perf_counter() - t, 1)
 
@@ -1119,9 +1404,16 @@ def render(script_path, root, out_root):
                          "target_s": [MIN_TOTAL_S, MAX_TOTAL_S],
                          "lines": [{"line": n + 1, "start_s": round(s, 3)} for n, s in enumerate(line_starts)]},
            "shots": shots,
-           "loudness": {"voice_lufs": voice_lufs, "final_lufs": final_lufs, "final_true_peak_db": final_peak,
-                        "music_gain_db": music_gain},
+           "loudness": {"voice_lufs": voice_lufs, "mix_lufs": sound["mix_lufs"], "final_lufs": final_lufs,
+                        "final_true_peak_db": final_peak},
+           "music": {"file": str(music) if music else None, "chosen": music_note, "volume": script["music_volume"],
+                     "track_lufs": sound.get("music_lufs"), "gain_db": sound.get("gain_db"),
+                     "under_voice_lu": round(TARGET_LUFS - MUSIC_LUFS - 20 * math.log10(script["music_volume"]), 1)
+                     if music else None,
+                     "lift_in_pauses_db": GAP_LIFT_DB if music else None, "lifted_s": sound.get("lifted_s")},
+           "sfx": sfx, "captions": "word by word: the word being said turns yellow; tagged words keep their colour",
            "longest_quiet_s": round(quiet, 2), "words": len(words),
+           "word_times": [{"text": w["text"], "start_s": round(w["start"], 3), "end_s": round(w["end"], 3)} for w in words],
            "visuals": [{"line": s["line"] + 1, "source": s["visual"]["source"], "start_s": round(s["start"] / FPS, 3),
                         "seconds": round(s["frames"] / FPS, 3), "kind": s["visual"]["kind"],
                         "focus": [s["visual"]["focus"], s["visual"]["focus_y"]] if "focus" in s["visual"] else None,
@@ -1139,7 +1431,16 @@ def render(script_path, root, out_root):
     print(f"  Runtime {video_s:.1f} s ({runtime_note(video_s)})")
     print(f"  Shots: {shots['count']} ({shots['own']} plus the {LOOP_FRAMES / FPS:.1f} s loop ending), "
           f"average {shots['average_s']:.2f} s, longest {shots['longest_s']:.2f} s")
-    print(f"  {final_lufs:.1f} LUFS, voice speed {script['speed']:g}, made in {timing['total']:.0f} s with {encoder}")
+    if music:
+        print(f"  Music: {music.name} ({music_note}), {log['music']['under_voice_lu']:g} LU under the voice, "
+              f"up {GAP_LIFT_DB:g} dB in pauses of {LIFT_GAP_S:g} s or more")
+    else:
+        print("  Music: none")
+    kinds = [e["kind"] for e in sfx]
+    print(f"  Sound effects: {kinds.count('whoosh')} whooshes, {kinds.count('hit')} hits" if script["sfx"] else
+          "  Sound effects: off")
+    print(f"  Loudness: {final_lufs:.1f} LUFS, true peak {final_peak:.1f} dB")
+    print(f"  Voice {script['voice']} at speed {script['speed']:g}, made in {timing['total']:.0f} s with {encoder}")
     for warning in warnings:
         print(f"  WARNING: {warning}")
     return run_dir
