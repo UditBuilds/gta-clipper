@@ -1,9 +1,10 @@
 """Turn a script file into a finished 1080x1920 explainer Short: Kokoro voice, word-timed captions, fast cuts, loop ending.
 
-A script is a JSON file (see examples/explainer_sample.json). Each line says something over one or more visuals, which
-share that line's time evenly. A visual is a video ("rockstar/x.mp4@0:42"), an image ("rockstar/x.jpg", or
-"rockstar/x.jpg@0.7" to frame it 70 % of the way across) or a text card ("card:SOME TEXT"). Everything is checked first,
-so a missing file or a bad time stops before anything renders.
+A script is a JSON file (see examples/nov10_preload.json). Each line says something over one or more shots, which share
+that line's time by their weights (equal unless a shot says otherwise). A shot is a video, an image or a text card,
+written as a short string ("rockstar/x.mp4@0:42", "rockstar/x.jpg@0.7", "card:SOME TEXT") or as an object with more
+choices: where the subject is ("focus"), a slide across the whole picture ("pan") and a bigger share ("weight"). The
+README lists them all. Everything is checked first, so a missing file or a bad setting stops before anything renders.
 
 Writes short.mp4, voice.wav, captions.ass and log.json to C:\\AI\\gta\\explainers\\<slug>\\<YYYYMMDD-HHMMSS>\\.
 
@@ -40,8 +41,9 @@ FONT_FILE, FONT = HERE / "fonts" / "Anton-Regular.ttf", "Anton"
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 
 W, H, FPS = 1080, 1920, 30
-MIN_TOTAL_S, MAX_TOTAL_S = 55, 75    # outside this the log and the console warn
-DEFAULT_VOICE, DEFAULT_SPEED = "am_puck", 1.18
+MIN_TOTAL_S, MAX_TOTAL_S = 40, 50    # the target runtime; over the top of it warns
+DEFAULT_VOICE, DEFAULT_SPEED = "am_puck", 1.0
+MAX_SPEED = 1.1                      # faster than this warns: the length is fixed by cutting words, not by rushing them
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -69,12 +71,34 @@ COLOURS = {"green": "&H14FF39&", "red": "&H2A2AFF&"}  # ASS colours are blue-gre
 POP = "\\fscx88\\fscy88\\t(0,70,\\fscx106\\fscy106)\\t(70,130,\\fscx100\\fscy100)"
 OPEN_POP = POP + "\\fad(0,120)"
 CARD_COLOUR = "0x12121C"
+# Card markup: | starts a new line, ~words~ get a red bar through them, *words* are green. Anton measured with libass:
+# a capital is 0.5 of the size tall, its middle sits 0.06 of the size below the line's anchor, lines are 0.98 apart, and
+# each glyph's advance is below as a share of the size (0.28 for the rest). The bar is drawn, because libass's own
+# strikeout is a hairline at the height of a lowercase letter, which Anton's tall capitals hide.
+CARD_MARKS, MAX_CARD_LINES = "~*", 3
+CAP_MIDDLE, LINE_STEP = 0.06, 0.98
+GLYPH_WIDTHS = {"M": 0.43, "W": 0.41, "1": 0.195, "J": 0.2, "-": 0.18, **{c: 0.135 for c in "I.,:;'!| "}}
+BAR_HEIGHT, BAR_PAD, BAR_OUTLINE, BAR_TILT = 0.08, 0.1, 6, 3   # of the size, of the size each side, px, degrees
+BAR_DELAY_MS, BAR_GROW_MS = 250, 200                           # the old text shows first, then the bar strikes it
 
 # Timeline.
 LOOP_FRAMES = 45                     # the last 1.5 s shows the first visual again
 MIN_SLOT_FRAMES = 12                 # a visual left with less than this before the loop ending is dropped
-LONG_SLOT_S, LONG_HOLD_S = 3.5, 1.0  # warn: the target is about 2 s per visual, and a long freeze looks stuck
+LONG_SLOT_S, LONG_HOLD_S = 2.5, 1.0  # warn: the target is a new picture every 1.5-2 s, and a long freeze looks stuck
+LONG_PAN_S = 3.5                     # a pan keeps moving, so it may stay up longer
+FAST_PAN = 1.2                       # screen widths a second; faster than this a pan smears into a whip
+MAX_WEIGHT = 5.0
 CLEAN_SEAM_DB = 30                   # a clip's last and first frame must be this alike to loop it; else it holds
+
+# Framing. focus is where the subject is across the picture, 0 (left edge) to 1 (right edge); the 9:16 crop centres on it
+# as far as the picture allows. [x, y] adds how far down it is, 0 (top) to 1 (bottom), so a zoom keeps a face that sits
+# near the top. The names are the middles of the picture's thirds.
+FOCUS_NAMES = {"left": 1 / 6, "center": 0.5, "centre": 0.5, "right": 5 / 6}
+FOCUS_Y_NAMES = {"top": 1 / 6, "middle": 0.5, "center": 0.5, "centre": 0.5, "bottom": 5 / 6}
+PAN_DIRECTIONS = {"right": (0.0, 1.0), "left": (1.0, 0.0)}   # right: from the left edge to the right edge
+SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight"}
+OFF_CENTRE = 0.1                     # a subject further than this from the crop's middle gets zooms only, never a drift
+PAN_BLUR = 0.14                      # a pan's motion blur, as a share of its step per frame: a camera's half-open shutter
 
 # Ken Burns. zoompan moves its window in whole pixels, so the picture is enlarged first and a pixel of the window is
 # about a third of a pixel on screen. Without that the motion visibly shakes.
@@ -124,17 +148,71 @@ def parse_time(text):
     return seconds
 
 
-def parse_visual(raw, root):
-    """One visual as a dict, checked against the real file. ScriptError says what is wrong."""
-    if not isinstance(raw, str) or not raw.strip():
-        raise ScriptError(f"{raw!r} is not a visual")
-    if raw.startswith("card:"):
-        if not raw[5:].strip():
-            raise ScriptError("a card with no text")
-        return {"source": raw, "kind": "card", "text": raw[5:].strip().upper()}
-    name, at = raw, None
-    if "@" in raw and not (root / raw).exists():  # a file name may hold an @ of its own
-        name, _, at = raw.rpartition("@")
+def parse_share(value, names):
+    """A name from names, a number from 0 to 1, or a string holding one; None if it is none of those."""
+    if isinstance(value, str) and value.strip().lower() in names:
+        return names[value.strip().lower()]
+    if isinstance(value, str) and re.fullmatch(r"0(\.\d+)?|1(\.0+)?", value.strip()):
+        return float(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1:
+        return float(value)
+    return None
+
+
+def parse_focus(value, where):
+    """A focus as (across, down), each 0 to 1. Across alone leaves down in the middle."""
+    if isinstance(value, list) and len(value) == 2:
+        x, y = parse_share(value[0], FOCUS_NAMES), parse_share(value[1], FOCUS_Y_NAMES)
+    else:
+        x, y = parse_share(value, FOCUS_NAMES), 0.5
+    if x is None or y is None:
+        raise ScriptError(f"{where}: focus is where the subject is: left, center, right or 0 (left edge) to 1 (right "
+                          "edge), or [across, down] with down top, middle, bottom or 0 (top) to 1 (bottom)")
+    return x, y
+
+
+def card_lines(text):
+    """A card's text as lines of (words, style) pieces, style None, "strike" or "green". ScriptError if the marks don't
+    pair up. Without any mark or |, it is one line and may still be broken in two to fit."""
+    lines = []
+    for raw_line in text.split("|"):
+        pieces, style, current = [], None, ""
+        for c in raw_line:
+            if c in CARD_MARKS:
+                mark = "strike" if c == "~" else "green"
+                if style not in (None, mark):
+                    raise ScriptError(f"card {text!r}: a ~ or * opens inside the other")
+                if current:
+                    pieces.append((current, style))
+                current, style = "", (None if style == mark else mark)
+            else:
+                current += c
+        if style is not None:
+            raise ScriptError(f"card {text!r}: a ~ or * isn't closed on its own line")
+        if current:
+            pieces.append((current, style))
+        pieces = [(t, s) for t, s in pieces if t.strip() or s is None]
+        if not "".join(t for t, _ in pieces).strip():
+            raise ScriptError(f"card {text!r}: a line with no text")
+        lines.append(pieces)
+    if len(lines) > MAX_CARD_LINES:
+        raise ScriptError(f"card {text!r}: at most {MAX_CARD_LINES} lines")
+    return lines
+
+
+def parse_card(text, source, weight):
+    text = text.strip().upper()
+    if not text:
+        raise ScriptError("a card with no text")
+    card_lines(text)
+    visual = {"source": source, "kind": "card", "text": text}
+    if weight != 1.0:
+        visual["weight"] = weight
+    return visual
+
+
+def parse_file(name, at, focus, pan, weight, root, source):
+    """An image or video, checked against the real file. at is a video's start; focus and pan are already read."""
     path = root / name
     if not path.is_file():
         raise ScriptError(f"file not found: {path}")
@@ -145,14 +223,18 @@ def parse_visual(raw, root):
         raise ScriptError(f"{path.name}: {ext or 'no extension'} is not a video or image type this tool handles")
     if picture is None:
         raise ScriptError(f"{path.name}: ffprobe finds no picture in it")
+    size = (int(picture["width"]), int(picture["height"]))
+    shape = {"weight": weight} if weight != 1.0 else {}
+    across, down = focus or (0.5, 0.5)
     if ext in IMAGE_EXTS:
-        focus = 0.5
         if at is not None:
-            focus = float(at) if re.fullmatch(r"0(\.\d+)?|1(\.0+)?", at) else None
-            if focus is None:
-                raise ScriptError(f"{raw}: after an image's @ goes where to frame it, 0 (left edge) to 1 (right edge)")
-        return {"source": raw, "kind": "image", "path": path, "focus": focus,
-                "size": (int(picture["width"]), int(picture["height"]))}
+            raise ScriptError(f"{source}: at is a video's start time; an image has none")
+        if pan is not None and size[0] * H <= size[1] * W:
+            raise ScriptError(f"{source}: pan slides across a wide picture, and this one is no wider than the screen")
+        return {"source": source, "kind": "image", "path": path, "focus": across, "focus_y": down,
+                "pan": pan, "size": size, **shape}
+    if pan is not None:
+        raise ScriptError(f"{source}: pan is for images; a video keeps its own movement")
     if "duration" not in info.get("format", {}):
         raise ScriptError(f"{path.name}: ffprobe can't read its length")
     length = float(info["format"]["duration"])
@@ -160,12 +242,76 @@ def parse_visual(raw, root):
     if at is not None:
         start = parse_time(at)
         if start is None:
-            raise ScriptError(f"{raw}: bad time {at!r}, use 42, 0:42 or 1:02:03")
+            raise ScriptError(f"{source}: bad time {at!r}, use 42, 0:42 or 1:02:03")
     if start >= length:
-        raise ScriptError(f"{raw}: starts at {start:.1f} s but the video is only {length:.1f} s long")
+        raise ScriptError(f"{source}: starts at {start:.1f} s but the video is only {length:.1f} s long")
     frames = str(picture.get("nb_frames", ""))
     frames = int(frames) if frames.isdigit() else round(length * FPS)
-    return {"source": raw, "kind": "video", "path": path, "start": start, "length": length, "frames": frames}
+    return {"source": source, "kind": "video", "path": path, "start": start, "length": length, "frames": frames,
+            "focus": across, "focus_y": down, "size": size, **shape}
+
+
+def parse_visual(raw, root):
+    """One shot as a dict, checked against the real file. ScriptError says what is wrong.
+
+    A string is the short form: "card:TEXT", "video@start" or "image@focus". An object has "file" or "card", and may
+    add "at" (a video's start), "focus", "pan" (an image only, "left" or "right") and "weight"."""
+    if isinstance(raw, dict):
+        return parse_shot_object(raw, root)
+    if not isinstance(raw, str) or not raw.strip():
+        raise ScriptError(f"{raw!r} is not a visual")
+    if raw.startswith("card:"):
+        return parse_card(raw[5:], raw, 1.0)
+    name, at = raw, None
+    if "@" in raw and not (root / raw).exists():  # a file name may hold an @ of its own
+        name, _, at = raw.rpartition("@")
+    if at is not None and Path(name).suffix.lower() in IMAGE_EXTS:
+        try:
+            focus = parse_focus(at, raw)
+        except ScriptError:
+            raise ScriptError(f"{raw}: after an image's @ goes where the subject is: left, center, right or "
+                              "0 (left edge) to 1 (right edge)") from None
+        return parse_file(name, None, focus, None, 1.0, root, raw)
+    return parse_file(name, at, None, None, 1.0, root, raw)
+
+
+def parse_shot_object(raw, root):
+    unknown = sorted(k for k in raw if k not in SHOT_KEYS)
+    if unknown:
+        raise ScriptError(f"{json.dumps(raw)}: unknown setting {', '.join(map(repr, unknown))}")
+    if ("file" in raw) == ("card" in raw):
+        raise ScriptError(f"{json.dumps(raw)}: a shot has a file or a card, one of the two")
+    weight = raw.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 < weight <= MAX_WEIGHT:
+        raise ScriptError(f"{json.dumps(raw)}: weight is its share of the line, a number above 0 and up to {MAX_WEIGHT:g}")
+    weight = float(weight)
+    if "card" in raw:
+        extra = sorted(k for k in raw if k not in {"card", "weight"})
+        if extra:
+            raise ScriptError(f"{json.dumps(raw)}: a card takes only its text and a weight, not {', '.join(extra)}")
+        if not isinstance(raw["card"], str):
+            raise ScriptError(f"{json.dumps(raw)}: card is its text")
+        return parse_card(raw["card"], "card:" + raw["card"].strip(), weight)
+    name = raw["file"]
+    if not isinstance(name, str) or not name.strip():
+        raise ScriptError(f"{json.dumps(raw)}: file is a path such as rockstar/x.jpg")
+    source = name
+    at = raw.get("at")
+    if at is not None:
+        at = str(at)
+        source = f"{name}@{at}"
+    focus = parse_focus(raw["focus"], name) if "focus" in raw else None
+    pan = raw.get("pan")
+    if pan is not None:
+        if pan not in PAN_DIRECTIONS:
+            raise ScriptError(f"{name}: pan is right (from the left edge to the right edge) or left (the other way)")
+        if focus is not None:
+            raise ScriptError(f"{name}: a pan crosses the whole picture, so it takes no focus")
+        source = f"{name} (pan {pan})"
+    elif focus is not None:
+        shown = raw["focus"] if not isinstance(raw["focus"], list) else ",".join(map(str, raw["focus"]))
+        source = f"{source}, focus {shown}" if at is not None else f"{name}@{shown}"
+    return parse_file(name, at, focus, pan, weight, root, source)
 
 
 def word_key(token):
@@ -208,6 +354,11 @@ def load_script(path, root):
     open_card = script.get("open_card")
     if open_card is not None and (not isinstance(open_card, str) or not open_card.strip()):
         problems.append("open_card must be text, or null for none")
+    elif open_card is not None:
+        try:
+            card_lines(open_card.strip().upper())
+        except ScriptError as e:
+            problems.append(f"open_card: {e}")
     music = script.get("music")
     music_path = None
     if music is not None:
@@ -258,8 +409,12 @@ def load_script(path, root):
 
 
 def script_warnings(script):
-    return [f"line {n}: espeak reads ${m} as \"dollar {m}\", so write \"{m} dollars\" instead"
-            for n, line in enumerate(script["lines"], 1) for m in re.findall(r"\$(\d[\d,.]*\d|\d)", line["say"])]
+    warnings = [f"line {n}: espeak reads ${m} as \"dollar {m}\", so write \"{m} dollars\" instead"
+                for n, line in enumerate(script["lines"], 1) for m in re.findall(r"\$(\d[\d,.]*\d|\d)", line["say"])]
+    speed = script.get("speed", DEFAULT_SPEED)
+    if speed > MAX_SPEED:
+        warnings.append(f"speed {speed:g} is faster than {MAX_SPEED:g}: to fit the time, cut words instead")
+    return warnings
 
 
 # --- Voice and word timing ---
@@ -499,11 +654,68 @@ def caption_text(words):
     return f"{{\\fs{size}{POP}}}" + "".join(parts)
 
 
+def title_layout(text):
+    """A title's lines as (text, style) pieces, and the size that fits the widest. Plain text breaks in two by itself
+    when it's too wide; marked text keeps the lines it was given."""
+    lines = card_lines(text)
+    if len(lines) == 1 and all(style is None for _, style in lines[0]):
+        words = text.split()
+        break_at, size = fit_lines(words, TITLE_CHARS, TITLE_SIZE)
+        pieces = [words] if break_at is None else [words[:break_at], words[break_at:]]
+        return [[(" ".join(p), None)] for p in pieces], size
+    tidy = []
+    for line in lines:
+        line = [(t, s) for t, s in line]
+        line[0] = (line[0][0].lstrip(), line[0][1])
+        line[-1] = (line[-1][0].rstrip(), line[-1][1])
+        tidy.append([(t, s) for t, s in line if t])
+    widest = max(text_width("".join(t for t, _ in line)) for line in tidy)
+    return tidy, TITLE_SIZE if widest <= TITLE_CHARS else int(TITLE_SIZE * TITLE_CHARS / widest)
+
+
 def title_text(text, y, pop):
-    words = text.split()
-    break_at, size = fit_lines(words, TITLE_CHARS, TITLE_SIZE)
-    pieces = [words] if break_at is None else [words[:break_at], words[break_at:]]
-    return f"{{\\an5\\pos({CENTRE_X},{y})\\fs{size}{pop}}}" + "\\N".join(escape_ass(" ".join(p)) for p in pieces)
+    lines, size = title_layout(text)
+    paint = lambda t, s: f"{{\\c{COLOURS['green']}}}{escape_ass(t)}{{\\c{WHITE}}}" if s == "green" else escape_ass(t)
+    body = "\\N".join("".join(paint(t, s) for t, s in line) for line in lines)
+    return f"{{\\an5\\pos({CENTRE_X},{y})\\fs{size}{pop}}}" + body
+
+
+def ink_width(text, size):
+    """About how wide Anton draws the text at this size, in pixels: within a few percent, a little over."""
+    return size * sum(GLYPH_WIDTHS.get(c, 0.28) for c in text)
+
+
+def strike_bars(text, y):
+    """The drawing for each crossed-out piece of a title, placed from Anton's measured sizes: the piece's capitals
+    are covered with some to spare on each side, and the bar never leaves the safe area. Each grows from its left end
+    once the old text has been seen."""
+    lines, size = title_layout(text)
+    bars = []
+    for i, line in enumerate(lines):
+        plain = "".join(t for t, _ in line)
+        left_edge, done = CENTRE_X - ink_width(plain, size) / 2, ""
+        middle = y + (i - (len(lines) - 1) / 2) * LINE_STEP * size + CAP_MIDDLE * size
+        for t, style in line:
+            if style == "strike":
+                lead = t[:len(t) - len(t.lstrip())]
+                left = max(left_edge + ink_width(done + lead, size) - BAR_PAD * size, SAFE_LEFT)
+                right = min(left_edge + ink_width(done + t.rstrip(), size) + BAR_PAD * size, W - SAFE_RIGHT)
+                width, height = right - left, BAR_HEIGHT * size
+                bars.append(f"{{\\an4\\pos({left:.0f},{middle:.0f})\\org({left + width / 2:.0f},{middle:.0f})"
+                            f"\\frz{BAR_TILT}\\bord{BAR_OUTLINE}\\shad0"
+                            f"\\c{COLOURS['red']}\\3c&H000000&\\fscx0\\t({BAR_DELAY_MS},{BAR_DELAY_MS + BAR_GROW_MS},"
+                            f"\\fscx100)\\p1}}m 0 0 l {width:.0f} 0 {width:.0f} {height:.0f} 0 {height:.0f}")
+            done += t
+    return bars
+
+
+def title_events(layer, start, end, text, y, pop):
+    """A title and the bars that cross out its ~marked~ pieces. They share its layer and come after it, so libass draws
+    them on top; everything here has a \\pos, so nothing gets pushed aside."""
+    fade = "\\fad(0,120)" if "\\fad" in pop else ""
+    events = [dialogue(layer, start, end, "Title", title_text(text, y, pop))]
+    return events + [dialogue(layer, start, end, "Title", bar.replace("\\p1}", fade + "\\p1}", 1))
+                     for bar in strike_bars(text, y)]
 
 
 def dialogue(layer, start, end, style, text):
@@ -537,25 +749,31 @@ def caption_events(words, total_s):
 
 
 def card_events(slots, open_card):
-    events = [dialogue(1, 0, OPEN_CARD_S, "Title", title_text(open_card, OPEN_CARD_Y, OPEN_POP))] if open_card else []
+    """Cards on layer 0, the open card on 1, both under the captions on 2."""
+    events = title_events(1, 0, OPEN_CARD_S, open_card, OPEN_CARD_Y, OPEN_POP) if open_card else []
     for slot in slots:
         if slot["visual"]["kind"] == "card":
-            events.append(dialogue(0, slot["start"] / FPS, slot["end"] / FPS, "Title",
-                                   title_text(slot["visual"]["text"], CARD_Y, POP)))
+            events += title_events(0, slot["start"] / FPS, slot["end"] / FPS, slot["visual"]["text"], CARD_Y, POP)
     return events
 
 
 # --- The timeline ---
 
 def plan_slots(lines, line_starts, total_frames):
-    """Every visual's frames, in order. Cuts come from absolute times, so rounding never adds up to a drift. The loop
-    ending takes the last frames of the voice's own time: adding them after it would make the video longer than the voice."""
+    """Every visual's frames, in order. A line's time is shared by its visuals' weights (1 each unless set). Cuts come
+    from absolute times, so rounding never adds up to a drift. The loop ending takes the last frames of the voice's own
+    time: adding them after it would make the video longer than the voice."""
     slots = []
     for n, line in enumerate(lines):
         a = round(line_starts[n] * FPS)
         b = round(line_starts[n + 1] * FPS) if n + 1 < len(lines) else total_frames
+        weights = [v.get("weight", 1.0) for v in line["visuals"]]
+        edges = [0.0]
+        for w in weights:
+            edges.append(edges[-1] + w)
+        cut = lambda share: a + math.floor((b - a) * share / edges[-1] + 1e-9)
         for i, visual in enumerate(line["visuals"]):
-            start, end = a + (b - a) * i // len(line["visuals"]), a + (b - a) * (i + 1) // len(line["visuals"])
+            start, end = cut(edges[i]), cut(edges[i + 1])
             if end > start:
                 slots.append({"line": n, "start": start, "end": end, "visual": visual})
     tail = total_frames - LOOP_FRAMES
@@ -584,37 +802,90 @@ def motion_kinds(rng):
         last = round_[-1]
 
 
-def make_motion(kind, speed, frames):
-    """A move as the window's zoom and how far across its free room it sits (0 left, 1 right), at start and end. A pan
-    holds a slight zoom, which gives it room on any picture, even one with no width to spare."""
+def crop_box(visual):
+    """The 9:16 part of an image that fills the screen, centred on its focus as far as the picture allows: x, y, width,
+    height, and where the subject sits across and down that part (0-1)."""
+    iw, ih = visual["size"]
+    fx, fy = visual["focus"], visual.get("focus_y", 0.5)
+    if iw * H > ih * W:
+        cw, ch = round(ih * W / H), ih
+    else:
+        cw, ch = iw, round(iw * H / W)
+    x = min(max(round(fx * iw - cw / 2), 0), iw - cw)
+    y = min(max(round(fy * ih - ch / 2), 0), ih - ch)
+    return x, y, cw, ch, (fx * iw - x) / cw, (fy * ih - y) / ch
+
+
+def make_motion(kind, speed, frames, subject=0.5, middle=0.5):
+    """A move as the window's zoom and where its middle is across the crop (0 left, 1 right), at start and end, and how
+    far down (middle, which stays put). A zoom keeps the subject in the middle as far as the crop allows. A drift
+    holds a slight zoom, which gives it room on any picture, even one with no width to spare, and slides from one side
+    of that room to the other."""
     seconds = max(frames - 1, 1) / FPS
     if kind.startswith("zoom"):
         amount = min(ZOOM_PER_S * speed * seconds, ZOOM_MAX)
         zoom = (1.0, 1.0 + amount) if kind == "zoom_in" else (1.0 + amount, 1.0)
-        return {"kind": kind, "speed": round(speed, 3), "zoom": zoom, "across": (0.5, 0.5)}
+        return {"kind": kind, "speed": round(speed, 3), "zoom": zoom, "centre": (subject, subject), "middle": middle}
     travel = min(PAN_PX_PER_S * speed * seconds, PAN_MAX_PX)
     fixed = W / (W - travel)
+    half = 0.5 / fixed
     return {"kind": kind, "speed": round(speed, 3), "zoom": (fixed, fixed),
-            "across": (1.0, 0.0) if kind == "pan_left" else (0.0, 1.0)}
+            "centre": (1.0 - half, half) if kind == "pan_left" else (half, 1.0 - half), "middle": middle}
+
+
+def make_reveal(visual, direction):
+    """A pan across the whole width of a wide picture, at full height, from one edge to the other at a steady speed.
+    centre is across the whole picture here, not the crop."""
+    share = crop_box(visual)[2] / visual["size"][0]
+    a, b = PAN_DIRECTIONS[direction]
+    edge = lambda f: share / 2 + f * (1 - share)
+    return {"kind": f"reveal_{direction}", "speed": 1.0, "zoom": (1.0, 1.0), "centre": (edge(a), edge(b)), "wide": True}
 
 
 def return_motion(opening, opening_frames, frames):
     """The opening's first frames played backwards, so the Short's last frame is exactly its first."""
     p = min((frames - 1) / max(opening_frames - 1, 1), 1.0)
     at = lambda pair: pair[0] + (pair[1] - pair[0]) * p
-    return {"kind": "back_to_first_frame", "speed": opening["speed"],
-            "zoom": (at(opening["zoom"]), opening["zoom"][0]), "across": (at(opening["across"]), opening["across"][0])}
+    motion = {"kind": "back_to_first_frame", "speed": opening["speed"],
+              "zoom": (at(opening["zoom"]), opening["zoom"][0]), "centre": (at(opening["centre"]), opening["centre"][0]),
+              "middle": opening.get("middle", 0.5)}
+    if opening.get("wide"):
+        motion["wide"] = True
+    return motion
 
 
 def assign_motions(slots, seed):
-    """A different move on each image, seeded so a re-render of the same title looks the same."""
+    """A different move on each image, seeded so a re-render of the same title looks the same. A shot with a pan gets
+    its reveal. A subject well off the crop's middle (a focus near the picture's edge) gets a zoom, never a drift, which
+    could slide it out of the frame."""
     rng = random.Random(seed)
     kinds = motion_kinds(rng)
+    last = None
     for slot in slots:
-        if slot["visual"]["kind"] == "image" and not slot.get("loop_tail"):
-            slot["motion"] = make_motion(next(kinds), rng.uniform(*SPEED_RANGE), slot["frames"])
+        visual = slot["visual"]
+        if visual["kind"] != "image" or slot.get("loop_tail"):
+            continue
+        if visual.get("pan"):
+            slot["motion"] = make_reveal(visual, visual["pan"])
+            continue
+        kind = next(kinds)
+        if kind == last:  # only possible after a swap below
+            kind = next(kinds)
+        speed = rng.uniform(*SPEED_RANGE)
+        subject, middle = crop_box(visual)[4:]
+        if kind.startswith("pan") and abs(subject - 0.5) > OFF_CENTRE:
+            kind = "zoom_out" if last == "zoom_in" else "zoom_in"
+        slot["motion"] = make_motion(kind, speed, slot["frames"], subject, middle)
+        last = kind
     if slots[-1].get("loop_tail") and slots[0]["visual"]["kind"] == "image":
         slots[-1]["motion"] = return_motion(slots[0]["motion"], slots[0]["frames"], slots[-1]["frames"])
+
+
+def pan_speed(slot):
+    """How fast a reveal moves, in screen widths a second."""
+    visual, motion = slot["visual"], slot["motion"]
+    widths = abs(motion["centre"][1] - motion["centre"][0]) * visual["size"][0] / crop_box(visual)[2]
+    return widths / (max(slot["frames"] - 1, 1) / FPS)
 
 
 @functools.lru_cache(maxsize=None)
@@ -656,9 +927,13 @@ def slot_warnings(slots, lines, last_line_frames):
     warnings = []
     for slot in slots:
         seconds, visual = slot["frames"] / FPS, slot["visual"]
-        if seconds > LONG_SLOT_S and not slot.get("loop_tail"):
-            warnings.append(f"line {slot['line'] + 1}: {visual['source']} stays up {seconds:.1f} s; the target is about "
-                            "2 s per visual, so give this line another one")
+        panning = bool(visual.get("pan")) and not slot.get("loop_tail")
+        if seconds > (LONG_PAN_S if panning else LONG_SLOT_S) and not slot.get("loop_tail"):
+            warnings.append(f"line {slot['line'] + 1}: {visual['source']} stays up {seconds:.1f} s; the target is a new "
+                            "picture every 1.5-2 s, so give this line another shot")
+        if panning and pan_speed(slot) > FAST_PAN:
+            warnings.append(f"line {slot['line'] + 1}: {visual['source']} crosses {pan_speed(slot):.1f} screen widths a "
+                            f"second, faster than {FAST_PAN:g}; give it a bigger weight")
         if slot.get("fill") == "hold":
             held = seconds - (visual["length"] - slot["start_s"])
             if held > LONG_HOLD_S:
@@ -672,24 +947,40 @@ def slot_warnings(slots, lines, last_line_frames):
 # --- Rendering ---
 
 def image_filter(visual, motion, frames):
-    """Crop to 9:16 at the framing asked for, enlarge, then move a window over it."""
-    iw, ih = visual["size"]
-    if iw * H > ih * W:
-        crop_w, crop_h = round(ih * W / H), ih
-        x, y = round((iw - crop_w) * visual["focus"]), 0
-    else:
-        crop_w, crop_h = iw, round(iw * H / W)
-        x, y = 0, (ih - crop_h) // 2
+    """Crop to 9:16 around the focus, enlarge, then move a window over it. A reveal pans over the whole picture instead."""
+    if motion.get("wide"):
+        return reveal_filter(visual, motion, frames)
+    x, y, crop_w, crop_h, _, _ = crop_box(visual)
     p = f"on/{max(frames - 1, 1)}"
-    (z0, z1), (a0, a1) = motion["zoom"], motion["across"]
+    (z0, z1), (c0, c1), middle = motion["zoom"], motion["centre"], motion.get("middle", 0.5)
     return (f"crop={crop_w}:{crop_h}:{x}:{y},scale={W * CANVAS_SCALE}:{H * CANVAS_SCALE}:flags=lanczos:{COLOUR_OUT},"
-            f"format=yuv444p,zoompan=z='{z0:.5f}+({z1 - z0:.5f})*{p}':x='({a0:.5f}+({a1 - a0:.5f})*{p})*(iw-iw/zoom)':"
-            f"y='0.5*(ih-ih/zoom)':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p,setsar=1")
+            f"format=yuv444p,zoompan=z='{z0:.5f}+({z1 - z0:.5f})*{p}':"
+            f"x='clip(({c0:.5f}+({c1 - c0:.5f})*{p})*iw-iw/zoom/2,0,iw-iw/zoom)':"
+            f"y='clip({middle:.5f}*ih-ih/zoom/2,0,ih-ih/zoom)':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p,setsar=1")
 
 
-def video_filter():
-    """Fill the frame, cropping the sides, never a blurred background. tpad holds the last frame if the file runs out."""
-    return (f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},crop={W}:{H},"
+def reveal_filter(visual, motion, frames):
+    """A pan over the whole picture. zoompan can't do it: its window keeps the picture's own shape. So the picture is
+    enlarged to 3x the screen's height once, that one frame repeats, a 9:16 window slides across it a whole number of
+    enlarged pixels per frame (a third of a screen pixel, too fine to see as a shake), and each frame is scaled down.
+    A pan moves tens of pixels a frame, so a sideways blur the size of a camera's half-open shutter keeps it smooth."""
+    iw, ih = visual["size"]
+    tall = H * CANVAS_SCALE
+    wide = round(iw * tall / ih / 2) * 2
+    window = W * CANVAS_SCALE
+    (c0, c1), steps = motion["centre"], max(frames - 1, 1)
+    x = f"clip(({c0:.6f}+({c1 - c0:.6f})*n/{steps})*{wide}-{window // 2},0,{wide - window})"
+    blur = PAN_BLUR * abs(c1 - c0) * wide / steps / CANVAS_SCALE
+    blur = f",gblur=sigma={blur:.2f}:sigmaV=0:steps=2" if blur >= 0.3 else ""
+    return (f"scale={wide}:{tall}:flags=lanczos:{COLOUR_OUT},format=yuv444p,loop=loop=-1:size=1,setpts=N/{FPS}/TB,"
+            f"crop={window}:{tall}:x='{x}':y=0,scale={W}:{H}:flags=lanczos{blur},format=yuv420p,setsar=1")
+
+
+def video_filter(focus=0.5, focus_y=0.5):
+    """Fill the frame, cropping around the focus, never a blurred background. tpad holds the last frame if the file
+    runs out."""
+    return (f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
+            f"crop={W}:{H}:x='clip({focus:.4f}*iw-{W // 2},0,iw-{W})':y='clip({focus_y:.4f}*ih-{H // 2},0,ih-{H})',"
             "setsar=1,format=yuv420p,tpad=stop=-1:stop_mode=clone")
 
 
@@ -713,12 +1004,13 @@ def render_segment(slot, out, encode):
     if visual["kind"] == "card":
         inputs, picture = ["-f", "lavfi", "-i", f"color=c={CARD_COLOUR}:s={W}x{H}:r={FPS}"], "setsar=1,format=yuv420p"
     elif visual["kind"] == "image":
-        inputs = ["-f", "image2", "-pattern_type", "none", "-i", visual["path"]]
+        rate = ["-framerate", FPS] if slot["motion"].get("wide") else []  # the repeated frame's rate is the input's
+        inputs = ["-f", "image2", "-pattern_type", "none", *rate, "-i", visual["path"]]
         picture = image_filter(visual, slot["motion"], frames)
     else:
         inputs = ["-stream_loop", "-1"] if slot["fill"] == "loop" else []
         inputs += ["-ss", f"{slot['start_s']:.3f}", "-i", visual["path"]]
-        picture = video_filter()
+        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5))
     ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
 
 
@@ -776,9 +1068,7 @@ def render(script_path, root, out_root):
         plan_videos(slots)
         last_line = sum(s["frames"] for s in slots if s["line"] == len(script["lines"]) - 1 and not s.get("loop_tail"))
         warnings += slot_warnings(slots, script["lines"], last_line)
-        if not MIN_TOTAL_S <= voice_s <= MAX_TOTAL_S:
-            warnings.append(f"the Short is {voice_s:.1f} s; the target is 60-70 s, and under {MIN_TOTAL_S} or over "
-                            f"{MAX_TOTAL_S} is too far off")
+        warnings += runtime_warnings(voice_s)
 
         events = card_events(slots, script["open_card"]) + caption_events(words, total_s)
         (run_dir / "captions.ass").write_text(ass_document(events), encoding="utf-8")
@@ -822,27 +1112,61 @@ def render(script_path, root, out_root):
     def at_second(second):
         frame = min(second * FPS, total_frames - 1)
         return next(s["visual"]["source"] for s in slots if s["start"] <= frame < s["end"])
+    shots = shot_stats(slots)
     log = {"script": str(script_path), "title": script["title"], "voice": script["voice"], "speed": script["speed"],
            "encoder": encoder, "timing_method": method,
            "durations": {"voice_s": round(voice_s, 3), "video_s": round(video_s, 3), "frames": total_frames,
+                         "target_s": [MIN_TOTAL_S, MAX_TOTAL_S],
                          "lines": [{"line": n + 1, "start_s": round(s, 3)} for n, s in enumerate(line_starts)]},
+           "shots": shots,
            "loudness": {"voice_lufs": voice_lufs, "final_lufs": final_lufs, "final_true_peak_db": final_peak,
                         "music_gain_db": music_gain},
            "longest_quiet_s": round(quiet, 2), "words": len(words),
            "visuals": [{"line": s["line"] + 1, "source": s["visual"]["source"], "start_s": round(s["start"] / FPS, 3),
                         "seconds": round(s["frames"] / FPS, 3), "kind": s["visual"]["kind"],
+                        "focus": [s["visual"]["focus"], s["visual"]["focus_y"]] if "focus" in s["visual"] else None,
+                        "pan": s["visual"].get("pan"),
+                        "weight": s["visual"].get("weight", 1.0),
                         "motion": s["motion"]["kind"] if "motion" in s else None,
-                        "motion_speed": s["motion"]["speed"] if "motion" in s else None, "fill": s.get("fill"),
-                        "loop_tail": bool(s.get("loop_tail"))} for s in slots],
+                        "motion_speed": s["motion"]["speed"] if "motion" in s else None,
+                        "pan_widths_per_s": round(pan_speed(s), 2) if s.get("motion", {}).get("wide") else None,
+                        "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail"))} for s in slots],
            "per_second": [{"second": sec, "visual": at_second(sec)} for sec in range(math.ceil(total_s))],
            "warnings": warnings, "render_s": timing}
     (run_dir / "log.json").write_text(json.dumps(log, indent=2, ensure_ascii=False), encoding="utf-8")
 
     print(f"Run folder: {run_dir}")
-    print(f"  {voice_s:.1f} s, {len(slots)} visuals, {final_lufs:.1f} LUFS, made in {timing['total']:.0f} s with {encoder}")
+    print(f"  Runtime {video_s:.1f} s ({runtime_note(video_s)})")
+    print(f"  Shots: {shots['count']} ({shots['own']} plus the {LOOP_FRAMES / FPS:.1f} s loop ending), "
+          f"average {shots['average_s']:.2f} s, longest {shots['longest_s']:.2f} s")
+    print(f"  {final_lufs:.1f} LUFS, voice speed {script['speed']:g}, made in {timing['total']:.0f} s with {encoder}")
     for warning in warnings:
         print(f"  WARNING: {warning}")
     return run_dir
+
+
+def shot_stats(slots):
+    """How many shots there are and how long they stay up. The average and longest leave out the loop ending, which is
+    always 1.5 s and repeats the first shot."""
+    own = [s["frames"] / FPS for s in slots if not s.get("loop_tail")]
+    return {"count": len(slots), "own": len(own), "average_s": round(sum(own) / len(own), 2) if own else 0.0,
+            "longest_s": round(max(own), 2) if own else 0.0}
+
+
+def runtime_note(seconds):
+    if seconds > MAX_TOTAL_S:
+        return f"over the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target by {seconds - MAX_TOTAL_S:.1f} s"
+    if seconds < MIN_TOTAL_S:
+        return f"target {MIN_TOTAL_S}-{MAX_TOTAL_S} s: {MIN_TOTAL_S - seconds:.1f} s under, which is fine"
+    return f"inside the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target"
+
+
+def runtime_warnings(seconds):
+    """Over the target warns: a long Short loses people. Under it doesn't."""
+    if seconds > MAX_TOTAL_S:
+        return [f"the Short is {seconds:.1f} s, over the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target: cut words rather than "
+                f"speed the voice past {MAX_SPEED:g}"]
+    return []
 
 
 def main():

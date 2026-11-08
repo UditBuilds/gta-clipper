@@ -1,5 +1,6 @@
-"""Checks for explainer.py: the script checks, word timing, captions, the timeline, Ken Burns and short clips on small
-made-up files, then two real renders of a 3-line script using ffmpeg-made test videos and a test image.
+"""Checks for explainer.py: the script checks, word timing, captions, the timeline, Ken Burns, focus, pans, card marks
+and short clips on small made-up files, then three real renders of short scripts using ffmpeg-made test videos and
+test images.
 
 The test videos carry a loud 13.5 kHz tone, which a voice at Kokoro's 24 kHz can't contain (it stops at 12 kHz), so
 any of that tone in the Short is game audio that got through. Their colours avoid the caption colours for the same
@@ -90,6 +91,11 @@ def assets():
                "drawbox=x=1420:y=0:w=500:h=ih:color=0xFFFFFF:t=fill,"
                "drawbox=x=1060:y=300:w=40:h=40:color=0xFFFFFF:t=fill", "-frames:v", "1", ROOT / "shot.png")
     run_ffmpeg("-f", "lavfi", "-i", f"sine=f={MUSIC_HZ}:r=48000:d=2,volume=0.5", "-c:a", "pcm_s16le", ROOT / "music.wav")
+    # A grey ramp, black at the left edge to white at the right, so a frame's mean brightness says where a pan is.
+    run_ffmpeg("-f", "lavfi", "-i", "color=black:s=1920x1080:d=0.04", "-vf",
+               "format=rgb24,geq=r='X*255/(W-1)':g='X*255/(W-1)':b='X*255/(W-1)'", "-frames:v", "1", ROOT / "ramp.png")
+    # A picture narrower than the screen, which can't pan.
+    run_ffmpeg("-f", "lavfi", "-i", f"color=c={hexcolour(AMBER)}:s=800x1600:d=0.04", "-frames:v", "1", ROOT / "tall.png")
     return True
 
 
@@ -170,6 +176,43 @@ def every_problem_stops_before_rendering():
 
 
 @check
+def shot_objects_are_read():
+    """the object form: focus by name, number or [across, down], a video's at with a focus, a pan, a weight, a marked card"""
+    assets()
+    a = ex.parse_visual({"file": "shot.png", "focus": "left"}, ROOT)
+    b = ex.parse_visual({"file": "shot.png", "focus": [0.7, "top"], "weight": 2}, ROOT)
+    c = ex.parse_visual({"file": "b.mp4", "at": "0:02", "focus": 0.3}, ROOT)
+    d = ex.parse_visual({"file": "shot.png", "pan": "left"}, ROOT)
+    e = ex.parse_visual({"card": "~nov 12~|*nov 10*", "weight": 1.5}, ROOT)
+    f = ex.parse_visual("shot.png@right", ROOT)
+    return (a["focus"] == 1 / 6 and a["focus_y"] == 0.5 and b["focus"] == 0.7 and b["focus_y"] == 1 / 6 and b["weight"] == 2
+            and c["kind"] == "video" and c["start"] == 2 and c["focus"] == 0.3 and d["pan"] == "left" and "weight" not in d
+            and e == {"source": "card:~nov 12~|*nov 10*", "kind": "card", "text": "~NOV 12~|*NOV 10*", "weight": 1.5}
+            and f["focus"] == 5 / 6)
+
+
+@check
+def bad_shots_stop_before_rendering():
+    """an unknown setting, a file and a card together, a pan on a video, on a narrow picture or with a focus, a bad focus or weight, an image with at, and card marks that don't pair up: all listed at once, exit 2, nothing written"""
+    assets()
+    out = ROOT / "bad_shots_out"
+    bad = [{"file": "shot.png", "zoom": 2}, {"file": "shot.png", "card": "X"}, {"file": "b.mp4", "pan": "left"},
+           {"file": "tall.png", "pan": "right"}, {"file": "shot.png", "pan": "right", "focus": 0.2},
+           {"file": "shot.png", "focus": 1.5}, {"file": "shot.png", "focus": [0.5, "up"]}, {"file": "shot.png", "weight": 0},
+           {"file": "shot.png", "at": "0:01"}, {"card": "~NOV 12|NOV 10~"}, {"card": "A|B|C|D"}, {"card": "X", "focus": 0.5},
+           {"file": "shot.png", "pan": "up"}]
+    script = write_script("bad_shots.json", title="Bad shots", lines=[{"say": "One two three.", "visuals": bad}])
+    r = run_tool(script, out)
+    wanted = ["unknown setting 'zoom'", "a file or a card", "pan is for images", "no wider than the screen",
+              "takes no focus", "focus is where the subject is", "weight is its share", "an image has none",
+              "isn't closed on its own line", "at most 3 lines", "a card takes only", "pan is right"]
+    missing = [w for w in wanted if w not in r.stderr]
+    if missing:
+        print(f"       missing from the errors: {missing}")
+    return r.returncode == 2 and not missing and r.stderr.count("line 1:") >= len(bad) and not out.exists()
+
+
+@check
 def bad_json_and_bad_settings_stop():
     """not JSON, a Notepad byte order mark is fine, a speed out of range and a missing script are clear errors"""
     assets()
@@ -189,6 +232,16 @@ def dollar_amounts_warn():
     script = {"lines": [{"say": "It costs $70 today."}, {"say": "Seventy dollars."}]}
     warnings = ex.script_warnings(script)
     return len(warnings) == 1 and "70 dollars" in warnings[0]
+
+
+@check
+def speed_and_length_warn():
+    """a voice faster than 1.1 warns (1.1 itself doesn't); a Short over 50 s warns, 40-50 s and under 40 s don't"""
+    fast = ex.script_warnings({"speed": 1.18, "lines": []})
+    edge = ex.script_warnings({"speed": 1.1, "lines": []})
+    return (len(fast) == 1 and "faster than 1.1" in fast[0] and not edge and ex.runtime_warnings(50.5)
+            and "over" in ex.runtime_warnings(50.5)[0] and not ex.runtime_warnings(45) and not ex.runtime_warnings(37.6)
+            and "under" in ex.runtime_note(37.6) and "inside" in ex.runtime_note(45) and "over" in ex.runtime_note(51))
 
 
 # --- Word timing ---
@@ -259,12 +312,13 @@ def text_stays_in_the_safe_area():
     """the widest captions, open cards and cards, drawn in Anton, stay out of Shorts' top, bottom, left and right zones (real pixels)"""
     captions = [["WWWWWWWWWWWWWWWW"], ["MMMM", "WWWW", "MMMM", "WWWW"], ["CONGRATULATIONS,", "EVERYBODY"], ["212", "GIGABYTES"],
                 ["GALLERY", "ALREADY", "SHOWS", "YOU"], ["ABSOLUTELY-UNBELIEVABLE-THING"]]
-    titles = ["EVERY PLACE IN GTA 6", "WWWWWWWWWWWWW", "THE LONGEST WAIT IN THE WHOLE SERIES", "13 YEARS"]
+    titles = ["EVERY PLACE IN GTA 6", "WWWWWWWWWWWWW", "THE LONGEST WAIT IN THE WHOLE SERIES", "13 YEARS",
+              "~NOV 12~|*NOV 10*", "*NOV 10*|12 AM LOCAL", "~WWWWWWWWWWWWWWWW~", "MMMM|~WWWWWWWWWWWW~|*MMMMMMMMMMMMM*"]
     events = [ex.dialogue(2, i, i + 1, "Caption", ex.caption_text([fake_word(w) for w in c])) for i, c in enumerate(captions)]
     at = len(events)
     for y in (ex.OPEN_CARD_Y, ex.CARD_Y):
         for t in titles:
-            events.append(ex.dialogue(1, at, at + 1, "Title", ex.title_text(t, y, ex.POP)))
+            events += ex.title_events(1, at, at + 1, t, y, ex.POP)
             at += 1
     folder = ROOT / "safe"
     folder.mkdir(exist_ok=True)
@@ -321,7 +375,8 @@ def tiny_leftover_joins_the_loop_ending():
 def motions_vary_and_repeat_exactly():
     """all four moves appear, never the same twice running, speeds differ, and the same title gives the same plan"""
     def plan(seed):
-        slots = [{"visual": {"kind": "image", "source": str(i)}, "frames": 60} for i in range(16)]
+        slots = [{"visual": {"kind": "image", "source": str(i), "size": (1920, 1080), "focus": 0.5}, "frames": 60}
+                 for i in range(16)]
         ex.assign_motions(slots, seed)
         return [(s["motion"]["kind"], s["motion"]["speed"]) for s in slots]
     one, kinds = plan("title"), [k for k, _ in plan("title")]
@@ -374,10 +429,158 @@ def image_loop_ending_lands_on_the_first_frame():
 @check
 def framing_picks_the_part_of_the_photo():
     """@0 shows the photo's left part and @1 its right part; both still fill the frame"""
-    motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (1.0, 1.0), "across": (0.5, 0.5)}
+    motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (1.0, 1.0), "centre": (0.5, 0.5)}
     left = frame_number(render_motion(motion, 2, "shot.png@0"), 0)
     right = frame_number(render_motion(motion, 2, "shot.png@1"), 0)
     return count_near(left, (0, 229, 255)) > W * H * 0.5 and count_near(right, (255, 255, 255)) > W * H * 0.5
+
+
+def still_of(visual, zoom=1.0):
+    """The first frame of an image shot held at this zoom, centred the way assign_motions would centre a zoom."""
+    subject, middle = ex.crop_box(visual)[4:]
+    motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (zoom, zoom), "centre": (subject, subject), "middle": middle}
+    out = ROOT / "still.mp4"
+    ex.render_segment({"visual": visual, "frames": 2, "motion": motion}, out, ex.pick_encoder()[1])
+    return frame_number(out, 0)
+
+
+@check
+def focus_centres_the_subject():
+    """a focus on the white square's x puts it in the middle of the frame; through a 1.25 zoom, [x, top], the middle and [x, bottom] hold the window at the top, middle and bottom of the picture; near the edge the crop stops at the edge"""
+    assets()
+    on_marker = still_of(ex.parse_visual({"file": "shot.png", "focus": 1080 / 1920}, ROOT))
+    left, right, _ = marker_box(on_marker)
+    middle = (left + right) / 2
+    # The square is at y 300-340 of 1080. A 1.25 zoom keeps 864 rows: 0-864 at the top, 108-972 in the middle and
+    # 216-1080 at the bottom, so on screen (x 1920/864) the square spans 667-756, 427-516 and 187-276.
+    spans = {}
+    for name, down in (("top", "top"), ("middle", "middle"), ("bottom", 1.0)):
+        rows = np.nonzero(still_of(ex.parse_visual({"file": "shot.png", "focus": [1080 / 1920, down]}, ROOT), 1.25)
+                          .min(axis=2) > 225)[0]
+        spans[name] = (int(rows.min()), int(rows.max()))
+    edge = still_of(ex.parse_visual({"file": "shot.png", "focus": 0.02}, ROOT))
+    expected = {"top": (667, 756), "middle": (427, 516), "bottom": (187, 276)}
+    print(f"       square's middle at x {middle:.0f} (frame middle 540); rows at 1.25 zoom {spans}, expected {expected}")
+    return (abs(middle - 540) <= 6 and all(abs(spans[k][i] - expected[k][i]) <= 8 for k in expected for i in (0, 1))
+            and count_near(edge, (0, 229, 255)) > W * H * 0.5)
+
+
+@check
+def video_focus_moves_the_crop():
+    """a video with focus 0 shows its left edge (a magenta bar there), focus 1 its right edge, and the centre neither"""
+    assets()
+    def first_frame(focus):
+        v = ex.parse_visual({"file": "a.mp4", "focus": focus}, ROOT)
+        out = ROOT / f"vfocus_{focus}.mp4"
+        ex.render_segment({"visual": v, "frames": 3, "start_s": 0.0, "fill": "play"}, out, ex.pick_encoder()[1])
+        return frame_number(out, 0)
+    magenta = lambda pic: (count_near(pic[:, :W // 2], (255, 0, 255), 40), count_near(pic[:, W // 2:], (255, 0, 255), 40))
+    l, c, r = magenta(first_frame(0)), magenta(first_frame(0.5)), magenta(first_frame(1))
+    print(f"       magenta pixels (left half, right half): focus 0 {l}, 0.5 {c}, 1 {r}")
+    return l[0] > W * H * 0.3 and l[1] == 0 and r[1] > W * H * 0.3 and r[0] == 0 and c == (0, 0)
+
+
+def pan_positions(motion, frames):
+    """Where the window's left edge is in the ramp picture on each frame, in its pixels, from the mean brightness."""
+    v = ex.parse_visual({"file": "ramp.png", "pan": "right"}, ROOT)
+    out = ROOT / f"pan_{motion['kind']}_{frames}.mp4"
+    ex.render_segment({"visual": v, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])
+    raw = subprocess.run([FFMPEG, "-v", "error", "-i", str(out), "-vf", "scale=270:480:flags=area", "-f", "rawvideo",
+                          "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    rgb = np.frombuffer(raw, np.uint8).reshape(-1, 480, 270, 3).astype(float)
+    # The window is 1080/1920 x 1080 = 607.5 ramp pixels wide, so its mean is the ramp's value at its left edge + 303.75.
+    return rgb.mean(axis=(1, 2, 3)) * 1919 / 255 - 607.5 / 2, len(rgb)
+
+
+@check
+def pan_slides_evenly_edge_to_edge():
+    """a pan right on a real render starts at the left edge, ends at the right edge, and moves the same distance every frame (no stall, no jump); a pan left does the reverse"""
+    assets()
+    v = ex.parse_visual({"file": "ramp.png", "pan": "right"}, ROOT)
+    right, n = pan_positions(ex.make_reveal(v, "right"), 66)
+    left, _ = pan_positions(ex.make_reveal(v, "left"), 66)
+    steps = np.diff(right)
+    # Brightness comes back a level or so darker after the trip through video, so positions read about 10 px low at
+    # both ends alike; what must hold is the whole 1312.5 px of travel, the same ends both ways, and an even step.
+    print(f"       pan right: {n} frames, from x {right[0]:.1f} to {right[-1]:.1f} ({right[-1] - right[0]:.1f} of the 1312.5 "
+          f"px there is), step {steps.mean():.2f} px, spread {steps.min():.2f}-{steps.max():.2f}; pan left from "
+          f"{left[0]:.1f} to {left[-1]:.1f}")
+    return (n == 66 and abs(right[-1] - right[0] - 1312.5) < 3 and abs(right[0]) < 15 and steps.min() > 0
+            and steps.max() - steps.min() < 1.0 and abs(left[0] - right[-1]) < 1 and abs(left[-1] - right[0]) < 1)
+
+
+@check
+def pan_opening_loops_back():
+    """when the first shot is a pan, the loop ending slides back and its last frame is the Short's first"""
+    assets()
+    v = ex.parse_visual({"file": "shot.png", "pan": "right"}, ROOT)
+    opening = ex.make_reveal(v, "right")
+    first = still_frame(v, opening, 66, 0)
+    tail = ex.return_motion(opening, 66, 45)
+    last = still_frame(v, tail, 45, 44)
+    diff = float(np.abs(first - last).mean())
+    print(f"       mean difference between the first and the last frame: {diff:.2f} of 255")
+    return tail.get("wide") and diff < 2.0
+
+
+def still_frame(visual, motion, frames, n):
+    out = ROOT / f"seg_{motion['kind']}_{frames}.mp4"
+    ex.render_segment({"visual": visual, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])
+    return frame_number(out, n)
+
+
+@check
+def weights_share_a_line():
+    """weights 1, 2, 1 split a 4 s line 1 s, 2 s, 1 s, and no weight means an even split as before"""
+    v = lambda name, w=1.0: {"source": name, "kind": "card", "text": name, **({"weight": w} if w != 1.0 else {})}
+    weighted = ex.plan_slots([{"visuals": [v("a"), v("b", 2), v("c")]}, {"visuals": [v("d")]}], [0.0, 4.0], 240)
+    even = ex.plan_slots([{"visuals": [v("a"), v("b"), v("c")]}, {"visuals": [v("d")]}], [0.0, 190 / FPS], 400)
+    return ([s["frames"] for s in weighted[:3]] == [30, 60, 30] and [s["frames"] for s in even[:3]] == [63, 63, 64])
+
+
+@check
+def pacing_is_counted_and_warned():
+    """shot count and average leave the loop ending out of the average; a 2.6 s still warns, a 3 s pan doesn't; a pan faster than 1.2 screen widths a second warns"""
+    assets()
+    card = {"source": "card:A", "kind": "card", "text": "A"}
+    slots = [{"line": 0, "frames": 45, "visual": card}, {"line": 0, "frames": 78, "visual": card},
+             {"line": 0, "frames": 45, "visual": card, "loop_tail": True}]
+    stats = ex.shot_stats(slots)
+    long_still = ex.slot_warnings([{"line": 0, "frames": 78, "visual": card}], [{}], 90)
+    pan = ex.parse_visual({"file": "shot.png", "pan": "right"}, ROOT)
+    slow = {"line": 0, "frames": 90, "visual": pan, "motion": ex.make_reveal(pan, "right")}
+    fast = {"line": 0, "frames": 45, "visual": pan, "motion": ex.make_reveal(pan, "right")}
+    print(f"       stats {stats}; pans: {ex.pan_speed(slow):.2f} and {ex.pan_speed(fast):.2f} screen widths a second")
+    return (stats == {"count": 3, "own": 2, "average_s": 2.05, "longest_s": 2.6} and len(long_still) == 1
+            and "2.6 s" in long_still[0] and not ex.slot_warnings([slow], [{}], 90)
+            and any("screen widths" in w for w in ex.slot_warnings([fast], [{}], 90)))
+
+
+@check
+def crossed_out_card_draws_a_bar_over_its_text():
+    """on real pixels: the red bar spans the crossed-out line's text with some to spare, sits across the middle of its capitals, misses the green line below, and arrives after the text"""
+    folder = ROOT / "bar"
+    folder.mkdir(exist_ok=True)
+    events = ex.title_events(0, 0, 2, "~NOV 12~|*NOV 10*", ex.CARD_Y, ex.POP)
+    (folder / "b.ass").write_text(ex.ass_document(events), encoding="utf-8")
+    shutil.copy(ex.FONT_FILE, folder)
+    subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=black:s={W}x{H}:r=10:d=2",
+                    "-vf", "ass=b.ass:fontsdir=.", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv444p",
+                    "b.mp4"], cwd=folder, check=True, capture_output=True)
+    early, late = frame_at(folder / "b.mp4", 0.1), frame_at(folder / "b.mp4", 1.0)
+    red = (late[..., 0] > 190) & (late[..., 1] < 100) & (late[..., 2] < 100)
+    white = late.min(axis=2) > 200
+    green = (late[..., 1] > 190) & (late[..., 0] < 120)
+    ry, rx = np.nonzero(red)
+    wy, wx = np.nonzero(white)
+    gy, _ = np.nonzero(green)
+    caps = (wy.min(), wy.max())
+    bar_middle = (ry.min() + ry.max()) / 2
+    print(f"       text x {wx.min()}-{wx.max()} y {caps[0]}-{caps[1]}; bar x {rx.min()}-{rx.max()} y {ry.min()}-{ry.max()}; "
+          f"green from y {gy.min()}; red pixels at 0.1 s {int(((early[..., 0] > 190) & (early[..., 1] < 100)).sum())}")
+    return (rx.min() < wx.min() and rx.max() > wx.max() and caps[0] + 0.3 * (caps[1] - caps[0]) < bar_middle
+            < caps[1] - 0.3 * (caps[1] - caps[0]) and ry.max() < gy.min() and wy.max() < gy.min()
+            and int(((early[..., 0] > 190) & (early[..., 1] < 100)).sum()) == 0)
 
 
 def render_clip(name, frames, label):
@@ -638,13 +841,57 @@ def captions_follow_the_real_speech():
 
 @check
 def log_says_what_happened():
-    """the log has the durations, a visual for every second, each image's move, and the under-55 s warning"""
+    """the log has the durations and target, the shot count, a visual for every second, each image's move, and the speed-over-1.1 warning; the console prints the runtime and the shots"""
     folder, log, stdout = main_run()
     images = [v for v in log["visuals"] if v["kind"] == "image"]
     return (len(log["per_second"]) == math.ceil(log["durations"]["frames"] / FPS) and log["per_second"][0]["visual"] == "a.mp4@0:03"
             and all(v["motion"] for v in images) and log["voice"] == "am_puck" and log["speed"] == 1.18
-            and any("target is 60-70 s" in w for w in log["warnings"]) and "WARNING" in stdout
+            and any("faster than 1.1" in w for w in log["warnings"]) and "WARNING" in stdout
+            and log["durations"]["target_s"] == [40, 50] and log["shots"]["count"] == len(log["visuals"])
+            and re.search(r"Runtime \d+\.\d s \(target 40-50 s", stdout)
+            and re.search(rf"Shots: {len(log['visuals'])} \({len(log['visuals']) - 1} plus the 1.5 s loop ending\), average", stdout)
             and {"voice_lufs", "final_lufs"} <= set(log["loudness"]))
+
+
+@functools.cache
+def pacing_run():
+    """A script with this PR's shots: a pan to open (so the loop ending slides back), a crossed-out card, a weighted
+    video with a focus, and an image with [across, down]."""
+    assets()
+    script = write_script("pacing.json", title="Pacing test", lines=[
+        {"say": "This line opens on a slow pan and then shows a card with a date crossed out.",
+         "visuals": [{"file": "ramp.png", "pan": "right", "weight": 2}, {"card": "~NOV 12~|*NOV 10*"}]},
+        {"say": "Then a clip framed on its left edge, and a photo held near its top.",
+         "visuals": [{"file": "a.mp4", "at": "0:01", "focus": 0, "weight": 0.8}, {"file": "shot.png", "focus": [0.55, "top"]}]}])
+    result = run_tool(script)
+    assert result.returncode == 0, result.stderr[-500:]
+    folder = Path(re.search(r"Run folder: (.+)", result.stdout).group(1).strip())
+    return folder, json.loads((folder / "log.json").read_text(encoding="utf-8")), result.stdout
+
+
+@check
+def pacing_render_joins_and_loops():
+    """a real render with a pan, a crossed-out card, a focused clip and weights: exact frame count, the pan's speed and focus in the log, the bar on screen, the clip's left edge shown, and the last frame back on the first"""
+    folder, log, stdout = pacing_run()
+    short = folder / "short.mp4"
+    info = probe(short)
+    v = next(s for s in info["streams"] if s["codec_type"] == "video")
+    by_source = {x["source"]: x for x in log["visuals"]}
+    card = by_source["card:~NOV 12~|*NOV 10*"]
+    clip = next(x for x in log["visuals"] if x["source"].startswith("a.mp4"))
+    bar = frame_at(short, card["start_s"] + card["seconds"] - 0.2)
+    red = int(((bar[..., 0] > 190) & (bar[..., 1] < 100) & (bar[..., 2] < 100))[500:700].sum())
+    clip_frame = frame_at(short, clip["start_s"] + 0.1)
+    magenta_left = count_near(clip_frame[:, :W // 2], (255, 0, 255), 40)
+    first, last = frame_number(short, 0)[:TOP_BAND], frame_number(short, int(v["nb_read_frames"]) - 1)[:TOP_BAND]
+    seam = float(np.abs(first - last).mean())
+    pan = log["visuals"][0]
+    print(f"       {v['nb_read_frames']} frames (log {log['durations']['frames']}); pan {pan['pan_widths_per_s']} widths/s; "
+          f"red bar px {red}; magenta px in the clip's left half {magenta_left}; first vs last frame {seam:.2f}")
+    return (int(v["nb_read_frames"]) == log["durations"]["frames"] and pan["pan"] == "right" and pan["pan_widths_per_s"] > 0
+            and pan["weight"] == 2 and clip["focus"] == [0.0, 0.5] and log["visuals"][-1]["loop_tail"]
+            and log["visuals"][-1]["motion"] == "back_to_first_frame" and red > 3000 and magenta_left > W * H * 0.2
+            and seam < 2.0 and "Shots:" in stdout)
 
 
 @functools.cache

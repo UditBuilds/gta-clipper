@@ -193,41 +193,60 @@ Take the model from the `model-files-v1.1` release: the older release has a file
 Render:
 
 ```powershell
-.\.venv-tts\Scripts\python.exe explainer.py examples\explainer_sample.json
+.\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload.json
 ```
 
 That writes `short.mp4`, `voice.wav`, `captions.ass` and `log.json` to
-`C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`. `.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in
-about a minute.
+`C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`, and prints the runtime, the number of shots and their average length.
+`.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in about a minute. `examples\explainer_sample.json` is
+the longer PR 14 demo, in the short string form.
 
 A script is a JSON file, and paths are relative to `C:\AI\gta\`:
 
 ```json
 {
   "title": "GTA 6 pre-load is live",
-  "voice": "am_puck", "speed": 1.18,
-  "open_card": "PRE-LOAD IS LIVE",
+  "voice": "am_puck", "speed": 1.0,
+  "open_card": null,
   "music": null,
   "lines": [
     {"say": "GTA 6 pre-loads today, and you need 212 gigabytes free.",
-     "visuals": ["input/recording.webm@0:42", "rockstar/shot_07.jpg@0.3", "card:CLEAR YOUR DRIVE"],
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason and Lucia/Jason_and_Lucia_01.jpg", "focus": [0.36, 0.4]},
+       {"card": "212 GB"},
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_27.jpg", "pan": "right", "weight": 2},
+       {"file": "rockstar/GTAVI_Videos/Jason_Duval_Video_Clip.mp4", "at": "0.3", "focus": 0.7}],
      "green": ["212 GIGABYTES"], "red": []}
   ]
 }
 ```
 
-- A line's visuals share its time evenly. `am_puck` at speed 1.18 says about 3.3 words per second, so a 60-70 s Short is
-  about 200-230 words.
-- A visual is a video with an optional `@start` time, an image with an optional `@framing` from 0 (left edge) to 1 (right
-  edge), or `card:SOME TEXT`. Images get a varied slow zoom or pan. Videos fill the frame with their sides cropped, and
-  their own audio is always dropped.
+- **Length.** The target is 40-50 s, with a new picture every 1.5-2 s. At speed 1.0, `am_puck` says about 2.8 words a
+  second, so that is about 110-140 words. Over 50 s warns, and so does a speed above 1.1: to fit the time, cut words
+  rather than rush the voice. A shot that stays up over 2.5 s warns (a pan may stay 3.5 s, because it keeps moving).
+- **Shots.** A line's shots share its time by `weight`, 1 each unless set, so a shot with weight 2 stays twice as long as
+  its neighbours. Each shot is an object with `file` or `card`:
+  - `focus` is where the subject is across the picture: `"left"`, `"center"`, `"right"` or 0 (left edge) to 1 (right
+    edge). The vertical crop centres on it as far as the picture allows, and the slow zoom heads for it. `[across, down]`
+    also says how far down it is (`"top"`, `"middle"`, `"bottom"` or 0-1), so a zoom keeps a face that sits near the top
+    of the picture. Without a focus the crop is centred. It works on videos too.
+  - `"pan": "right"` slides the view across the whole width of a wide picture during the shot, from the left edge to
+    the right edge (`"left"` goes the other way), at full height and a steady speed. It suits wide city and landscape
+    shots, and needs a big enough share to stay smooth: over 1.2 screen widths a second warns.
+  - `at` is where a video starts (`"0:16"`). A video's own audio is always dropped.
+  - Images with no pan get a varied slow zoom or drift. Videos fill the frame. Nothing is ever shrunk onto a blurred copy.
+- **Cards.** `{"card": "~NOV 12~|*NOV 10*"}`: `|` starts a new line (3 at most), `~words~` get a red bar struck through
+  them a moment after the card appears, and `*words*` are green.
+- **The short form** still works: `"rockstar/x.mp4@0:42"` (a video from 0:42), `"rockstar/x.jpg@0.3"` (an image with focus
+  0.3) and `"card:SOME TEXT"`.
 - A clip too short for its slot loops only if its last and first frames nearly match, and otherwise holds its last frame.
-  Rockstar's character clips all hold, so give them short slots.
+  Rockstar's character clips last 1-1.5 s and all hold, so give them short slots.
 - `green` and `red` list words or phrases from that line's `say`, which must match or the render stops.
 - `music` is a file that loops about 18 LU under the voice.
 - Numbers are safe to write as digits, but write "70 dollars", not "$70", which is read as "dollar seventy".
-- A missing file, a bad time or a tag that isn't in the line stops the run before anything renders. Under 55 s or over
-  75 s only warns. `log.json` records the durations, the visual on screen each second, and any warnings.
+- A missing file, a bad time, a bad shot setting or a tag that isn't in the line stops the run before anything renders.
+  `log.json` records the durations, every shot with its focus, pan speed and weight, the visual on screen each second,
+  and any warnings.
 
 Font: [Anton](fonts/OFL.txt), SIL Open Font License. Kokoro's weights are Apache-2.0. `phonemizer` and eSpeak NG, which it
 installs, are GPL-3.0.
