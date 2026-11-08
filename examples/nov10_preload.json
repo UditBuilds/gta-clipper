@@ -51,6 +51,6 @@
     {"say": "Follow for everything GTA 6 before November 19.",
      "visuals": [
        {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_01.jpg", "pan": "right"}],
-     "green": [], "red": []}
+     "green": ["GTA 6"], "red": []}
   ]
 }
