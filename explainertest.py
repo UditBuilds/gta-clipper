@@ -719,6 +719,29 @@ def pan_opening_loops_back():
     return tail.get("wide") and diff < 2.0
 
 
+@check
+def video_opening_loops_back():
+    """when the first shot is a video with no footage before its start (a clip used from 0), the loop ending holds that first frame, so the Short's last frame is its first, full screen and framed; an opening later in a file plays the 1.5 s just before it, as since PR 15"""
+    assets()
+    results = []
+    for name, raw in (("full", {"file": "stops.mp4"}), ("framed", {"file": "b.mp4", "layout": "framed"}),
+                      ("later", {"file": "b.mp4", "at": "3", "layout": "framed"})):
+        v = settled(raw)
+        assert not ex.place_visuals([{"visuals": [v]}], "word")[0]
+        slots = [{"line": 0, "start": 0, "end": 30, "frames": 30, "visual": v},
+                 {"line": 0, "start": 30, "end": 75, "frames": 45, "visual": v, "loop_tail": True}]
+        ex.plan_videos(slots)
+        ex.assign_backgrounds(slots)
+        outs = [ROOT / f"vloop_{name}_{k}.mp4" for k in range(2)]
+        for slot, out in zip(slots, outs):
+            ex.render_segment(slot, out, ex.pick_encoder()[1])
+        diff = float(np.abs(frame_number(outs[0], 0) - frame_number(outs[1], 44)).mean())
+        results.append((name, v["layout"], slots[1]["start_s"], slots[1].get("lead_hold", 0), round(diff, 2)))
+    print(f"       (shot, layout, loop ending's start s, frames held, first vs last frame) {results}")
+    return (all(r[4] < 2.0 for r in results) and [r[1] for r in results] == ["full", "framed", "framed"]
+            and results[0][3] == 45 and results[1][3] == 45 and results[2][2:4] == (1.5, 0))
+
+
 def still_frame(visual, motion, frames, n):
     out = ROOT / f"seg_{motion['kind']}_{frames}.mp4"
     ex.render_segment({"visual": visual, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])

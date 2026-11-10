@@ -1822,16 +1822,20 @@ def fill_mode(visual, start, frames):
 
 
 def plan_videos(slots):
-    """Each video slot's start time and fill. The loop ending runs up to the point the opening starts from, when the
-    file has that much before it, so the join back to the start is a continuous shot."""
+    """Each video slot's start time and fill. The loop ending runs up to the point the opening starts from, so the
+    join back to the start is a continuous shot and the Short's last frame runs into its first. A file with less than
+    that before the opening's start (a clip used from 0) first holds its first frame for the rest (lead_hold frames):
+    an opening from 0 ends the Short on its own first frame."""
     for slot in slots:
         visual = slot["visual"]
         if visual["kind"] != "video":
             continue
-        slot["start_s"] = visual["start"]
-        if slot.get("loop_tail") and visual["start"] >= slot["frames"] / FPS:
-            slot["start_s"] = visual["start"] - slot["frames"] / FPS
-        slot["fill"] = fill_mode(visual, slot["start_s"], slot["frames"])
+        slot["start_s"], playing = visual["start"], slot["frames"]
+        if slot.get("loop_tail"):
+            playing = min(slot["frames"], round(visual["start"] * FPS))
+            slot["start_s"] = visual["start"] - playing / FPS
+            slot["lead_hold"] = slot["frames"] - playing
+        slot["fill"] = fill_mode(visual, slot["start_s"], playing)
 
 
 def slot_warnings(slots, lines, last_line_frames):
@@ -1904,9 +1908,16 @@ def reveal_filter(visual, motion, frames, tail=FINISH):
             f"crop={window}:{tall}:x='{x}':y=0,scale={ow}:{oh}:flags=lanczos{blur}{tail}")
 
 
-def video_filter(focus=0.5, focus_y=0.5, grade=False):
-    """Fill the frame, cropping around the focus. tpad holds the last frame if the file runs out."""
-    return (f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
+def lead_hold(slot):
+    """The tpad that holds a video's first frame for the loop ending's lead_hold frames, or nothing."""
+    frames = slot.get("lead_hold", 0)
+    return f"tpad=start={frames}:start_mode=clone," if frames else ""
+
+
+def video_filter(focus=0.5, focus_y=0.5, grade=False, lead=""):
+    """Fill the frame, cropping around the focus. tpad holds the last frame if the file runs out; lead holds the first
+    one first (lead_hold)."""
+    return (f"fps={FPS},{lead}scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
             f"crop={W}:{H}:x='clip({focus:.4f}*iw-{W // 2},0,iw-{W})':y='clip({focus_y:.4f}*ih-{H // 2},0,ih-{H})',"
             f"setsar=1{graded(grade)},format=yuv420p,tpad=stop=-1:stop_mode=clone")
 
@@ -2050,18 +2061,17 @@ def framed_graph(slot):
     grade = slot.get("grade", False)
     if visual["kind"] == "image":
         source, picture = "[0:v]", image_filter(visual, slot["motion"], frames, tail="")
-        start = 0.0
     else:
-        source = f"[0:v]fps={FPS},"
+        source = f"[0:v]fps={FPS},{lead_hold(slot)}"
         x, y, w, h = crop_box(visual)[:4]
         picture = (f"crop={w}:{h}:{x}:{y},scale={cw}:{ch}:flags=lanczos:{COLOUR_OUT},setsar=1,"
                    "tpad=stop=-1:stop_mode=clone")
-        start = slot.get("start_s", visual["start"])
     grow = ""
     if slot.get("card_in"):
         s = f"({CARD_IN_FROM}+{1 - CARD_IN_FROM:.2f}*(1-pow(1-min(t/{CARD_IN_S}\\,1)\\,2)))"
         grow = f",scale=w='trunc({lw}*{s}/2)*2':h='trunc({lh}*{s}/2)*2':eval=frame"
-    background = background_chain(visual, frames, slot.get("bg_zoom", (1.0, 1.0)), start)
+    # The background's brightness is measured where the shot starts, so the loop ending matches the opening.
+    background = background_chain(visual, frames, slot.get("bg_zoom", (1.0, 1.0)), visual.get("start", 0.0))
     centre_x, centre_y = ox + ow / 2, oy + oh / 2
     grade_picture = f",{GRADE}" if grade else ""
     vignette = f",{VIGNETTE}" if grade else ""
@@ -2096,7 +2106,7 @@ def render_segment(slot, out, encode):
         picture = image_filter(visual, slot["motion"], frames, graded(grade) + FINISH)
     else:
         inputs = picture_input(visual, slot, slot["start_s"])
-        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5), grade)
+        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5), grade, lead_hold(slot))
     ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
 
 
@@ -2229,6 +2239,7 @@ def render(script_path, root, out_root):
                         "motion_speed": s["motion"]["speed"] if "motion" in s else None,
                         "pan_widths_per_s": round(pan_speed(s), 2) if s.get("motion", {}).get("wide") else None,
                         "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail")),
+                        "lead_hold_s": round(s["lead_hold"] / FPS, 3) if s.get("lead_hold") else None,
                         "layout": s["visual"].get("layout", "card"),
                         "card_aspect": s["visual"].get("card_aspect") if s["visual"].get("layout") == "framed" else None,
                         "card": list(s["visual"]["frame"]["outer"]) if "frame" in s["visual"] else None,
