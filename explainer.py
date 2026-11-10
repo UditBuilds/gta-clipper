@@ -98,7 +98,7 @@ MAX_MUSIC_VOLUME = 2.0               # music_volume: 1 is the level above, 0.5 i
 WHOOSH_S, WHOOSH_PEAK_S, WHOOSH_DB = 0.6, 0.36, -14.5   # length, where its loudest moment is, peak level
 HIT_S, HIT_DB = 0.5, -15.0
 WHOOSH_PITCH = {"low": 0.62, "high": 1.5}                 # a compare's two whooshes, next to the usual one
-LOCK_SFX_S, LOCK_DB, CLICK_SFX_S, CLICK_DB = 0.3, -17.0, 0.2, -16.0   # the lock-on click and the subscribe pill's click
+LOCK_SFX_S, LOCK_DB, CLICK_SFX_S, CLICK_DB = 0.3, -17.0, 0.25, -13.0  # the lock-on click and the subscribe pill's click
 SFX_LOWPASS_HZ, SFX_SPACING_S, SFX_EARLIEST_S = 8000, 0.3, 0.1
 
 # Captions. Shorts covers the top 380, bottom 380, right 120 and left 60 px (the same zones as hooks.py), so x centres
@@ -215,7 +215,7 @@ SNIPPET_MAX_WORDS, SNIPPET_SIZE, SNIPPET_MIN_SIZE, SNIPPET_LINE = 18, 104, 60, 1
 SNIPPET_PAD_X, SNIPPET_PAD_Y, SNIPPET_RADIUS, SNIPPET_TOP, SNIPPET_MIDDLE_Y = 56, 50, 30, 445, 800
 SWEEP_DELAY_S, SWEEP_PX_PER_S, SWEEP_MIN_S, SWEEP_GAP_S = 0.4, 1500, 0.25, 0.1
 # "banner": a pill of 1-3 words over full-screen footage, up for BANNER_S (or the whole shot, if that is shorter).
-BANNER_WORDS, BANNER_SIZE, BANNER_Y, BANNER_S, BANNER_DELAY_S = 3, 124, 800, 1.5, 0.1
+BANNER_WORDS, BANNER_SIZE, BANNER_MIN_SIZE, BANNER_Y, BANNER_S, BANNER_DELAY_S = 3, 124, 48, 800, 1.5, 0.1
 # The ending's subscribe pill ("end_pill"): small and white, up for the last PILL_S. A cursor slides onto it and clicks
 # PILL_CLICK_S before the end; it has gone PILL_OUT_S before the end, so the last frame is still the first frame.
 PILL_SIZE, PILL_PAD, PILL_MAX_WIDTH, PILL_CHARS = 46, (40, 26), 760, 40
@@ -867,7 +867,7 @@ def place_visuals(lines, caption_style):
         if v.get("lock"):
             problems += place_lock(v, caption_style, warnings)
         if v.get("banner"):
-            fit_banner(v["banner"])
+            problems += fit_banner(v["banner"], v["source"])
         label = v.get("label")
         if label and label["size"][0] + 2 * LABEL_BORDER > CARD_BOX:
             problems.append(f"{v['source']}: the label {label['text']!r} is too wide to read at its size; shorten it")
@@ -926,13 +926,16 @@ def labels_of(visual):
 
 # --- Placing the beats (PR 18) ---
 
-def fit_banner(pill):
-    """A banner's pill, made smaller until it stays inside the safe area at the top of its pop."""
-    while pill["font"] > 40:
-        wide = (pill["size"][0] + 2 * LABEL_BORDER + LABEL_SHADOW) * LABEL_POP_PEAK
+def fit_banner(pill, source):
+    """A banner's pill, made smaller until it stays inside the safe area at the top of its pop. Returns a problem if
+    that takes it under BANNER_MIN_SIZE, where it is too small to read at a glance."""
+    while True:
+        wide = (pill["size"][0] + 2 * LABEL_BORDER + 2 * LABEL_SHADOW) * LABEL_POP_PEAK   # centred, shadow on one side
         if wide <= SAFE_WIDTH:
-            break
+            return []
         pill["font"] = min(pill["font"] - 2, int(pill["font"] * SAFE_WIDTH / wide))
+        if pill["font"] < BANNER_MIN_SIZE:
+            return [f"{source}: the banner {pill['text']!r} is too wide to read at a glance; use shorter words"]
         measure_labels([pill])
 
 
@@ -989,15 +992,15 @@ def lock_zoom(lock, n, frames):
 
 def lock_tag_place(lock, rect):
     """The middle of a lock-on's tag for the box at rect: on the box's left corner, above it or below it, and pushed
-    in from the safe area's sides if the box sits near one."""
+    in from the safe area's edges if the box sits near one. So while the zoom is still bringing a high box down, its
+    tag waits at the top of the safe area, over the box's edge, and then rides on it."""
     tag = lock["tag"]
     left, top, w, h = rect
     (pw, ph), border = tag["size"], tag["border"]
     x = min(max(left - LOCK_EDGE + border + pw / 2, SAFE_LEFT + border + pw / 2),
             W - SAFE_RIGHT - border - tag["shadow"] - pw / 2)
-    if lock["tag_at"] == "above":
-        return x, top - LOCK_EDGE - border - ph / 2
-    return x, top + h + LOCK_EDGE + border + ph / 2
+    y = top - LOCK_EDGE - border - ph / 2 if lock["tag_at"] == "above" else top + h + LOCK_EDGE + border + ph / 2
+    return x, min(max(y, SAFE_TOP + border + ph / 2), SAFE_BOTTOM - border - tag["shadow"] - ph / 2)
 
 
 def place_lock(visual, caption_style, warnings):
@@ -1569,18 +1572,19 @@ def lock_click(seed):
 
 
 def mouse_click(seed):
-    """A mouse click: the button going down (a tick with a little body) and, softer, coming back up 75 ms later."""
+    """A mouse click: the button going down (a tick with a short, round body under it, so it carries over the music)
+    and, softer and higher, coming back up 80 ms later."""
     import numpy as np
     t = np.arange(int(CLICK_SFX_S * RATE)) / RATE
     rng = np.random.default_rng(seed)
 
     def press(at, hz, body):
         late = np.maximum(t - at, 0)
-        tick = swept_noise(rng, CLICK_SFX_S, lambda s: hz, 0.8) * np.where(t >= at, np.exp(-late / 0.0025), 0)
+        tick = swept_noise(rng, CLICK_SFX_S, lambda s: hz, 0.8) * np.where(t >= at, np.exp(-late / 0.004), 0)
         tick /= max(np.abs(tick).max(), 1e-9)
-        return tick + 0.6 * np.where(t >= at, np.sin(2 * np.pi * body * late) * np.exp(-late / 0.012), 0)
-    sound = press(0.0, 2400, 620) + 0.5 * press(0.075, 3100, 900)
-    return finish(sound * fade(len(t), 0.02)[::-1], CLICK_DB)
+        return 0.7 * tick + np.where(t >= at, np.sin(2 * np.pi * body * late) * np.exp(-late / 0.03), 0)
+    sound = press(0.0, 2400, 880) + 0.6 * press(0.08, 3100, 1320)
+    return finish(sound * fade(len(t), 0.03)[::-1], CLICK_DB)
 
 
 def finish(sound, peak_db):
@@ -2268,7 +2272,7 @@ def banner_events(slot):
     return label_events(pill, start, end)
 
 
-CURSOR = [(0, 0), (0, 58), (14, 45), (25, 70), (36, 65), (25, 41), (44, 41)]   # an arrow pointer, its tip at (0, 0)
+CURSOR = [(0, 0), (0, 46), (11, 36), (20, 56), (29, 52), (20, 33), (35, 33)]   # an arrow pointer, its tip at (0, 0)
 
 
 def pill_frames(total_frames):
@@ -2312,7 +2316,7 @@ def end_pill_events(pill, total_frames):
     a, c, b = frame_time(f_in), frame_time(f_click), frame_time(f_out)
     events = label_events(pill, a, c, layers=(9, 10))
     events += label_events({**pill, "fill": PINK, "ink_colour": None}, c, b, layers=(9, 10), anim=PILL_PRESS + "\\fad(0,130)")
-    cx, cy = CENTRE_X + pill["size"][0] * 0.3, pill["y"] + 8
+    cx, cy = CENTRE_X + pill["size"][0] * 0.3, pill["y"] - 4
     sx, sy = min(cx + 170, W - SAFE_RIGHT - 50), cy + (-150 if pill["pos"] == "bottom" else 150)
     arrow = "m " + " l ".join(f"{x} {y}" for x, y in CURSOR)
     first, arrives = f_in + 4, f_click - 3
@@ -2322,10 +2326,10 @@ def end_pill_events(pill, total_frames):
         events.append(dialogue(11, frame_time(f), frame_time(f + 1), "Title",
                                f"{{\\an7\\pos({sx + (cx - sx) * e:.1f},{sy + (cy - sy) * e:.1f})\\c{WHITE}\\3c{BLACK}\\bord4"
                                f"\\shad3\\4c{BLACK}\\4a&H70&\\alpha&H{round(255 * faint):02X}&\\p1}}{arrow}"))
-    ring = [(34 + 34 * math.cos(2 * math.pi * k / 40), 34 + 34 * math.sin(2 * math.pi * k / 40)) for k in range(40)]
+    ring = [(30 + 30 * math.cos(2 * math.pi * k / 40), 30 + 30 * math.sin(2 * math.pi * k / 40)) for k in range(40)]
     events.append(dialogue(11, c, frame_time(f_click + 9), "Title",
                            f"{{\\an5\\pos({cx:.1f},{cy:.1f})\\1a&HFF&\\3c{WHITE}\\bord5\\shad0\\fscx40\\fscy40"
-                           f"\\t(0,260,\\fscx170\\fscy170)\\fad(0,170)\\p1}}m "
+                           f"\\t(0,260,\\fscx120\\fscy120)\\fad(0,170)\\p1}}m "
                            + " l ".join(f"{x:.1f} {y:.1f}" for x, y in ring)))
     return events
 
@@ -3096,7 +3100,17 @@ def render(script_path, root, out_root):
                         "lock": ({"zoom": round(s["visual"]["lock"]["zoom"], 2),
                                   "box_at_end": [round(n) for n in lock_rect(s["visual"]["lock"],
                                                                              lock_zoom(s["visual"]["lock"], s["frames"] - 1, s["frames"]))]}
-                                 if s["visual"].get("lock") else None)}
+                                 if s["visual"].get("lock") else None),
+                        "compare": ({"top": list(s["visual"]["top"]["frame"]["outer"]),
+                                     "bottom": list(s["visual"]["bottom"]["frame"]["outer"]),
+                                     "seam_y": s["visual"]["seam_y"],
+                                     "label_ys": [side["label"]["y"] if side.get("label") else None
+                                                  for side in (s["visual"]["top"], s["visual"]["bottom"])]}
+                                    if s["visual"]["kind"] == "compare" else None),
+                        "snippet": ({"card": list(s["visual"]["snippet"]["card"]), "size": s["visual"]["snippet"]["size"],
+                                     "lines": len(s["visual"]["snippet"]["lines"])}
+                                    if s["visual"]["kind"] == "snippet" else None),
+                        "banner": s["visual"]["banner"]["text"] if s["visual"].get("banner") else None}
                        for s in slots],
            "pacing": pacing,
            "end_pill": {"text": pill["text"], "pos": pill["pos"], "y": pill["y"], "from_s": round(pill_frames(total_frames)[0] / FPS, 3),
