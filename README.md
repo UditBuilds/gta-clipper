@@ -283,8 +283,8 @@ media) and approved its second version, C2.
   to a spot on the picture: `[{"icon": "x", "x": 0.74, "y": 0.3, "at": 0.4}]`, with `x`, `check`, `arrow` or `circle`.
 - **Grade.** A little more contrast and colour, and a soft vignette. `"grade": false` at the top of the script turns it
   off.
-- **Loop.** The last frame is the first frame again. When the Short opens on a clip from its first second, the ending
-  holds that clip's first frame.
+- **Loop.** The last frame's picture is the first frame's again (the last spoken word's caption can still be up). When
+  the Short opens on a clip used from its start, the ending holds that clip's first frame for 1.5 s.
 
 ```powershell
 .\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload_v2.json   # the Nov 10 Short in look C

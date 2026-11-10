@@ -5,19 +5,19 @@
   "music": "auto",
   "sfx": true,
   "lines": [
-    {"say": "Here is a short Rockstar clip framed as a card, and the same clip filling the whole screen.",
+    {"say": "Here is a short Rockstar clip in a card, the same clip on the full screen, and a square clip in a card.",
      "visuals": [
        {"file": "rockstar/GTAVI_Videos/Lucia_Caminos_Video_Clip.mp4", "layout": "framed", "label": "Framed"},
        {"file": "rockstar/GTAVI_Videos/Lucia_Caminos_Video_Clip.mp4", "layout": "full",
-        "label": {"text": "Full screen", "pos": "bottom"}}],
-     "green": ["FRAMED"], "red": []},
-    {"say": "A square clip works both ways too. The cover art video is long enough to keep playing, so it never freezes, in a wide card and on the full screen.",
+        "label": {"text": "Full screen", "pos": "bottom"}},
+       {"file": "rockstar/GTAVI_Videos/Raul_Bautista_Video_Clip.mp4", "layout": "framed"}],
+     "green": ["IN A CARD"], "red": []},
+    {"say": "The square clip fills the screen too. The cover art video is long enough to keep playing, so it never freezes, in a wide card and on the full screen.",
      "visuals": [
-       {"file": "rockstar/GTAVI_Videos/Raul_Bautista_Video_Clip.mp4", "layout": "framed"},
-       {"file": "rockstar/GTAVI_Videos/Raul_Bautista_Video_Clip.mp4", "layout": "full"},
+       {"file": "rockstar/GTAVI_Videos/Raul_Bautista_Video_Clip.mp4", "layout": "full", "weight": 0.8},
        {"file": "rockstar/GTAVI_Videos/GTAVI_Official_Cover_Art_Landscape.mp4", "at": "14", "layout": "framed",
         "label": {"text": "16:9 card", "style": "number"}, "card_aspect": "16:9"},
-       {"file": "rockstar/GTAVI_Videos/GTAVI_Official_Cover_Art_Landscape.mp4", "at": "8", "layout": "full"}],
+       {"file": "rockstar/GTAVI_Videos/GTAVI_Official_Cover_Art_Landscape.mp4", "at": "11", "layout": "full", "weight": 1.5}],
      "green": [], "red": ["NEVER FREEZES"]}
   ]
 }
