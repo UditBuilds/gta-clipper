@@ -117,12 +117,14 @@ HIGHLIGHT = ass_colour(YELLOW_RGB)   # the word being said. Tagged words keep th
 CAPTION_SHADOW, SHADOW_ALPHA = 5, "70"
 POP = "\\fscx88\\fscy88\\t(0,70,\\fscx106\\fscy106)\\t(70,130,\\fscx100\\fscy100)"
 OPEN_POP = POP + "\\fad(0,120)"
+POP_PEAK = 1.06                      # how big POP grows text for a moment: text is fitted so it stays in the safe area then
 # Caption styles. "word" (the default): one word at a time in Lilita One, yellow with a thick black outline, its capitals
 # centred on WORD_Y, which sits over the lower part of a square card. "phrase": the PR 16 captions, 2-4 Anton words with
 # the spoken one yellow, bottom at CAPTION_BOTTOM.
 CAPTION_STYLES = ("word", "phrase")
 WORD_SIZE, WORD_OUTLINE, WORD_SHADOW, WORD_Y = 170, 13, 6, 1260
 WORD_POP = "\\fscx80\\fscy80\\t(0,80,\\fscx108\\fscy108)\\t(80,150,\\fscx100\\fscy100)"
+WORD_POP_PEAK = 1.08
 SAFE_WIDTH = 900                     # x 60-960: a word or card line, its outline and its shadow centred on CENTRE_X
 # Where each caption style can draw, top to bottom, outline and shadow in (explainertest.py measures both): labels
 # keep LABEL_GAP away from it.
@@ -1300,15 +1302,17 @@ def word_events(words, total_s, hidden=()):
     shows while a text card is up (hidden)."""
     boxes = measure([(chunky(WORD_SIZE), escape_ass(w["text"])) for w in words] + [(chunky(WORD_SIZE), "HH")])
     caps = boxes[-1]
-    limit = SAFE_WIDTH - 2 * (WORD_OUTLINE + WORD_SHADOW)
+    limit = SAFE_WIDTH / WORD_POP_PEAK - 2 * (WORD_OUTLINE + WORD_SHADOW)   # still in at the top of the pop
     events = []
     for i, (w, box) in enumerate(zip(words, boxes)):
         following = words[i + 1] if i + 1 < len(words) else None
         end = total_s if following is None else following["start"]
         if following is None or w["pause"] or following["sentence"] != w["sentence"]:
             end = min(end, w["end"] + CAPTION_LINGER_S)
-        width = centred_width(box)
-        size = WORD_SIZE if width <= limit else int(WORD_SIZE * limit / width)
+        width, size = centred_width(box), WORD_SIZE
+        while width > limit:   # measured again, since a very long word can overflow measure()'s canvas
+            size = min(size - 1, int(size * limit / width))
+            width = centred_width(measure([(chunky(size), escape_ass(w["text"]))])[0])
         y = WORD_Y - (caps[1] + caps[3]) / 2 * size / WORD_SIZE
         colour = COLOURS[w["colour"]] if w["colour"] else HIGHLIGHT
         text = (f"{{\\an5\\pos({CENTRE_X},{y:.0f}){chunky(size)}\\c{colour}\\3c{BLACK}\\bord{WORD_OUTLINE}"
@@ -1370,10 +1374,22 @@ def title_outline(size):
     return max(4, round(size * TITLE_OUTLINE_SHARE)), max(3, round(size * TITLE_SHADOW_SHARE))
 
 
-def fit_title(text, size, room):
+def count_values(number):
+    """What a counting number shows: a value a frame for COUNT_S, from 0 and easing out, then the number itself, written
+    with commas if it has them."""
+    final = int(number.replace(",", ""))
+    steps = round(COUNT_S * FPS)
+    values = [round(final * (1 - (1 - k / steps) ** 3)) for k in range(steps)] + [final]
+    return [f"{v:,}" if "," in number else str(v) for v in values]
+
+
+def fit_title(text, size, room, peak=1.0, counted=False):
     """The title's lines and the size it is drawn at. Plain text too wide for one line breaks in two where the halves
-    are most even; then the size comes down until the widest line, outline and shadow in, fits the safe area's width,
-    and all the lines fit room pixels of height."""
+    are most even; then the size comes down until the title, outline and shadow in, fits the safe area's width and
+    room pixels of height at its biggest moment: grown to peak by its pop and, if counted, with the widest value its
+    number shows while counting ("204" is wider than "212", and reaches further left, since the count keeps the
+    number's right edge still). The size is measured again until it really fits, because very wide text can overflow
+    measure()'s canvas and measure smaller than it is."""
     lines = title_lines(text)
     if len(lines) == 1 and len(lines[0]) == 1 and lines[0][0][1] is None:
         words = lines[0][0][0].split()
@@ -1385,23 +1401,36 @@ def fit_title(text, size, room):
             best = min(range(len(halves)), key=lambda k: max(centred_width(widths[2 * k]), centred_width(widths[2 * k + 1])))
             lines = [[(halves[best][0], None)], [(halves[best][1], None)]]
     lines, number = split_number(lines)
-    box = measure([(chunky(size), title_markup(lines))])[0]
-    outline, shadow = title_outline(size)
-    scale = min(1.0, (SAFE_WIDTH - 2 * (outline + shadow)) / max(centred_width(box), 1),
-                (room - 2 * outline - shadow) / max(box[3] - box[1], 1))
-    if scale < 1:
-        size = int(size * scale)
-        box = measure([(chunky(size), title_markup(lines))])[0]
-    return lines, number, size, box
+    counted = counted and number is not None
+    while True:
+        outline, shadow = title_outline(size)
+        items = [(chunky(size), title_markup(lines))]
+        if counted:
+            style = lines[0][0][1]
+            items += [(chunky(size), title_markup(lines, show=(0, 0)))]
+            items += [(chunky(size), title_markup([[(value, style)]])) for value in count_values(number)]
+        box, *count_boxes = measure(items)
+        edge = outline + shadow
+        left, right = (-box[0] + edge) * peak, (box[2] + edge) * peak
+        if counted:   # the number doesn't pop, and each value ends where the number does
+            place = count_boxes[0]
+            left = max(left, max(b[2] - b[0] for b in count_boxes[1:] if b) - place[2] + edge)
+        scale = min(SAFE_WIDTH / 2 / max(left, right, 1), room / max((box[3] - box[1] + 2 * outline + shadow) * peak, 1))
+        if scale >= 1 or size <= 1:
+            return lines, number, size, box
+        size = max(1, min(size - 1, int(size * scale)))
 
 
-def title_events(layer, start, end, text, y, pop, size=CARD_TEXT_SIZE, room=None, count=False):
+def title_events(layer, start, end, text, y, pop, size=CARD_TEXT_SIZE, room=None, count=False, sized_to_count=None):
     """A title in Lilita One, its ink centred on (CENTRE_X, y) and fitted to room pixels of height (by default as much
     as the safe area allows around y), and the bars that cross out its ~marked~ pieces. With count, a number at its
     start counts up from 0 over COUNT_S, right-aligned where it ends, so the words after it never move; it doesn't
-    pop, the rest does. Everything has a \\pos, so nothing gets pushed aside, and the bars come last, on top."""
+    pop, the rest does. Everything has a \\pos, so nothing gets pushed aside, and the bars come last, on top.
+    The size leaves room for the pop and, with count, for the widest value counted; sized_to_count (count unless set)
+    sizes it that way without counting, so a card that doesn't count this time keeps the size it has when it does."""
     room = room or 2 * min(y - SAFE_TOP - 10, SAFE_BOTTOM - 10 - y)
-    lines, number, size, box = fit_title(text, size, room)
+    lines, number, size, box = fit_title(text, size, room, POP_PEAK if pop else 1.0,
+                                         count if sized_to_count is None else sized_to_count)
     outline, shadow = title_outline(size)
     y = y - (box[1] + box[3]) / 2                  # the anchor that centres the ink on y
     base = f"\\an5\\pos({CENTRE_X},{y:.0f}){chunky(size)}\\bord{outline}\\shad{shadow}\\4c{BLACK}\\4a&H40&"
@@ -1414,8 +1443,9 @@ def title_events(layer, start, end, text, y, pop, size=CARD_TEXT_SIZE, room=None
     for (i, j), piece in zip(struck, measure([(chunky(size), title_markup(lines, show=p)) for p in struck])):
         if piece is None:
             continue
-        left = max(CENTRE_X + piece[0] - BAR_PAD * size, SAFE_LEFT)
-        right = min(CENTRE_X + piece[2] + BAR_PAD * size, W - SAFE_RIGHT)
+        # The bar's outline (and a pixel for its tilt) stays inside the safe area too.
+        left = max(CENTRE_X + piece[0] - BAR_PAD * size, SAFE_LEFT + BAR_OUTLINE + 1)
+        right = min(CENTRE_X + piece[2] + BAR_PAD * size, W - SAFE_RIGHT - BAR_OUTLINE - 1)
         middle = y + (piece[1] + piece[3]) / 2
         width, height = right - left, BAR_HEIGHT * size
         events.append(dialogue(layer, start, end, "Title",
@@ -1429,10 +1459,7 @@ def title_events(layer, start, end, text, y, pop, size=CARD_TEXT_SIZE, room=None
 def count_events(layer, start, end, lines, number, size, base, y, fade):
     """The number at the start of a title counting up from 0, easing out, one value a frame for COUNT_S, then held.
     Each value is placed so its right edge is where the final number's is."""
-    final = int(number.replace(",", ""))
-    steps = round(COUNT_S * FPS)
-    values = [round(final * (1 - (1 - k / steps) ** 3)) for k in range(steps)] + [final]
-    shown = [f"{v:,}" if "," in number else str(v) for v in values]
+    shown = count_values(number)
     style = lines[0][0][1]
     one = [[(text, style)] for text in shown]
     boxes = measure([(chunky(size), title_markup([line])) for line in one] + [(chunky(size), title_markup(lines, show=(0, 0)))])
@@ -1597,7 +1624,7 @@ def card_events(slots, open_card):
         if visual["kind"] == "card":
             top, bottom = card_room(visual.get("label"))
             events += title_events(0, slot["start"] / FPS, slot["end"] / FPS, visual["text"], (top + bottom) / 2, POP,
-                                   CARD_TEXT_SIZE, bottom - top, count=not slot.get("loop_tail"))
+                                   CARD_TEXT_SIZE, bottom - top, count=not slot.get("loop_tail"), sized_to_count=True)
     return events
 
 

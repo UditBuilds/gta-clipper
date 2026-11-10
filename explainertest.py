@@ -1367,7 +1367,7 @@ def word_captions_follow_each_word():
              fake_word("DANGER", 1, colour="red", tag=("red", "DANGER", 3), start=1.4, end=1.8),
              fake_word("ABSOLUTELY-UNBELIEVABLE", 1, start=1.8, end=2.5)]
     events = ex.word_events(words, 3.0, hidden=[(2.0, 2.3)])
-    spans = [(ass_seconds(m.group(1)), ass_seconds(m.group(2)), plain(e))
+    spans = [(ass_seconds(m.group(1)), ass_seconds(m.group(2)), plain(e).split(",,")[-1])   # the word, after the fields
              for e in events for m in [re.match(r"Dialogue: 2,([\d:.]+),([\d:.]+),", e)]]
     colours = [re.search(r"\\c(&H[0-9A-F]+&)", e).group(1) for e in events]
     sizes = [int(re.search(r"\\fs(\d+)", e).group(1)) for e in events]
@@ -1391,13 +1391,13 @@ def word_captions_follow_each_word():
 
 @check
 def phrase_captions_step_aside_for_cards():
-    """with phrase captions, a chunk that runs into a text card stops when the card comes and, if it outlasts it, comes back with its highlight still timed to the words"""
+    """with phrase captions, a chunk that runs into a text card stops when the card comes and, if it outlasts it, comes back with its highlight still timed to the words (the last chunk still stays to the end, as in PR 16)"""
     words = [fake_word("ONE", start=0.0, end=0.3), fake_word("TWO", start=0.3, end=0.6), fake_word("THREE", start=1.2, end=1.5)]
     events = ex.caption_events(words, 2.0, hidden=[(0.2, 0.9)])
     spans = [(ass_seconds(m.group(1)), ass_seconds(m.group(2))) for e in events for m in [re.match(r"Dialogue: 2,([\d:.]+),([\d:.]+),", e)]]
     back = events[1]
     print(f"       spans {spans}; after the card: {back[back.index(',,') + 2:][:120]}")
-    return (spans == [(0.0, 0.2), (0.9, 1.75)] and "\\c&H00E6FF&" in back.split("THREE")[0]
+    return (spans == [(0.0, 0.2), (0.9, 2.0)] and "\\c&H00E6FF&" in back.split("THREE")[0]
             and ex.visible(0, 1, [(0.2, 0.4), (0.5, 0.6)]) == [(0, 0.2), (0.4, 0.5), (0.6, 1)])
 
 
@@ -1410,9 +1410,12 @@ def numbers_count_up_and_hold_their_place():
     events = ex.title_events(0, 0, 2, "212 GB", ex.CARD_Y, ex.POP, count=True)
     values = [int(plain(e).split(",,")[-1]) for e in events[1:]]
     starts = [ass_seconds(re.match(r"Dialogue: 0,([\d:.]+),", e).group(1)) for e in events[1:]]
-    frames = render_ass(events, [0.05, 0.3, 1.0], "count")
+    # Two moments mid-count (after the 130 ms pop of the unit) and one long after. The unit's white is looked for right
+    # of the number and its own white outline, which changes with the value.
+    frames = render_ass(events, [0.15, 0.3, 1.0], "count")
     pink = [box_of(np.abs(f - np.array(PINK)).max(axis=2) <= 40) for f in frames]
-    white = [box_of(f.min(axis=2) > 235) for f in frames]
+    unit_from = pink[-1][1] + 40
+    white = [box_of(f[:, unit_from:].min(axis=2) > 235) for f in frames]
     plainer = ex.title_events(0, 0, 2, "*NOV 10*|12 AM", ex.CARD_Y, ex.POP, count=True)
     struck = ex.title_events(0, 0, 2, "~212~ GB", ex.CARD_Y, ex.POP, count=True)
     print(f"       values {values[:5]}...{values[-3:]} ({len(values)}); pink (number) boxes {pink}; white (GB) boxes {white}")
@@ -1510,7 +1513,8 @@ def look_run():
                      {"card": "212 GB", "label": {"text": "PS5", "style": "number"}},
                      {"file": "b.mp4", "at": "1", "label": {"text": "No way in", "style": "no", "pos": "bottom"}, "weight": 1.5}],
          "green": ["212 GIGABYTES"]},
-        {"say": "A tall picture fills the screen, and a crossed out date comes last of all.",
+        {"say": "A tall picture fills the whole screen here, a crossed out date comes after it, and then the first photo "
+                "closes the test.",
          "visuals": [{"file": "tall.png", "label": "Tall"}, {"card": "~NOV 12~|*NOV 10*"}, "shot.png"]}])
     result = run_tool(script)
     assert result.returncode == 0, result.stderr[-800:]
@@ -1580,26 +1584,31 @@ def look_render_frames_labels_and_marks():
 
 @check
 def look_render_hides_captions_over_cards():
-    """in the same render: one yellow word at a time sits on WORD_Y while a picture shows; while a text card is up the caption band has no yellow and no cyan caption, and the .ass counts 212 up and draws every caption in Lilita One"""
+    """in the same render: one yellow word at a time sits on WORD_Y while a picture shows; while a text card is up no caption event is on in the .ass, and the caption band has no yellow, nor cyan over the 212 card while its cyan words are said (the NOV card's own *NOV 10* is cyan); the .ass counts 212 up and draws every caption in Lilita One"""
     folder, log, _ = look_run()
     short = folder / "short.mp4"
     text = (folder / "captions.ass").read_text(encoding="utf-8")
     band = lambda f: f[ex.CAPTION_BANDS["word"][0]:ex.CAPTION_BANDS["word"][1]]
     words = log["word_times"]
+    spans = [(card["start_s"], card["start_s"] + card["seconds"]) for card in (shot_of(log, "card:212"), shot_of(log, "card:~NOV"))]
+    events = [(ass_seconds(m.group(1)), ass_seconds(m.group(2))) for m in re.finditer(r"^Dialogue: 2,([\d:.]+),([\d:.]+),", text, re.M)]
+    overlaps = [(a, b) for a, b in events for s, e in spans if a < e - 0.01 and b > s + 0.01]
+    # The cyan check means something only if a tagged (cyan) word is said while the 212 card is up.
+    cyan_said = [w["text"] for w in words if spans[0][0] <= w["start_s"] < spans[0][1] and w["text"] in ("212", "GIGABYTES")]
     during = []
-    for start in ("card:212", "card:~NOV"):
-        card = shot_of(log, start)
+    for (s, e), cyan_too in zip(spans, (True, False)):
         for k in (0.25, 0.5, 0.75):
-            f = band(frame_at(short, card["start_s"] + card["seconds"] * k))
-            during.append(count_near(f, YELLOW, 40) + count_near(f, CYAN, 30))
+            f = band(frame_at(short, s + (e - s) * k))
+            during.append(count_near(f, YELLOW, 40) + (count_near(f, CYAN, 30) if cyan_too else 0))
     first = shot_of(log, "shot.png")
     spoken = next(w for w in words if w["start_s"] > first["start_s"] + 0.3 and w["text"] not in ("212", "GIGABYTES"))
     lit = band(frame_at(short, spoken["start_s"] + 0.1))
     yellow = box_of(np.abs(lit - np.array(YELLOW)).max(axis=2) <= 40)
     captions = [line for line in text.splitlines() if line.startswith("Dialogue: 2,")]
-    print(f"       caption-coloured px in the band while cards are up {during}; {spoken['text']} yellow box {yellow}; "
+    print(f"       caption-coloured px in the band while cards are up {during}; caption events over a card {overlaps}; "
+          f"cyan words said over the 212 card {cyan_said}; {spoken['text']} yellow box {yellow}; "
           f"{len(captions)} caption events for {len(words)} words")
-    return (max(during) == 0 and yellow is not None and abs((yellow[2] + yellow[3]) / 2 + ex.CAPTION_BANDS["word"][0]
+    return (max(during) == 0 and not overlaps and cyan_said and yellow is not None and abs((yellow[2] + yellow[3]) / 2 + ex.CAPTION_BANDS["word"][0]
                                                             - ex.WORD_Y) <= 6
             and all("\\fnLilita One" in c for c in captions) and len(captions) <= len(words)
             and ",,{\\" in text and re.search(r"\}212\s*$", text, re.M) and re.search(r"\}0\s*$", text, re.M))
