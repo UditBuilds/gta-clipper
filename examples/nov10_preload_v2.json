@@ -1,0 +1,65 @@
+{
+  "title": "GTA 6 pre-load Nov 10 v2",
+  "voice": "am_puck",
+  "speed": 1.1,
+  "open_card": null,
+  "music": "Shady - Density & Time.mp3",
+  "sfx": true,
+  "lines": [
+    {"say": "GTA 6 needs up to 212 gigs on PS5. And you can start downloading it on Tuesday.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason and Lucia/Jason_and_Lucia_01.jpg", "focus": [0.36, 0.4],
+        "label": "GTA 6 pre-load"},
+       {"card": "212 GB", "label": "PS5"},
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason Duval/Jason_Duval_04.jpg", "focus": [0.34, 0.12]},
+       {"file": "rockstar/GTAVI_Videos/Lucia_Caminos_Video_Clip.mp4", "focus": "center"}],
+     "green": ["212 GIGS"], "red": []},
+    {"say": "If you saw November 12, that's old. Rockstar moved pre-load up to November 10.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_16.jpg", "focus": [0.64, 0.45],
+        "label": {"text": "Old date", "style": "no"}},
+       {"file": "rockstar/GTAVI_Artwork_Wallpapers/Jason_and_Lucia_01/Jason_and_Lucia_01_landscape.jpg", "focus": [0.48, 0.15]},
+       {"card": "~NOV 12~|*NOV 10*", "weight": 1.3}],
+     "green": ["NOVEMBER 10"], "red": ["NOVEMBER 12"]},
+    {"say": "On PS5, it opens at midnight, your local time.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_22.jpg", "focus": 0.75,
+        "label": "PS5 | 12 AM local"},
+       {"card": "*NOV 10*|12 AM LOCAL"}],
+     "green": ["LOCAL TIME"], "red": []},
+    {"say": "On Xbox, it's midnight GMT, for everyone at once.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_27.jpg", "pan": "right", "weight": 2,
+        "label": "Xbox | 12 AM GMT"},
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_13.jpg", "focus": "center"}],
+     "green": ["MIDNIGHT GMT"], "red": []},
+    {"say": "Code-in-box copies land November 12, so you can pre-load those too.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Artwork_Wallpapers/Official_Cover_Art/Official_Cover_Art_phone.jpg", "focus": "center", "weight": 1.2,
+        "label": "Code-in-box"},
+       {"file": "rockstar/GTAVI_Screenshots/People/Lucia Caminos/Lucia_Caminos_02.jpg", "focus": [0.46, 0.4]},
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason and Lucia/Jason_and_Lucia_02.jpg", "focus": [0.43, 0.2]}],
+     "green": ["CODE-IN-BOX"], "red": []},
+    {"say": "But pre-loading doesn't let you play early. The game unlocks at midnight on November 19, in your time zone. New Zealand gets it first.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason Duval/Jason_Duval_07.jpg", "focus": [0.52, 0.35], "weight": 1.5,
+        "label": {"text": "No early play", "style": "no"}, "marks": [{"icon": "x", "x": 0.74, "y": 0.3, "at": 0.4}]},
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_08.jpg", "pan": "left", "weight": 2.2},
+       {"card": "*NOV 19*|12 AM", "weight": 1.5},
+       {"file": "rockstar/GTAVI_Videos/Jason_Duval_Video_Clip.mp4", "at": "0.3", "focus": 0.7, "weight": 1.05},
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason and Lucia/Jason_and_Lucia_16.jpg", "focus": 0.35, "weight": 1.6,
+        "label": "New Zealand first"}],
+     "green": ["NOVEMBER 19"], "red": ["PLAY EARLY"]},
+    {"say": "So clear the space this weekend, turn on auto-download, and let it run.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/Places/Leonida Keys/Leonida_Keys_05.jpg", "focus": 0.7},
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_24.jpg", "focus": [0.36, 0.4], "weight": 1.15,
+        "label": "Auto-download on", "marks": [{"icon": "check", "x": 0.55, "y": 0.22, "at": 0.35}]},
+       {"file": "rockstar/GTAVI_Screenshots/People/Jason and Lucia/Jason_and_Lucia_09.jpg", "focus": [0.53, 0.25], "weight": 0.85}],
+     "green": ["AUTO-DOWNLOAD"], "red": []},
+    {"say": "Follow for everything GTA 6 before November 19.",
+     "visuals": [
+       {"file": "rockstar/GTAVI_Screenshots/Places/Vice City/Vice_City_01.jpg", "pan": "right"}],
+     "green": ["GTA 6"], "red": []}
+  ]
+}

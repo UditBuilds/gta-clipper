@@ -1,11 +1,16 @@
-"""Turn a script file into a finished 1080x1920 explainer Short: Kokoro voice, captions lit word by word, a ducked music bed,
-sound effects, fast cuts and a loop ending.
+"""Turn a script file into a finished 1080x1920 explainer Short: Kokoro voice, captions timed to each word, a ducked music
+bed, sound effects, fast cuts and a loop ending.
 
-A script is a JSON file (see examples/nov10_preload.json). Each line says something over one or more shots, which share
+A script is a JSON file (see examples/nov10_preload_v2.json). Each line says something over one or more shots, which share
 that line's time by their weights (equal unless a shot says otherwise). A shot is a video, an image or a text card,
 written as a short string ("rockstar/x.mp4@0:42", "rockstar/x.jpg@0.7", "card:SOME TEXT") or as an object with more
-choices: where the subject is ("focus"), a slide across the whole picture ("pan") and a bigger share ("weight"). The
-README lists them all. Everything is checked first, so a missing file or a bad setting stops before anything renders.
+choices: where the subject is ("focus"), a slide across the whole picture ("pan"), a bigger share ("weight"), the
+layout ("framed" card or "full" screen), the card's shape ("card_aspect"), a pill "label" and "marks" on the picture.
+The README lists them all. Everything is checked first, so a missing file or a bad setting stops before anything renders.
+
+The look (PR 17, "Neon Getaway"): a landscape picture floats as a framed card over a blurred, darkened copy of itself;
+a portrait one fills the screen. Text cards sit over a blurred picture too, never on black. Captions show one chunky
+yellow word at a time.
 
 Writes short.mp4, voice.wav, captions.ass and log.json to C:\\AI\\gta\\explainers\\<slug>\\<YYYYMMDD-HHMMSS>\\.
 
@@ -23,11 +28,14 @@ import math
 import random
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import wave
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +47,8 @@ MODEL_DIR = ROOT / "models" / "kokoro"
 MODEL, VOICES = MODEL_DIR / "kokoro-v1.0.onnx", MODEL_DIR / "voices-v1.0.bin"
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.1"
 FONT_FILE, FONT = HERE / "fonts" / "Anton-Regular.ttf", "Anton"
+CHUNKY_FILE, CHUNKY = HERE / "fonts" / "LilitaOne-Regular.ttf", "Lilita One"   # captions, cards, labels (SIL OFL)
+FONT_FILES = (FONT_FILE, CHUNKY_FILE)
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 
 W, H, FPS = 1080, 1920, 30
@@ -89,25 +99,80 @@ CAPTION_SIZE, CAPTION_OUTLINE, CAPTION_BOTTOM = 176, 12, 1500
 CAPTION_CHARS, GROUP_CHARS = 16, 28  # most characters on a line, then in a chunk (which may take 2 lines)
 MIN_WORDS, MAX_WORDS, CAPTION_LINGER_S = 2, 4, 0.25
 TITLE_SIZE, TITLE_OUTLINE, TITLE_CHARS, OPEN_CARD_S = 260, 14, 13, 2.0
-OPEN_CARD_Y, CARD_Y = 650, 720
-WHITE = "&HFFFFFF&"
-COLOURS = {"green": "&H14FF39&", "red": "&H2A2AFF&"}  # ASS colours are blue-green-red: #39FF14 and #FF2A2A
-HIGHLIGHT = "&H00E6FF&"              # #FFE600: the word being said. Tagged words keep their green or red.
-# A soft shadow under the captions' black outline, so they also read on a bright, busy picture: px, and ASS alpha
+OPEN_CARD_Y, CARD_Y = 650, 940       # the middle of the open card's text, and of a card's (no caption shows under it)
+WHITE, BLACK = "&HFFFFFF&", "&H000000&"
+
+
+def ass_colour(rgb):
+    """#RRGGBB as ASS writes it: blue, green, red."""
+    return "&H%02X%02X%02X&" % (rgb[2], rgb[1], rgb[0])
+
+
+# The palette. "green" keeps its name in scripts (tags and *card words*) but draws cyan since PR 17.
+CYAN, PINK, RED_RGB, YELLOW_RGB = (0, 229, 255), (255, 46, 147), (255, 42, 42), (255, 230, 0)
+COLOURS = {"green": ass_colour(CYAN), "red": ass_colour(RED_RGB)}
+HIGHLIGHT = ass_colour(YELLOW_RGB)   # the word being said. Tagged words keep their cyan or red.
+# A soft shadow under the phrase captions' black outline, so they also read on a bright, busy picture: px, and ASS alpha
 # (00 solid, FF clear).
 CAPTION_SHADOW, SHADOW_ALPHA = 5, "70"
 POP = "\\fscx88\\fscy88\\t(0,70,\\fscx106\\fscy106)\\t(70,130,\\fscx100\\fscy100)"
 OPEN_POP = POP + "\\fad(0,120)"
-CARD_COLOUR = "0x12121C"
-# Card markup: | starts a new line, ~words~ get a red bar through them, *words* are green. Anton measured with libass:
-# a capital is 0.5 of the size tall, its middle sits 0.06 of the size below the line's anchor, lines are 0.98 apart, and
-# each glyph's advance is below as a share of the size (0.28 for the rest). The bar is drawn, because libass's own
-# strikeout is a hairline at the height of a lowercase letter, which Anton's tall capitals hide.
+POP_PEAK = 1.06                      # how big POP grows text for a moment: text is fitted so it stays in the safe area then
+# Caption styles. "word" (the default): one word at a time in Lilita One, yellow with a thick black outline, its capitals
+# centred on WORD_Y, which sits over the lower part of a square card. "phrase": the PR 16 captions, 2-4 Anton words with
+# the spoken one yellow, bottom at CAPTION_BOTTOM.
+CAPTION_STYLES = ("word", "phrase")
+WORD_SIZE, WORD_OUTLINE, WORD_SHADOW, WORD_Y = 170, 13, 6, 1260
+WORD_POP = "\\fscx80\\fscy80\\t(0,80,\\fscx108\\fscy108)\\t(80,150,\\fscx100\\fscy100)"
+WORD_POP_PEAK = 1.08
+SAFE_WIDTH = 900                     # x 60-960: a word or card line, its outline and its shadow centred on CENTRE_X
+# Where each caption style can draw, top to bottom, outline and shadow in (explainertest.py measures both): labels
+# keep LABEL_GAP away from it.
+CAPTION_BANDS = {"word": (1185, 1345), "phrase": (1130, 1510)}
+# Card markup: | starts a new line, ~words~ get a red bar through them, *words* are cyan ("green"). A number at the
+# start of the first line counts up from 0 over COUNT_S. Text is in Lilita One, and every position comes from libass
+# itself (measure()), so the bar lands on the words. The bar is drawn, because libass's own strikeout is a hairline.
 CARD_MARKS, MAX_CARD_LINES = "~*", 3
-CAP_MIDDLE, LINE_STEP = 0.06, 0.98
-GLYPH_WIDTHS = {"M": 0.43, "W": 0.41, "1": 0.195, "J": 0.2, "-": 0.18, **{c: 0.135 for c in "I.,:;'!| "}}
-BAR_HEIGHT, BAR_PAD, BAR_OUTLINE, BAR_TILT = 0.08, 0.1, 6, 3   # of the size, of the size each side, px, degrees
+CARD_TEXT_SIZE, OPEN_TEXT_SIZE = 300, 220       # the most: wider or taller text is made smaller to fit
+TITLE_OUTLINE_SHARE, TITLE_SHADOW_SHARE = 0.047, 0.04
+BAR_HEIGHT, BAR_PAD, BAR_OUTLINE, BAR_TILT = 0.1, 0.1, 6, 3    # of the size, of the size each side, px, degrees
 BAR_DELAY_MS, BAR_GROW_MS = 250, 200                           # the old text shows first, then the bar strikes it
+COUNT_S = 0.6
+
+# Layouts. "framed": the picture as a card with a white border and a hard shadow, scaling in from 96 % over 0.25 s, over
+# a blurred, darkened copy of itself that zooms very slowly. "full": the whole screen, cropped around the focus (PR 15).
+# A shot without a layout takes the script's, and a script without one frames landscape pictures and fills the screen
+# with portrait ones.
+LAYOUTS = ("framed", "full")
+CARD_ASPECTS = {"1:1": (1, 1), "4:5": (4, 5), "16:9": (16, 9)}
+DEFAULT_CARD_ASPECT = "1:1"
+CARD_BOX, CARD_MIDDLE_Y = 900, 960   # the card fits in a square this big (border in), x 60-960, centred in the safe area
+CARD_BORDER, CARD_RADIUS = 10, 22
+CARD_SHADOW_DX, CARD_SHADOW_DY, CARD_SHADOW_BLUR, CARD_SHADOW_ALPHA = 12, 14, 3, 0.8
+CARD_MARGIN = 28                     # room on every side of the card, in its layer, for the shadow
+CARD_IN_S, CARD_IN_FROM = 0.25, 0.96
+SAFE_TOP, SAFE_BOTTOM = 380, 1540
+# The background: a 9:16 crop, blurred (sigma in screen pixels), more saturated, and brought to BG_LEVEL average
+# brightness (lifted at most BG_MAX_GAIN), so a dark picture doesn't go black and a bright one doesn't glare.
+BG_BLUR, BG_SATURATION, BG_LEVEL, BG_MAX_GAIN, BG_ZOOM_PER_S = 36, 1.35, 0.30, 1.3, 0.012
+BG_SMALL = (270, 480)                # blurred at this size, which is cheap, then scaled up
+# The colour grade on every picture (the card's, or the full screen): a little more contrast and colour, and a soft
+# vignette over the whole frame. "grade": false turns both off.
+GRADE, VIGNETTE = "eq=contrast=1.09:saturation=1.25", "vignette=angle=0.35"
+
+# Labels: a pill on the card's top or bottom edge (or near the screen's top or bottom in "full", or on a text card),
+# popping in with an overshoot just after the shot starts. Colour has a meaning.
+LABEL_STYLES = {"info": CYAN, "no": RED_RGB, "number": PINK}
+LABEL_POSITIONS = ("top", "bottom")
+LABEL_SIZE, LABEL_PAD_X, LABEL_PAD_Y, LABEL_BORDER, LABEL_SHADOW = 80, 36, 24, 8, 7
+LABEL_DELAY_S, LABEL_GAP = 0.22, 14
+LABEL_POP = "\\fscx70\\fscy70\\t(0,140,\\fscx112\\fscy112)\\t(140,260,\\fscx100\\fscy100)"
+FULL_LABEL_Y = {"top": 470, "bottom": 1420}
+
+# Marks on the picture, at a spot given as a share of the picture's width and height: a white cross on a red disc, a
+# white tick on a cyan one (both ringed in white), a red arrow pointing down at the spot, or a red ring around it.
+MARK_ICONS = ("x", "check", "arrow", "circle")
+MARK_SIZE, MARK_EARLIEST_S = 92, 0.3
 
 # Timeline.
 LOOP_FRAMES = 45                     # the last 1.5 s shows the first visual again
@@ -124,8 +189,10 @@ CLEAN_SEAM_DB = 30                   # a clip's last and first frame must be thi
 FOCUS_NAMES = {"left": 1 / 6, "center": 0.5, "centre": 0.5, "right": 5 / 6}
 FOCUS_Y_NAMES = {"top": 1 / 6, "middle": 0.5, "center": 0.5, "centre": 0.5, "bottom": 5 / 6}
 PAN_DIRECTIONS = {"right": (0.0, 1.0), "left": (1.0, 0.0)}   # right: from the left edge to the right edge
-SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight"}
-SCRIPT_KEYS = {"title", "voice", "speed", "open_card", "music", "music_volume", "sfx", "lines"}
+SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight", "layout", "card_aspect", "label", "marks", "bg"}
+CARD_KEYS = {"card", "weight", "bg", "label"}
+SCRIPT_KEYS = {"title", "voice", "speed", "open_card", "music", "music_volume", "sfx", "lines", "layout",
+               "caption_style", "grade"}
 OFF_CENTRE = 0.1                     # a subject further than this from the crop's middle gets zooms only, never a drift
 PAN_BLUR = 0.14                      # a pan's motion blur, as a share of its step per frame: a camera's half-open shutter
 
@@ -229,7 +296,7 @@ def card_lines(text):
     return lines
 
 
-def parse_card(text, source, weight):
+def parse_card(text, source, weight, extra=None):
     text = text.strip().upper()
     if not text:
         raise ScriptError("a card with no text")
@@ -237,11 +304,57 @@ def parse_card(text, source, weight):
     visual = {"source": source, "kind": "card", "text": text}
     if weight != 1.0:
         visual["weight"] = weight
+    visual.update(extra or {})
     return visual
 
 
-def parse_file(name, at, focus, pan, weight, root, source):
-    """An image or video, checked against the real file. at is a video's start; focus and pan are already read."""
+def parse_label(value, where):
+    """A label as {"text", "style", "pos"}: text alone is an info label on top. Its text is shown in capitals, and a |
+    in it is drawn as it is ("GTA V | 2013"), not a line break."""
+    if isinstance(value, str):
+        value = {"text": value}
+    if not isinstance(value, dict):
+        raise ScriptError(f'{where}: label is its text, or {{"text": ..., "style": ..., "pos": ...}}')
+    unknown = sorted(set(value) - {"text", "style", "pos"})
+    if unknown:
+        raise ScriptError(f"{where}: a label has text, style and pos, not {', '.join(map(repr, unknown))}")
+    text = value.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ScriptError(f"{where}: a label needs its text")
+    style, pos = value.get("style", "info"), value.get("pos", "top")
+    if style not in LABEL_STYLES:
+        raise ScriptError(f"{where}: label style is info (cyan), no (red) or number (pink)")
+    if pos not in LABEL_POSITIONS:
+        raise ScriptError(f"{where}: label pos is top or bottom")
+    return {"text": " ".join(text.split()).upper(), "style": style, "pos": pos}
+
+
+def parse_marks(value, where):
+    """Marks as a list of {"icon", "x", "y", "at"}: x and y are where on the picture, as shares of its width and height
+    (0-1), and at is when it appears, in seconds from the shot's start."""
+    if not isinstance(value, list) or not value:
+        raise ScriptError(f'{where}: marks is a list such as [{{"icon": "x", "x": 0.4, "y": 0.3, "at": 0.5}}]')
+    marks = []
+    for mark in value:
+        if not isinstance(mark, dict) or set(mark) - {"icon", "x", "y", "at"}:
+            raise ScriptError(f"{where}: each mark has icon, x, y and at, and nothing else")
+        icon = mark.get("icon", "x")
+        if icon not in MARK_ICONS:
+            raise ScriptError(f"{where}: a mark's icon is {', '.join(MARK_ICONS)}")
+        x, y = parse_share(mark.get("x"), {}), parse_share(mark.get("y"), {})
+        if x is None or y is None:
+            raise ScriptError(f"{where}: a mark's x and y are where it goes, 0 to 1 across and down the picture")
+        at = mark.get("at", MARK_EARLIEST_S)
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or at < 0:
+            raise ScriptError(f"{where}: a mark's at is when it appears, in seconds from the shot's start")
+        marks.append({"icon": icon, "x": x, "y": y, "at": max(float(at), MARK_EARLIEST_S)})
+    return marks
+
+
+def parse_file(name, at, focus, pan, weight, root, source, extra=None):
+    """An image or video, checked against the real file. at is a video's start; focus and pan are already read. extra
+    holds the shot's own layout, card_aspect, label and marks, already read."""
+    extra = extra or {}
     path = root / name
     if not path.is_file():
         raise ScriptError(f"file not found: {path}")
@@ -258,10 +371,10 @@ def parse_file(name, at, focus, pan, weight, root, source):
     if ext in IMAGE_EXTS:
         if at is not None:
             raise ScriptError(f"{source}: at is a video's start time; an image has none")
-        if pan is not None and size[0] * H <= size[1] * W:
+        if pan is not None and extra.get("layout") != "framed" and size[0] * H <= size[1] * W:
             raise ScriptError(f"{source}: pan slides across a wide picture, and this one is no wider than the screen")
         return {"source": source, "kind": "image", "path": path, "focus": across, "focus_y": down,
-                "pan": pan, "size": size, **shape}
+                "pan": pan, "size": size, **shape, **extra}
     if pan is not None:
         raise ScriptError(f"{source}: pan is for images; a video keeps its own movement")
     if "duration" not in info.get("format", {}):
@@ -277,7 +390,7 @@ def parse_file(name, at, focus, pan, weight, root, source):
     frames = str(picture.get("nb_frames", ""))
     frames = int(frames) if frames.isdigit() else round(length * FPS)
     return {"source": source, "kind": "video", "path": path, "start": start, "length": length, "frames": frames,
-            "focus": across, "focus_y": down, "size": size, **shape}
+            "focus": across, "focus_y": down, "size": size, **shape, **extra}
 
 
 def parse_visual(raw, root):
@@ -315,15 +428,41 @@ def parse_shot_object(raw, root):
         raise ScriptError(f"{json.dumps(raw)}: weight is its share of the line, a number above 0 and up to {MAX_WEIGHT:g}")
     weight = float(weight)
     if "card" in raw:
-        extra = sorted(k for k in raw if k not in {"card", "weight"})
+        extra = sorted(k for k in raw if k not in CARD_KEYS)
         if extra:
-            raise ScriptError(f"{json.dumps(raw)}: a card takes only its text and a weight, not {', '.join(extra)}")
+            raise ScriptError(f"{json.dumps(raw)}: a card takes only its text, a weight, a bg and a label, not "
+                              f"{', '.join(extra)}")
         if not isinstance(raw["card"], str):
             raise ScriptError(f"{json.dumps(raw)}: card is its text")
-        return parse_card(raw["card"], "card:" + raw["card"].strip(), weight)
+        where = "card:" + raw["card"].strip()
+        more = {}
+        if "label" in raw:
+            more["label"] = parse_label(raw["label"], where)
+        if "bg" in raw:
+            if not isinstance(raw["bg"], str) or raw["bg"].startswith("card:"):
+                raise ScriptError(f"{where}: bg is the picture behind the card, an image or video such as rockstar/x.jpg")
+            more["bg"] = parse_visual(raw["bg"], root)
+        return parse_card(raw["card"], where, weight, more)
     name = raw["file"]
     if not isinstance(name, str) or not name.strip():
         raise ScriptError(f"{json.dumps(raw)}: file is a path such as rockstar/x.jpg")
+    if "bg" in raw:
+        raise ScriptError(f"{name}: bg is for cards; a picture's background is a blurred copy of itself")
+    extra = {}
+    if "layout" in raw:
+        if raw["layout"] not in LAYOUTS:
+            raise ScriptError(f"{name}: layout is framed (a card over a blurred copy) or full (the whole screen)")
+        extra["layout"] = raw["layout"]
+    if "card_aspect" in raw:
+        if raw["card_aspect"] not in CARD_ASPECTS:
+            raise ScriptError(f"{name}: card_aspect is {', '.join(CARD_ASPECTS)}")
+        if raw.get("layout") == "full":
+            raise ScriptError(f"{name}: card_aspect is the framed card's shape, and this shot fills the screen")
+        extra["card_aspect"] = raw["card_aspect"]
+    if "label" in raw:
+        extra["label"] = parse_label(raw["label"], name)
+    if "marks" in raw:
+        extra["marks"] = parse_marks(raw["marks"], name)
     source = name
     at = raw.get("at")
     if at is not None:
@@ -340,7 +479,28 @@ def parse_shot_object(raw, root):
     elif focus is not None:
         shown = raw["focus"] if not isinstance(raw["focus"], list) else ",".join(map(str, raw["focus"]))
         source = f"{source}, focus {shown}" if at is not None else f"{name}@{shown}"
-    return parse_file(name, at, focus, pan, weight, root, source)
+    return parse_file(name, at, focus, pan, weight, root, source, extra)
+
+
+def resolve_layout(visual, default):
+    """Settle a picture's layout (its own; framed if it sets a card_aspect; else the script's; else framed if it is
+    landscape and full if not) and its card's shape, and check a pan has room in the window it slides. ScriptError
+    says what is wrong."""
+    if visual["kind"] == "card":
+        return
+    iw, ih = visual["size"]
+    layout = (visual.get("layout") or ("framed" if "card_aspect" in visual else default)
+              or ("framed" if iw > ih else "full"))
+    visual["layout"] = layout
+    if layout == "framed":
+        visual.setdefault("card_aspect", DEFAULT_CARD_ASPECT)
+        aw, ah = CARD_ASPECTS[visual["card_aspect"]]
+        visual["aspect"] = (aw, ah)
+        if visual.get("pan") and iw * ah <= ih * aw:
+            raise ScriptError(f"{visual['source']}: pan slides the card's window across the picture, and a "
+                              f"{visual['card_aspect']} card already shows its whole width: use card_aspect 1:1 or 4:5")
+    elif visual.get("pan") and iw * H <= ih * W:
+        raise ScriptError(f"{visual['source']}: pan slides across a wide picture, and this one is no wider than the screen")
 
 
 def word_key(token):
@@ -402,6 +562,19 @@ def load_script(path, root):
     sfx = script.get("sfx", True)
     if not isinstance(sfx, bool):
         problems.append("sfx is true (whooshes and hits) or false (none)")
+    layout = script.get("layout")
+    if layout is not None and layout not in LAYOUTS:
+        problems.append("layout is framed (pictures as cards over a blurred copy) or full (the whole screen); without "
+                        "it, landscape pictures are framed and portrait ones fill the screen")
+        layout = None
+    caption_style = script.get("caption_style", "word")
+    if caption_style not in CAPTION_STYLES:
+        problems.append("caption_style is word (one word at a time) or phrase (2-4 words, the spoken one yellow)")
+        caption_style = "word"
+    grade = script.get("grade", True)
+    if not isinstance(grade, bool):
+        problems.append("grade is true (a little more contrast and colour, and a soft vignette) or false (none)")
+        grade = True
 
     lines = script.get("lines")
     if not isinstance(lines, list) or not lines:
@@ -424,7 +597,9 @@ def load_script(path, root):
         visuals = []
         for raw in raws:
             try:
-                visuals.append(parse_visual(raw, root))
+                visual = parse_visual(raw, root)
+                resolve_layout(visual, layout)
+                visuals.append(visual)
             except ScriptError as e:
                 problems.append(f"line {n}: {e}")
         keys = [word_key(t) for t in spoken_tokens(say)]
@@ -437,11 +612,122 @@ def load_script(path, root):
             problems += [f"line {n}: {colour} tag {t!r} isn't in what this line says" for t in tags[colour]
                          if say and not find_phrase(keys, t)]
         parsed.append({"say": say, "visuals": visuals, "tags": tags})
+    notes = []
+    if not problems:
+        placed, notes = place_visuals(parsed, caption_style)
+        problems += placed
     if problems:
         raise ScriptError("the script needs fixing:\n  " + "\n  ".join(problems))
     return {"title": title, "slug": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "voice": voice, "speed": speed,
             "open_card": open_card.strip().upper() if open_card else None, "music": music,
-            "music_volume": float(music_volume), "sfx": sfx, "lines": parsed}
+            "music_volume": float(music_volume), "sfx": sfx, "lines": parsed, "layout": layout,
+            "caption_style": caption_style, "grade": grade, "notes": notes}
+
+
+def place_visuals(lines, caption_style):
+    """Give each text card a picture to blur behind it, each framed picture its card, and each label its place, so
+    that no label touches the captions. Returns problems (a label too wide) and warnings (a label moved)."""
+    problems, warnings = [], []
+    order = [v for line in lines for v in line["visuals"]]
+    pictures = [i for i, v in enumerate(order) if v["kind"] != "card"]
+    for i, v in enumerate(order):
+        if v["kind"] == "card" and "bg" not in v:
+            after, before = [j for j in pictures if j > i], [j for j in pictures if j < i]
+            if not after and not before:
+                problems.append(f"{v['source']}: a card shows over a blurred picture, and this script has none: give "
+                                "it a bg")
+                continue
+            v["bg"] = order[after[0] if after else before[-1]]   # the next picture, else the one before
+    labels = [v["label"] for v in order if v.get("label")]
+    measure_labels(labels)
+    for v in order:
+        label = v.get("label")
+        if label and label["size"][0] + 2 * LABEL_BORDER > CARD_BOX:
+            problems.append(f"{v['source']}: the label {label['text']!r} is too wide to read at its size; shorten it")
+            continue
+        if v["kind"] != "card" and v["layout"] == "framed":
+            v["frame"] = card_frame(v, label, caption_style, warnings)
+        elif label and v["kind"] != "card":
+            place_full_label(v, label, caption_style, warnings)
+        elif label:
+            label["y"] = FULL_LABEL_Y[label["pos"]]          # no caption shows over a text card
+        if v.get("marks"):
+            problems += place_marks(v, warnings)
+    return problems, warnings
+
+
+def place_marks(visual, warnings):
+    """Where each mark lands on screen: its spot on the picture, through the crop the shot shows (a shot with marks
+    holds still, so it stays put)."""
+    if visual.get("pan"):
+        return [f"{visual['source']}: marks stay on their spot, so a shot with marks can't pan"]
+    x, y, cw, ch = crop_box(visual)[:4]
+    iw, ih = visual["size"]
+    sx, sy, sw, sh = visual["frame"]["content"] if visual["layout"] == "framed" else (0, 0, W, H)
+    problems = []
+    for mark in visual["marks"]:
+        u, v = (mark["x"] * iw - x) / cw, (mark["y"] * ih - y) / ch
+        if not (0 <= u <= 1 and 0 <= v <= 1):
+            problems.append(f"{visual['source']}: the mark at x {mark['x']:g}, y {mark['y']:g} is outside the part of "
+                            "the picture this shot shows")
+            continue
+        mark["screen"] = (sx + u * sw, sy + v * sh)
+        if not (SAFE_LEFT <= mark["screen"][0] <= W - SAFE_RIGHT and SAFE_TOP <= mark["screen"][1] <= SAFE_BOTTOM):
+            warnings.append(f"{visual['source']}: the mark at x {mark['x']:g}, y {mark['y']:g} lands where Shorts "
+                            "draws its buttons or titles")
+    return problems
+
+
+def label_reach(label):
+    """How far a label's pill reaches above and below its middle: its border, and its shadow below."""
+    half = label["size"][1] / 2 + LABEL_BORDER
+    return half, half + LABEL_SHADOW
+
+
+def label_clear(label, y, band):
+    """Whether a label at y stays inside the safe area and LABEL_GAP away from the caption band."""
+    up, down = label_reach(label)
+    top, bottom = y - up, y + down
+    return top >= SAFE_TOP and bottom <= SAFE_BOTTOM and (bottom + LABEL_GAP <= band[0] or top - LABEL_GAP >= band[1])
+
+
+def card_frame(visual, label, caption_style, warnings):
+    """The framed card: the largest box of its shape in CARD_BOX, centred across on CENTRE_X and down as near the safe
+    area's middle as the label lets it. A label that can't clear the captions on its edge goes to the other edge."""
+    aw, ah = visual["aspect"]
+    ow, oh = (CARD_BOX, CARD_BOX * ah / aw) if aw >= ah else (CARD_BOX * aw / ah, CARD_BOX)
+    cw, ch = round((ow - 2 * CARD_BORDER) / 2) * 2, round((oh - 2 * CARD_BORDER) / 2) * 2
+    ow, oh = cw + 2 * CARD_BORDER, ch + 2 * CARD_BORDER
+    band = CAPTION_BANDS[caption_style]
+    lowest, highest = SAFE_TOP + oh / 2, SAFE_BOTTOM - oh / 2         # the card itself stays in the safe area
+    middle = min(max(CARD_MIDDLE_Y, lowest), highest)
+    if label:
+        def fits(pos):
+            edge = -oh / 2 if pos == "top" else oh / 2
+            places = [middle + d * s for d in range(0, 700, 2) for s in (-1, 1)]
+            return next((c for c in places if lowest <= c <= highest and label_clear(label, c + edge, band)), None)
+        centre = fits(label["pos"])
+        if centre is None:
+            other = "top" if label["pos"] == "bottom" else "bottom"
+            centre = fits(other)
+            if centre is not None:
+                warnings.append(f"{visual['source']}: its {label['pos']} label would touch the captions, so it goes on "
+                                f"the {other} edge")
+                label["pos"] = other
+        middle = centre if centre is not None else middle
+        label["y"] = round(middle - oh / 2 if label["pos"] == "top" else middle + oh / 2)
+    ox, oy = CENTRE_X - ow // 2, round(middle - oh / 2)
+    return {"outer": (ox, oy, ow, oh), "content": (ox + CARD_BORDER, oy + CARD_BORDER, cw, ch)}
+
+
+def place_full_label(visual, label, caption_style, warnings):
+    band = CAPTION_BANDS[caption_style]
+    if not label_clear(label, FULL_LABEL_Y[label["pos"]], band):
+        other = "top" if label["pos"] == "bottom" else "bottom"
+        warnings.append(f"{visual['source']}: its {label['pos']} label would touch the captions, so it goes at the "
+                        f"{other}")
+        label["pos"] = other
+    label["y"] = FULL_LABEL_Y[label["pos"]]
 
 
 def find_music(root, name):
@@ -506,7 +792,7 @@ def script_warnings(script):
     speed = script.get("speed", DEFAULT_SPEED)
     if speed > MAX_SPEED:
         warnings.append(f"speed {speed:g} is faster than {MAX_SPEED:g}: to fit the time, cut words instead")
-    return warnings
+    return warnings + script.get("notes", [])
 
 
 # --- Voice and word timing ---
@@ -924,13 +1210,14 @@ def fit_lines(texts, max_chars, size, keep_together=()):
     return break_at, size if widest <= max_chars else int(size * max_chars / widest)
 
 
-def caption_text(words):
+def caption_text(words, shown_from=None):
     """A chunk's text. Each untagged word turns HIGHLIGHT while it is being said and back to white when the next word
     starts; the last stays lit until the chunk goes. It is one event with timed colour changes (\\t, in ms from the
-    event's start as ass_time rounds it), so the chunk pops in once and the highlight never jumps."""
+    event's start as ass_time rounds it), so the chunk pops in once and the highlight never jumps. shown_from is when
+    the event starts, if not with its first word (when it comes back after a text card)."""
     inside_a_tag = {i for i in range(1, len(words)) if words[i]["tag"] is not None and words[i]["tag"] == words[i - 1]["tag"]}
     break_at, size = fit_lines([w["text"] for w in words], CAPTION_CHARS, CAPTION_SIZE, inside_a_tag)
-    shown_from = round(words[0]["start"] * 100) / 100
+    shown_from = round((words[0]["start"] if shown_from is None else shown_from) * 100) / 100
     at = lambda seconds: max(0, round((seconds - shown_from) * 1000))
     parts = []
     for i, w in enumerate(words):
@@ -949,68 +1236,328 @@ def caption_text(words):
     return f"{{\\fs{size}{POP}}}" + "".join(parts)
 
 
-def title_layout(text):
-    """A title's lines as (text, style) pieces, and the size that fits the widest. Plain text breaks in two by itself
-    when it's too wide; marked text keeps the lines it was given."""
-    lines = card_lines(text)
-    if len(lines) == 1 and all(style is None for _, style in lines[0]):
-        words = text.split()
-        break_at, size = fit_lines(words, TITLE_CHARS, TITLE_SIZE)
-        pieces = [words] if break_at is None else [words[:break_at], words[break_at:]]
-        return [[(" ".join(p), None)] for p in pieces], size
+# --- Measuring text with libass itself ---
+
+MEASURE_W, MEASURE_H = 3200, 1400
+_INK = {}
+
+
+def measure(items):
+    """Where libass inks each (tags, text), drawn with \\an5 at a point and no outline or shadow: (x1, y1, x2, y2) from
+    that point in pixels, the far edges just outside the ink, or None if nothing shows. Everything not measured before
+    is measured in one ffmpeg run, one frame each. A piece set to \\alpha&HFF& takes its place but inks nothing, which
+    is how one word's place inside a line is found."""
+    todo = [item for item in dict.fromkeys(items) if item not in _INK]
+    if todo:
+        cx, cy = MEASURE_W // 2, MEASURE_H // 2
+        with tempfile.TemporaryDirectory(prefix="measure_") as folder:
+            for font in FONT_FILES:
+                shutil.copy(font, folder)
+            events = [dialogue(0, n, n + 1, "Caption", f"{{\\an5\\pos({cx},{cy})\\bord0\\shad0\\blur0\\c{WHITE}{tags}}}{text}")
+                      for n, (tags, text) in enumerate(todo)]
+            doc = ass_document(events).replace(f"PlayResX: {W}\n", f"PlayResX: {MEASURE_W}\n")
+            Path(folder, "m.ass").write_text(doc.replace(f"PlayResY: {H}\n", f"PlayResY: {MEASURE_H}\n"), encoding="utf-8")
+            err = ffmpeg(["-f", "lavfi", "-i", f"color=black:s={MEASURE_W}x{MEASURE_H}:r=1:d={len(todo)}", "-vf",
+                          "ass=m.ass:fontsdir=.,bbox=min_val=60", "-f", "null", "-"], cwd=folder, loglevel="info")
+        found = {int(m.group(1)): tuple(map(int, m.groups()[1:]))
+                 for m in re.finditer(r"n:(\d+) pts:\S+ pts_time:\S+ x1:(\d+) x2:(\d+) y1:(\d+) y2:(\d+)", err)}
+        for n, item in enumerate(todo):
+            box = found.get(n)
+            _INK[item] = None if box is None else (box[0] - cx, box[2] - cy, box[1] + 1 - cx, box[3] + 1 - cy)
+    return [_INK[item] for item in items]
+
+
+def centred_width(box):
+    """How wide the ink is when what matters is the far side from the anchor: twice its larger half."""
+    return 2 * max(-box[0], box[2]) if box else 0
+
+
+def chunky(size):
+    return f"\\fn{CHUNKY}\\fs{size}"
+
+
+# --- One word at a time ---
+
+def visible(start, end, hidden):
+    """The parts of start-end outside every hidden (start, end) span, each at least a frame long."""
+    parts = [(start, end)]
+    for h0, h1 in hidden:
+        kept = []
+        for a, b in parts:
+            if b <= h0 or a >= h1:
+                kept.append((a, b))
+                continue
+            if a < h0:
+                kept.append((a, h0))
+            if b > h1:
+                kept.append((h1, b))
+        parts = kept
+    return [(a, b) for a, b in parts if b - a >= 1 / FPS]
+
+
+def word_events(words, total_s, hidden=()):
+    """The "word" captions: each word alone in Lilita One, yellow (a tagged word keeps its cyan or red) with a thick
+    black outline, popping in when it is said and staying until the next word starts, or a moment after it ends when
+    a pause follows. Its capitals are centred on WORD_Y, and a word too wide for the safe area is drawn smaller. None
+    shows while a text card is up (hidden)."""
+    boxes = measure([(chunky(WORD_SIZE), escape_ass(w["text"])) for w in words] + [(chunky(WORD_SIZE), "HH")])
+    caps = boxes[-1]
+    limit = SAFE_WIDTH / WORD_POP_PEAK - 2 * (WORD_OUTLINE + WORD_SHADOW)   # still in at the top of the pop
+    events = []
+    for i, (w, box) in enumerate(zip(words, boxes)):
+        following = words[i + 1] if i + 1 < len(words) else None
+        end = total_s if following is None else following["start"]
+        if following is None or w["pause"] or following["sentence"] != w["sentence"]:
+            end = min(end, w["end"] + CAPTION_LINGER_S)
+        width, size = centred_width(box), WORD_SIZE
+        while width > limit:   # measured again, since a very long word can overflow measure()'s canvas
+            size = min(size - 1, int(size * limit / width))
+            width = centred_width(measure([(chunky(size), escape_ass(w["text"]))])[0])
+        y = WORD_Y - (caps[1] + caps[3]) / 2 * size / WORD_SIZE
+        colour = COLOURS[w["colour"]] if w["colour"] else HIGHLIGHT
+        text = (f"{{\\an5\\pos({CENTRE_X},{y:.0f}){chunky(size)}\\c{colour}\\3c{BLACK}\\bord{WORD_OUTLINE}"
+                f"\\shad{WORD_SHADOW}\\4c{BLACK}\\4a&H60&{WORD_POP}}}{escape_ass(w['text'])}")
+        events += [dialogue(2, a, b, "Caption", text) for a, b in visible(w["start"], end, hidden)]
+    return events
+
+
+# --- Text cards: number and statement cards, and the open card ---
+
+COUNT_RE = re.compile(r"(\d{1,3}(?:,\d{3})+|\d+)(?=\s|$)")
+
+
+def title_lines(text):
+    """A title's lines as (text, style) pieces, trimmed at both ends of each line."""
     tidy = []
-    for line in lines:
-        line = [(t, s) for t, s in line]
+    for line in card_lines(text):
+        line = list(line)
         line[0] = (line[0][0].lstrip(), line[0][1])
         line[-1] = (line[-1][0].rstrip(), line[-1][1])
         tidy.append([(t, s) for t, s in line if t])
-    widest = max(text_width("".join(t for t, _ in line)) for line in tidy)
-    return tidy, TITLE_SIZE if widest <= TITLE_CHARS else int(TITLE_SIZE * TITLE_CHARS / widest)
+    return tidy
 
 
-def title_text(text, y, pop):
-    lines, size = title_layout(text)
-    paint = lambda t, s: f"{{\\c{COLOURS['green']}}}{escape_ass(t)}{{\\c{WHITE}}}" if s == "green" else escape_ass(t)
-    body = "\\N".join("".join(paint(t, s) for t, s in line) for line in lines)
-    return f"{{\\an5\\pos({CENTRE_X},{y})\\fs{size}{pop}}}" + body
+def split_number(lines):
+    """The lines with a whole number at the very start of the first line (212, or 1,200) split off as a piece of its
+    own, styled "number" unless it is cyan already; and that number's text, or None."""
+    text, style = lines[0][0]
+    m = COUNT_RE.match(text)
+    if not m or style == "strike":
+        return lines, None
+    rest = text[m.end():]
+    first = [(m.group(1), "number" if style is None else style)] + ([(rest, style)] if rest else [])
+    return [first + lines[0][1:]] + lines[1:], m.group(1)
 
 
-def ink_width(text, size):
-    """About how wide Anton draws the text at this size, in pixels: within a few percent, a little over."""
-    return size * sum(GLYPH_WIDTHS.get(c, 0.28) for c in text)
-
-
-def strike_bars(text, y):
-    """The drawing for each crossed-out piece of a title, placed from Anton's measured sizes: the piece's capitals
-    are covered with some to spare on each side, and the bar never leaves the safe area. Each grows from its left end
-    once the old text has been seen."""
-    lines, size = title_layout(text)
-    bars = []
+def title_markup(lines, show=None, hide=None):
+    """ASS text for a title's lines: white or cyan ("green") with a black outline, and the counted number pink with a
+    white one, like a sticker. show draws only that (line, piece) and hide leaves that one out; both keep every
+    piece's place. A colour block is written only where the colours change."""
+    paint = {None: (WHITE, BLACK), "strike": (WHITE, BLACK), "green": (COLOURS["green"], BLACK),
+             "number": (ass_colour(PINK), WHITE)}
+    out, last = [], None
     for i, line in enumerate(lines):
-        plain = "".join(t for t, _ in line)
-        left_edge, done = CENTRE_X - ink_width(plain, size) / 2, ""
-        middle = y + (i - (len(lines) - 1) / 2) * LINE_STEP * size + CAP_MIDDLE * size
-        for t, style in line:
-            if style == "strike":
-                lead = t[:len(t) - len(t.lstrip())]
-                left = max(left_edge + ink_width(done + lead, size) - BAR_PAD * size, SAFE_LEFT)
-                right = min(left_edge + ink_width(done + t.rstrip(), size) + BAR_PAD * size, W - SAFE_RIGHT)
-                width, height = right - left, BAR_HEIGHT * size
-                bars.append(f"{{\\an4\\pos({left:.0f},{middle:.0f})\\org({left + width / 2:.0f},{middle:.0f})"
-                            f"\\frz{BAR_TILT}\\bord{BAR_OUTLINE}\\shad0"
-                            f"\\c{COLOURS['red']}\\3c&H000000&\\fscx0\\t({BAR_DELAY_MS},{BAR_DELAY_MS + BAR_GROW_MS},"
-                            f"\\fscx100)\\p1}}m 0 0 l {width:.0f} 0 {width:.0f} {height:.0f} 0 {height:.0f}")
-            done += t
-    return bars
+        parts = []
+        for j, (text, style) in enumerate(line):
+            clear = (show is not None and (i, j) != show) or (i, j) == hide
+            look = (*paint[style], clear)
+            if look != last:
+                alpha = "\\alpha&HFF&" if clear else "\\1a&H00&\\3a&H00&\\4a&H40&"
+                parts.append(f"{{\\c{look[0]}\\3c{look[1]}{alpha}}}")
+                last = look
+            parts.append(escape_ass(text))
+        out.append("".join(parts))
+    return "\\N".join(out)
 
 
-def title_events(layer, start, end, text, y, pop):
-    """A title and the bars that cross out its ~marked~ pieces. They share its layer and come after it, so libass draws
-    them on top; everything here has a \\pos, so nothing gets pushed aside."""
+def title_outline(size):
+    return max(4, round(size * TITLE_OUTLINE_SHARE)), max(3, round(size * TITLE_SHADOW_SHARE))
+
+
+def count_values(number):
+    """What a counting number shows: a value a frame for COUNT_S, from 0 and easing out, then the number itself, written
+    with commas if it has them."""
+    final = int(number.replace(",", ""))
+    steps = round(COUNT_S * FPS)
+    values = [round(final * (1 - (1 - k / steps) ** 3)) for k in range(steps)] + [final]
+    return [f"{v:,}" if "," in number else str(v) for v in values]
+
+
+def fit_title(text, size, room, peak=1.0, counted=False):
+    """The title's lines and the size it is drawn at. Plain text too wide for one line breaks in two where the halves
+    are most even; then the size comes down until the title, outline and shadow in, fits the safe area's width and
+    room pixels of height at its biggest moment: grown to peak by its pop and, if counted, with the widest value its
+    number shows while counting ("204" is wider than "212", and reaches further left, since the count keeps the
+    number's right edge still). The size is measured again until it really fits, because very wide text can overflow
+    measure()'s canvas and measure smaller than it is."""
+    lines = title_lines(text)
+    if len(lines) == 1 and len(lines[0]) == 1 and lines[0][0][1] is None:
+        words = lines[0][0][0].split()
+        outline, shadow = title_outline(size)
+        if len(words) > 1 and centred_width(measure([(chunky(size), escape_ass(" ".join(words)))])[0]) > \
+                SAFE_WIDTH - 2 * (outline + shadow):
+            halves = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))]
+            widths = measure([(chunky(size), escape_ass(h)) for pair in halves for h in pair])
+            best = min(range(len(halves)), key=lambda k: max(centred_width(widths[2 * k]), centred_width(widths[2 * k + 1])))
+            lines = [[(halves[best][0], None)], [(halves[best][1], None)]]
+    lines, number = split_number(lines)
+    counted = counted and number is not None
+    while True:
+        outline, shadow = title_outline(size)
+        items = [(chunky(size), title_markup(lines))]
+        if counted:
+            style = lines[0][0][1]
+            items += [(chunky(size), title_markup(lines, show=(0, 0)))]
+            items += [(chunky(size), title_markup([[(value, style)]])) for value in count_values(number)]
+        box, *count_boxes = measure(items)
+        edge = outline + shadow
+        left, right = (-box[0] + edge) * peak, (box[2] + edge) * peak
+        if counted:   # the number doesn't pop, and each value ends where the number does
+            place = count_boxes[0]
+            left = max(left, max(b[2] - b[0] for b in count_boxes[1:] if b) - place[2] + edge)
+        scale = min(SAFE_WIDTH / 2 / max(left, right, 1), room / max((box[3] - box[1] + 2 * outline + shadow) * peak, 1))
+        if scale >= 1 or size <= 1:
+            return lines, number, size, box
+        size = max(1, min(size - 1, int(size * scale)))
+
+
+def title_events(layer, start, end, text, y, pop, size=CARD_TEXT_SIZE, room=None, count=False, sized_to_count=None):
+    """A title in Lilita One, its ink centred on (CENTRE_X, y) and fitted to room pixels of height (by default as much
+    as the safe area allows around y), and the bars that cross out its ~marked~ pieces. With count, a number at its
+    start counts up from 0 over COUNT_S, right-aligned where it ends, so the words after it never move; it doesn't
+    pop, the rest does. Everything has a \\pos, so nothing gets pushed aside, and the bars come last, on top.
+    The size leaves room for the pop and, with count, for the widest value counted; sized_to_count (count unless set)
+    sizes it that way without counting, so a card that doesn't count this time keeps the size it has when it does."""
+    room = room or 2 * min(y - SAFE_TOP - 10, SAFE_BOTTOM - 10 - y)
+    lines, number, size, box = fit_title(text, size, room, POP_PEAK if pop else 1.0,
+                                         count if sized_to_count is None else sized_to_count)
+    outline, shadow = title_outline(size)
+    y = y - (box[1] + box[3]) / 2                  # the anchor that centres the ink on y
+    base = f"\\an5\\pos({CENTRE_X},{y:.0f}){chunky(size)}\\bord{outline}\\shad{shadow}\\4c{BLACK}\\4a&H40&"
     fade = "\\fad(0,120)" if "\\fad" in pop else ""
-    events = [dialogue(layer, start, end, "Title", title_text(text, y, pop))]
-    return events + [dialogue(layer, start, end, "Title", bar.replace("\\p1}", fade + "\\p1}", 1))
-                     for bar in strike_bars(text, y)]
+    counting = count and number is not None
+    events = [dialogue(layer, start, end, "Title", f"{{{base}{pop}}}" + title_markup(lines, hide=(0, 0) if counting else None))]
+    if counting:
+        events += count_events(layer, start, end, lines, number, size, base, y, fade)
+    struck = [(i, j) for i, line in enumerate(lines) for j, (_, style) in enumerate(line) if style == "strike"]
+    for (i, j), piece in zip(struck, measure([(chunky(size), title_markup(lines, show=p)) for p in struck])):
+        if piece is None:
+            continue
+        # The bar's outline (and a pixel for its tilt) stays inside the safe area too.
+        left = max(CENTRE_X + piece[0] - BAR_PAD * size, SAFE_LEFT + BAR_OUTLINE + 1)
+        right = min(CENTRE_X + piece[2] + BAR_PAD * size, W - SAFE_RIGHT - BAR_OUTLINE - 1)
+        middle = y + (piece[1] + piece[3]) / 2
+        width, height = right - left, BAR_HEIGHT * size
+        events.append(dialogue(layer, start, end, "Title",
+                               f"{{\\an4\\pos({left:.0f},{middle:.0f})\\org({left + width / 2:.0f},{middle:.0f})"
+                               f"\\frz{BAR_TILT}\\bord{BAR_OUTLINE}\\shad0\\c{COLOURS['red']}\\3c{BLACK}\\fscx0"
+                               f"\\t({BAR_DELAY_MS},{BAR_DELAY_MS + BAR_GROW_MS},\\fscx100){fade}\\p1}}"
+                               f"m 0 0 l {width:.0f} 0 {width:.0f} {height:.0f} 0 {height:.0f}"))
+    return events
+
+
+def count_events(layer, start, end, lines, number, size, base, y, fade):
+    """The number at the start of a title counting up from 0, easing out, one value a frame for COUNT_S, then held.
+    Each value is placed so its right edge is where the final number's is."""
+    shown = count_values(number)
+    style = lines[0][0][1]
+    one = [[(text, style)] for text in shown]
+    boxes = measure([(chunky(size), title_markup([line])) for line in one] + [(chunky(size), title_markup(lines, show=(0, 0)))])
+    place = boxes[-1]
+    events = []
+    for k, (text, box) in enumerate(zip(shown, boxes)):
+        a = start + k / FPS
+        b = end if k == len(shown) - 1 else min(start + (k + 1) / FPS, end)
+        if a >= end or box is None:
+            continue
+        x = CENTRE_X + place[2] - box[2]
+        yy = y + (place[1] + place[3]) / 2 - (box[1] + box[3]) / 2
+        tags = base.replace(f"\\pos({CENTRE_X},{y:.0f})", f"\\pos({x:.0f},{yy:.0f})")
+        events.append(dialogue(layer, a, b, "Title", f"{{{tags}{fade if k == len(shown) - 1 else ''}}}"
+                                                     + title_markup([[(text, style)]])))
+    return events
+
+
+# --- Labels and marks ---
+
+def measure_labels(labels):
+    """Each label's pill size and how far its text moves so its ink sits in the pill's middle. Every pill is as tall as
+    a capital plus its padding, whatever its letters."""
+    if not labels:
+        return
+    boxes = measure([(chunky(LABEL_SIZE), escape_ass(label["text"])) for label in labels] + [(chunky(LABEL_SIZE), "HH")])
+    caps = boxes[-1]
+    for label, box in zip(labels, boxes):
+        x1, _, x2, _ = box or (0, 0, 0, 0)
+        label["ink"] = (-(x1 + x2) / 2, -(caps[1] + caps[3]) / 2)
+        label["size"] = (x2 - x1 + 2 * LABEL_PAD_X, caps[3] - caps[1] + 2 * LABEL_PAD_Y)
+
+
+def rounded_box(w, h, r):
+    """An ASS drawing of a w x h box with corners rounded to r, from (0, 0)."""
+    k = 0.5523 * r
+    return (f"m {r:.1f} 0 l {w - r:.1f} 0 b {w - r + k:.1f} 0 {w:.1f} {r - k:.1f} {w:.1f} {r:.1f} "
+            f"l {w:.1f} {h - r:.1f} b {w:.1f} {h - r + k:.1f} {w - r + k:.1f} {h:.1f} {w - r:.1f} {h:.1f} "
+            f"l {r:.1f} {h:.1f} b {r - k:.1f} {h:.1f} 0 {h - r + k:.1f} 0 {h - r:.1f} "
+            f"l 0 {r:.1f} b 0 {r - k:.1f} {r - k:.1f} 0 {r:.1f} 0")
+
+
+def label_events(label, start, end, pop=True):
+    """A pill: the label's colour with a white border and a hard shadow, white Lilita One text with a thin black
+    outline. Shape and text are both centred on their point, so the pop grows them together."""
+    pw, ph = label["size"]
+    dx, dy = label["ink"]
+    y = label["y"]
+    anim = LABEL_POP if pop else ""
+    colour = ass_colour(LABEL_STYLES[label["style"]])
+    shape = (f"{{\\an5\\pos({CENTRE_X},{y})\\bord{LABEL_BORDER}\\3c{WHITE}\\shad{LABEL_SHADOW}\\4c{BLACK}\\4a&H50&"
+             f"\\c{colour}{anim}\\p1}}{rounded_box(pw, ph, ph * 0.3)}")
+    text = (f"{{\\an5\\pos({CENTRE_X + dx:.1f},{y + dy:.1f}){chunky(LABEL_SIZE)}\\c{WHITE}\\3c{BLACK}\\bord3\\shad0"
+            f"{anim}}}{escape_ass(label['text'])}")
+    return [dialogue(3, start, end, "Title", shape), dialogue(4, start, end, "Title", text)]
+
+
+def mark_drawing(icon):
+    """An icon as polygons around (0, 0), the spot it marks: (fill or None, border colour, border px, points) each."""
+    r = MARK_SIZE / 2
+    circle = lambda radius, n: [(radius * math.cos(2 * math.pi * i / n), radius * math.sin(2 * math.pi * i / n))
+                                for i in range(n)]
+    if icon == "x":       # a red disc with a white ring and a white cross of two bars, turned 45 degrees
+        arm, half = r * 0.55, r * 0.14
+        cross = [(-half, -arm), (half, -arm), (half, -half), (arm, -half), (arm, half), (half, half), (half, arm),
+                 (-half, arm), (-half, half), (-arm, half), (-arm, -half), (-half, -half)]
+        c = math.cos(math.pi / 4)
+        return [(COLOURS["red"], WHITE, 6, circle(r, 48)), (WHITE, WHITE, 0, [((x - y) * c, (x + y) * c) for x, y in cross])]
+    if icon == "check":   # a cyan disc with a white ring and a white tick
+        tick = [(-0.5 * r, 0.0), (-0.3 * r, -0.2 * r), (-0.12 * r, 0.0), (0.38 * r, -0.48 * r), (0.56 * r, -0.28 * r),
+                (-0.12 * r, 0.38 * r)]
+        return [(COLOURS["green"], WHITE, 6, circle(r, 48)), (WHITE, WHITE, 0, tick)]
+    if icon == "circle":  # a red ring with a white edge around the spot
+        ring = circle(r * 1.5, 64)
+        return [(None, WHITE, 16, ring), (None, COLOURS["red"], 9, ring)]
+    w, h = r * 0.9, r * 1.8   # an arrow pointing down, its tip on the spot
+    return [(COLOURS["red"], WHITE, 6, [(0, 0), (-w, -w), (-w * 0.4, -w), (-w * 0.4, -h), (w * 0.4, -h), (w * 0.4, -w),
+                                        (w, -w)])]
+
+
+def mark_events(marks, start, end):
+    """Each mark pops in at its time and stays to the end of the shot. libass centres a drawing on \\an5's point the way
+    it does the pills, from (0, 0) to its far corner, so each polygon is moved to start at (0, 0) and placed by the
+    middle of its box."""
+    events = []
+    for mark in marks:
+        t = start + mark["at"]
+        if t >= end - 0.1:
+            continue
+        x, y = mark["screen"]
+        for fill, edge, border, points in mark_drawing(mark["icon"]):
+            xs, ys = [p[0] for p in points], [p[1] for p in points]
+            mx, my = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+            drawing = "m " + " l ".join(f"{px - min(xs):.1f} {py - min(ys):.1f}" for px, py in points)
+            paint = f"\\c{fill}" if fill else "\\1a&HFF&"
+            events.append(dialogue(5, t, end, "Title", f"{{\\an5\\pos({x + mx:.1f},{y + my:.1f}){paint}\\3c{edge}"
+                                                       f"\\bord{border}\\shad3\\4c{BLACK}\\4a&H70&{LABEL_POP}\\p1}}{drawing}"))
+    return events
 
 
 def dialogue(layer, start, end, style, text):
@@ -1033,23 +1580,72 @@ def ass_document(events):
                       "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", *events, ""])
 
 
-def caption_events(words, total_s):
-    """Each chunk shows from its first word until the next chunk, or a moment after its last word if a pause follows."""
+def caption_events(words, total_s, hidden=()):
+    """The "phrase" captions: each chunk shows from its first word until the next chunk, or a moment after its last
+    word if a pause follows. None shows while a text card is up (hidden); a chunk that outlasts the card comes back."""
     events, groups = [], caption_groups(words)
     for group, following in zip(groups, groups[1:] + [None]):
         end = total_s
         if following:
             end = min(following[0]["start"], group[-1]["end"] + CAPTION_LINGER_S)
-        events.append(dialogue(2, group[0]["start"], end, "Caption", caption_text(group)))
+        events += [dialogue(2, a, b, "Caption", caption_text(group, None if a == group[0]["start"] else a))
+                   for a, b in visible(group[0]["start"], end, hidden)]
     return events
 
 
+def card_spans(slots):
+    """When text cards are up, in seconds: no caption shows then, because a card says what the voice says."""
+    return [(s["start"] / FPS, s["end"] / FPS) for s in slots if s["visual"]["kind"] == "card"]
+
+
+def card_room(label):
+    """Where a text card's lines may go, top to bottom: the safe area less its label, if it has one."""
+    top, bottom = SAFE_TOP + 10, SAFE_BOTTOM - 10
+    if label:
+        up, down = label_reach(label)
+        if label["pos"] == "top":
+            top = label["y"] + down + LABEL_GAP
+        else:
+            bottom = label["y"] - up - LABEL_GAP
+    return top, bottom
+
+
+def open_card_events(text, start=0.0, end=OPEN_CARD_S):
+    """The open card on layer 1, in the band above OPEN_CARD_Y's mirror, well clear of the captions."""
+    return title_events(1, start, end, text, OPEN_CARD_Y, OPEN_POP, OPEN_TEXT_SIZE, 2 * (OPEN_CARD_Y - SAFE_TOP - 10))
+
+
 def card_events(slots, open_card):
-    """Cards on layer 0, the open card on 1, both under the captions on 2."""
-    events = title_events(1, 0, OPEN_CARD_S, open_card, OPEN_CARD_Y, OPEN_POP) if open_card else []
+    """Cards on layer 0, the open card on 1, both under the captions on 2. A card's leading number counts up, except in
+    the loop ending, which repeats the opening as it ends."""
+    events = open_card_events(open_card) if open_card else []
     for slot in slots:
-        if slot["visual"]["kind"] == "card":
-            events += title_events(0, slot["start"] / FPS, slot["end"] / FPS, slot["visual"]["text"], CARD_Y, POP)
+        visual = slot["visual"]
+        if visual["kind"] == "card":
+            top, bottom = card_room(visual.get("label"))
+            events += title_events(0, slot["start"] / FPS, slot["end"] / FPS, visual["text"], (top + bottom) / 2, POP,
+                                   CARD_TEXT_SIZE, bottom - top, count=not slot.get("loop_tail"), sized_to_count=True)
+    return events
+
+
+def overlay_events(slots, open_card):
+    """Labels and marks. A label pops in LABEL_DELAY_S after its shot starts, while the card has finished growing, or
+    when the open card goes if it is still up. The first shot's label is there from the first frame (unless the open
+    card is up) and stays through the loop ending, so the last frame matches the first."""
+    events = []
+    open_end = OPEN_CARD_S if open_card else 0.0
+    for i, slot in enumerate(slots):
+        visual, start, end = slot["visual"], slot["start"] / FPS, slot["end"] / FPS
+        label = visual.get("label")
+        if label:
+            if slot.get("loop_tail") or (i == 0 and not open_card):
+                events += label_events(label, start, end, pop=False)
+            else:
+                at = max(start + LABEL_DELAY_S, open_end)
+                if at < end - 0.2:
+                    events += label_events(label, at, end)
+        if visual.get("marks") and not slot.get("loop_tail"):
+            events += mark_events(visual["marks"], start, end)
     return events
 
 
@@ -1099,14 +1695,16 @@ def motion_kinds(rng):
 
 
 def crop_box(visual):
-    """The 9:16 part of an image that fills the screen, centred on its focus as far as the picture allows: x, y, width,
-    height, and where the subject sits across and down that part (0-1)."""
+    """The part of a picture its shot shows, centred on its focus as far as the picture allows: 9:16 to fill the
+    screen, or the framed card's shape. x, y, width, height, and where the subject sits across and down that part
+    (0-1)."""
     iw, ih = visual["size"]
     fx, fy = visual["focus"], visual.get("focus_y", 0.5)
-    if iw * H > ih * W:
-        cw, ch = round(ih * W / H), ih
+    aw, ah = visual.get("aspect", (W, H))
+    if iw * ah > ih * aw:
+        cw, ch = round(ih * aw / ah), ih
     else:
-        cw, ch = iw, round(iw * H / W)
+        cw, ch = iw, round(iw * ah / aw)
     x = min(max(round(fx * iw - cw / 2), 0), iw - cw)
     y = min(max(round(fy * ih - ch / 2), 0), ih - ch)
     return x, y, cw, ch, (fx * iw - x) / cw, (fy * ih - y) / ch
@@ -1164,6 +1762,11 @@ def assign_motions(slots, seed):
         if visual.get("pan"):
             slot["motion"] = make_reveal(visual, visual["pan"])
             continue
+        if visual.get("marks"):  # marks stay on their spot, so the picture holds still
+            subject, middle = crop_box(visual)[4:]
+            slot["motion"] = {"kind": "still", "speed": 1.0, "zoom": (1.0, 1.0), "centre": (subject, subject),
+                              "middle": middle}
+            continue
         kind = next(kinds)
         if kind == last:  # only possible after a swap below
             kind = next(kinds)
@@ -1177,8 +1780,20 @@ def assign_motions(slots, seed):
         slots[-1]["motion"] = return_motion(slots[0]["motion"], slots[0]["frames"], slots[-1]["frames"])
 
 
+def assign_backgrounds(slots):
+    """The blurred background's very slow zoom, and whether the framed card grows in. Every shot's card grows from 96 %
+    as it starts, except the first shot's and the loop ending's, which start and end settled so the Short's last frame
+    is its first; the loop ending's background zooms back to where the opening's started."""
+    for i, slot in enumerate(slots):
+        slot["bg_zoom"] = (1.0, 1.0 + BG_ZOOM_PER_S * max(slot["frames"] - 1, 1) / FPS)
+        slot["card_in"] = i > 0 and not slot.get("loop_tail")
+    if len(slots) > 1 and slots[-1].get("loop_tail"):
+        reach = min(slots[-1]["frames"], slots[0]["frames"]) - 1
+        slots[-1]["bg_zoom"] = (1.0 + BG_ZOOM_PER_S * max(reach, 1) / FPS, 1.0)
+
+
 def pan_speed(slot):
-    """How fast a reveal moves, in screen widths a second."""
+    """How fast a reveal moves, in widths of its window a second: the screen's, or the framed card's."""
     visual, motion = slot["visual"], slot["motion"]
     widths = abs(motion["centre"][1] - motion["centre"][0]) * visual["size"][0] / crop_box(visual)[2]
     return widths / (max(slot["frames"] - 1, 1) / FPS)
@@ -1207,16 +1822,20 @@ def fill_mode(visual, start, frames):
 
 
 def plan_videos(slots):
-    """Each video slot's start time and fill. The loop ending runs up to the point the opening starts from, when the
-    file has that much before it, so the join back to the start is a continuous shot."""
+    """Each video slot's start time and fill. The loop ending runs up to the point the opening starts from, so the
+    join back to the start is a continuous shot and the Short's last frame runs into its first. A file with less than
+    that before the opening's start (a clip used from 0) first holds its first frame for the rest (lead_hold frames):
+    an opening from 0 ends the Short on its own first frame."""
     for slot in slots:
         visual = slot["visual"]
         if visual["kind"] != "video":
             continue
-        slot["start_s"] = visual["start"]
-        if slot.get("loop_tail") and visual["start"] >= slot["frames"] / FPS:
-            slot["start_s"] = visual["start"] - slot["frames"] / FPS
-        slot["fill"] = fill_mode(visual, slot["start_s"], slot["frames"])
+        slot["start_s"], playing = visual["start"], slot["frames"]
+        if slot.get("loop_tail"):
+            playing = min(slot["frames"], round(visual["start"] * FPS))
+            slot["start_s"] = visual["start"] - playing / FPS
+            slot["lead_hold"] = slot["frames"] - playing
+        slot["fill"] = fill_mode(visual, slot["start_s"], playing)
 
 
 def slot_warnings(slots, lines, last_line_frames):
@@ -1242,42 +1861,171 @@ def slot_warnings(slots, lines, last_line_frames):
 
 # --- Rendering ---
 
-def image_filter(visual, motion, frames):
-    """Crop to 9:16 around the focus, enlarge, then move a window over it. A reveal pans over the whole picture instead."""
+FINISH = ",format=yuv420p,setsar=1"
+
+
+def picture_size(visual):
+    """The size a picture is drawn at: the whole screen, or the inside of its framed card."""
+    return tuple(visual["frame"]["content"][2:]) if visual.get("layout") == "framed" else (W, H)
+
+
+def graded(grade):
+    """The colour grade's filters, to come before FINISH, or nothing."""
+    return f",{GRADE},{VIGNETTE}" if grade else ""
+
+
+def image_filter(visual, motion, frames, tail=FINISH):
+    """Crop to 9:16 (or the card's shape) around the focus, enlarge, then move a window over it. A reveal pans over the
+    whole picture instead. tail ends the chain."""
     if motion.get("wide"):
-        return reveal_filter(visual, motion, frames)
+        return reveal_filter(visual, motion, frames, tail)
     x, y, crop_w, crop_h, _, _ = crop_box(visual)
+    ow, oh = picture_size(visual)
     p = f"on/{max(frames - 1, 1)}"
     (z0, z1), (c0, c1), middle = motion["zoom"], motion["centre"], motion.get("middle", 0.5)
-    return (f"crop={crop_w}:{crop_h}:{x}:{y},scale={W * CANVAS_SCALE}:{H * CANVAS_SCALE}:flags=lanczos:{COLOUR_OUT},"
+    return (f"crop={crop_w}:{crop_h}:{x}:{y},scale={ow * CANVAS_SCALE}:{oh * CANVAS_SCALE}:flags=lanczos:{COLOUR_OUT},"
             f"format=yuv444p,zoompan=z='{z0:.5f}+({z1 - z0:.5f})*{p}':"
             f"x='clip(({c0:.5f}+({c1 - c0:.5f})*{p})*iw-iw/zoom/2,0,iw-iw/zoom)':"
-            f"y='clip({middle:.5f}*ih-ih/zoom/2,0,ih-ih/zoom)':d={frames}:s={W}x{H}:fps={FPS},format=yuv420p,setsar=1")
+            f"y='clip({middle:.5f}*ih-ih/zoom/2,0,ih-ih/zoom)':d={frames}:s={ow}x{oh}:fps={FPS}{tail}")
 
 
-def reveal_filter(visual, motion, frames):
+def reveal_filter(visual, motion, frames, tail=FINISH):
     """A pan over the whole picture. zoompan can't do it: its window keeps the picture's own shape. So the picture is
-    enlarged to 3x the screen's height once, that one frame repeats, a 9:16 window slides across it a whole number of
-    enlarged pixels per frame (a third of a screen pixel, too fine to see as a shake), and each frame is scaled down.
-    A pan moves tens of pixels a frame, so a sideways blur the size of a camera's half-open shutter keeps it smooth."""
+    enlarged to 3x the window's height once, that one frame repeats, a window of the screen's (or the card's) shape
+    slides across it a whole number of enlarged pixels per frame (a third of a screen pixel, too fine to see as a
+    shake), and each frame is scaled down. A pan moves tens of pixels a frame, so a sideways blur the size of a
+    camera's half-open shutter keeps it smooth."""
     iw, ih = visual["size"]
-    tall = H * CANVAS_SCALE
+    ow, oh = picture_size(visual)
+    tall = oh * CANVAS_SCALE
     wide = round(iw * tall / ih / 2) * 2
-    window = W * CANVAS_SCALE
+    window = ow * CANVAS_SCALE
     (c0, c1), steps = motion["centre"], max(frames - 1, 1)
     x = f"clip(({c0:.6f}+({c1 - c0:.6f})*n/{steps})*{wide}-{window // 2},0,{wide - window})"
     blur = PAN_BLUR * abs(c1 - c0) * wide / steps / CANVAS_SCALE
     blur = f",gblur=sigma={blur:.2f}:sigmaV=0:steps=2" if blur >= 0.3 else ""
     return (f"scale={wide}:{tall}:flags=lanczos:{COLOUR_OUT},format=yuv444p,loop=loop=-1:size=1,setpts=N/{FPS}/TB,"
-            f"crop={window}:{tall}:x='{x}':y=0,scale={W}:{H}:flags=lanczos{blur},format=yuv420p,setsar=1")
+            f"crop={window}:{tall}:x='{x}':y=0,scale={ow}:{oh}:flags=lanczos{blur}{tail}")
 
 
-def video_filter(focus=0.5, focus_y=0.5):
-    """Fill the frame, cropping around the focus, never a blurred background. tpad holds the last frame if the file
-    runs out."""
-    return (f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
+def lead_hold(slot):
+    """The tpad that holds a video's first frame for the loop ending's lead_hold frames, or nothing."""
+    frames = slot.get("lead_hold", 0)
+    return f"tpad=start={frames}:start_mode=clone," if frames else ""
+
+
+def video_filter(focus=0.5, focus_y=0.5, grade=False, lead=""):
+    """Fill the frame, cropping around the focus. tpad holds the last frame if the file runs out; lead holds the first
+    one first (lead_hold)."""
+    return (f"fps={FPS},{lead}scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
             f"crop={W}:{H}:x='clip({focus:.4f}*iw-{W // 2},0,iw-{W})':y='clip({focus_y:.4f}*ih-{H // 2},0,ih-{H})',"
-            "setsar=1,format=yuv420p,tpad=stop=-1:stop_mode=clone")
+            f"setsar=1{graded(grade)},format=yuv420p,tpad=stop=-1:stop_mode=clone")
+
+
+def background_small(visual):
+    """The background before its brightness: the picture's 9:16 part around its focus, at BG_SMALL, blurred, with more
+    colour. In TV-range YUV, where scaling brightness is exact (see background_chain)."""
+    x, y, cw, ch = crop_box({**visual, "aspect": (W, H)})[:4]
+    sw, sh = BG_SMALL
+    return (f"crop={cw}:{ch}:{x}:{y},scale={sw}:{sh}:flags=area:{COLOUR_OUT},format=yuv444p,"
+            f"gblur=sigma={BG_BLUR * sw / W:.2f}:steps=3,eq=saturation={BG_SATURATION}")
+
+
+@functools.lru_cache(maxsize=None)
+def background_gain(visual_key):
+    """How much the background is darkened (or, for a very dark picture, lifted) so its average brightness is BG_LEVEL,
+    from its first frame."""
+    import numpy as np
+    path, start, focus, focus_y, size = visual_key
+    visual = {"path": path, "focus": focus, "focus_y": focus_y, "size": size}
+    seek = ["-ss", f"{start:.3f}"] if start else []
+    r = subprocess.run([FFMPEG, "-v", "error", *seek, "-i", str(path), "-frames:v", "1", "-vf",
+                        background_small(visual) + ",scale=in_color_matrix=bt709:in_range=tv,format=rgb24",
+                        "-f", "rawvideo", "-"], capture_output=True)
+    sw, sh = BG_SMALL
+    if r.returncode or len(r.stdout) < sw * sh * 3:
+        raise ScriptError(f"ffmpeg couldn't read the first frame of {path}")
+    rgb = np.frombuffer(r.stdout[:sw * sh * 3], np.uint8).reshape(sh, sw, 3) / 255.0
+    luma = float((rgb @ np.array([0.2126, 0.7152, 0.0722])).mean())
+    return min(BG_LEVEL / max(luma, 1e-3), BG_MAX_GAIN)
+
+
+def background_chain(visual, frames, zoom, start=0.0):
+    """The blurred, darkened copy behind a framed card or a text card, at full screen. A still zooms very slowly
+    (zoom: from, to); a video plays and holds its last frame if it runs out. Brightness is scaled in TV-range YUV:
+    luma from 16 and colour from 128, which is the same as scaling red, green and blue."""
+    k = background_gain((visual["path"], start, visual["focus"], visual.get("focus_y", 0.5), tuple(visual["size"])))
+    chain = (background_small(visual) +
+             f",lutyuv=y='(val-16)*{k:.4f}+16':u='(val-128)*{k:.4f}+128':v='(val-128)*{k:.4f}+128'")
+    if visual["kind"] == "image":
+        z0, z1 = zoom
+        return (chain + f",scale={W * 2}:{H * 2}:flags=bicubic,zoompan=z='{z0:.5f}+({z1 - z0:.5f})*on/{max(frames - 1, 1)}':"
+                f"x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d={frames}:s={W}x{H}:fps={FPS}")
+    return f"fps={FPS}," + chain + f",scale={W}:{H}:flags=bicubic,tpad=stop=-1:stop_mode=clone"
+
+
+# --- The framed card's layer, drawn once per size ---
+
+def rounded_rect(w, h, x0, y0, rw, rh, r):
+    """How much of each pixel of a w x h canvas a rounded rectangle covers (0-1), with smooth edges."""
+    import numpy as np
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32) + 0.5
+    qx = np.abs(xs - (x0 + rw / 2)) - (rw / 2 - r)
+    qy = np.abs(ys - (y0 + rh / 2)) - (rh / 2 - r)
+    d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
+    return np.clip(0.5 - d, 0, 1)
+
+
+def soften(a, sigma):
+    """A Gaussian blur, in the frequency domain, one direction at a time."""
+    import numpy as np
+    pad = int(4 * sigma) + 1
+    for axis in (0, 1):
+        n = a.shape[axis]
+        p = np.pad(a, [(pad, pad) if ax == axis else (0, 0) for ax in (0, 1)])
+        shape = [1, 1]
+        shape[axis] = -1
+        g = np.exp(-2 * (np.pi * np.fft.rfftfreq(p.shape[axis]) * sigma) ** 2).reshape(shape)
+        a = np.take(np.fft.irfft(np.fft.rfft(p, axis=axis) * g, p.shape[axis], axis=axis), np.arange(pad, pad + n), axis=axis)
+    return a
+
+
+def write_png(path, pixels):
+    """An 8-bit grey (2-D) or RGBA (H x W x 4) array as a PNG, with zlib alone."""
+    import numpy as np
+    h, w = pixels.shape[:2]
+    kind = 0 if pixels.ndim == 2 else 6
+    rows = np.hstack([np.zeros((h, 1), np.uint8), pixels.reshape(h, -1)]).tobytes()
+    chunk = lambda tag, data: (struct.pack(">I", len(data)) + tag + data
+                               + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, kind, 0, 0, 0))
+                           + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
+_LAYER_LOCK = threading.Lock()
+
+
+def card_layer(folder, frame):
+    """The framed card's layer and its picture's mask, as PNGs in folder, drawn once per size: a white box with rounded
+    corners over its hard shadow, with CARD_MARGIN of room on every side; and the picture's own rounded corners, a
+    little tighter, so the white shows as a border all round."""
+    import numpy as np
+    ow, oh = frame["outer"][2:]
+    cw, ch = frame["content"][2:]
+    layer, mask = Path(folder) / f"card_{ow}x{oh}.png", Path(folder) / f"mask_{cw}x{ch}.png"
+    with _LAYER_LOCK:
+        if not layer.is_file():
+            lw, lh, m = ow + 2 * CARD_MARGIN, oh + 2 * CARD_MARGIN, CARD_MARGIN
+            box = rounded_rect(lw, lh, m, m, ow, oh, CARD_RADIUS)
+            shadow = soften(rounded_rect(lw, lh, m + CARD_SHADOW_DX, m + CARD_SHADOW_DY, ow, oh, CARD_RADIUS),
+                            CARD_SHADOW_BLUR).clip(0, 1) * CARD_SHADOW_ALPHA
+            alpha = box + shadow * (1 - box)
+            white = 255 * box / np.maximum(alpha, 1e-6)          # white over black, as straight alpha
+            write_png(layer, np.dstack([white, white, white, alpha * 255]).round().clip(0, 255).astype(np.uint8))
+        if not mask.is_file():
+            corners = rounded_rect(cw, ch, 0, 0, cw, ch, max(CARD_RADIUS - CARD_BORDER, 4))
+            write_png(mask, (corners * 255).round().astype(np.uint8))
+    return layer, mask
 
 
 def pick_encoder():
@@ -1294,29 +2042,84 @@ def pick_encoder():
             ["-c:v", "libx264", "-preset", "medium", "-crf", "19", "-profile:v", "high"])
 
 
-def render_segment(slot, out, encode):
-    """One visual as its exact number of frames. -an: a source's own audio never comes along."""
+def picture_input(visual, slot, start=None):
+    """ffmpeg's input arguments for a still or a video. A reveal's repeated frame takes its rate from the input."""
+    if visual["kind"] == "image":
+        rate = ["-framerate", FPS] if slot.get("motion", {}).get("wide") else []
+        return ["-f", "image2", "-pattern_type", "none", *rate, "-i", visual["path"]]
+    loop = ["-stream_loop", "-1"] if slot.get("fill") == "loop" else []
+    return [*loop, "-ss", f"{visual['start'] if start is None else start:.3f}", "-i", visual["path"]]
+
+
+def framed_graph(slot):
+    """A framed shot: the blurred background; the picture, graded, through its rounded mask onto the card's layer;
+    the card growing in (unless it is the first shot or the loop ending) and laid over the middle of its place."""
     visual, frames = slot["visual"], slot["frames"]
-    if visual["kind"] == "card":
-        inputs, picture = ["-f", "lavfi", "-i", f"color=c={CARD_COLOUR}:s={W}x{H}:r={FPS}"], "setsar=1,format=yuv420p"
-    elif visual["kind"] == "image":
-        rate = ["-framerate", FPS] if slot["motion"].get("wide") else []  # the repeated frame's rate is the input's
-        inputs = ["-f", "image2", "-pattern_type", "none", *rate, "-i", visual["path"]]
-        picture = image_filter(visual, slot["motion"], frames)
+    ox, oy, ow, oh = visual["frame"]["outer"]
+    cw, ch = visual["frame"]["content"][2:]
+    lw, lh = ow + 2 * CARD_MARGIN, oh + 2 * CARD_MARGIN
+    grade = slot.get("grade", False)
+    if visual["kind"] == "image":
+        source, picture = "[0:v]", image_filter(visual, slot["motion"], frames, tail="")
     else:
-        inputs = ["-stream_loop", "-1"] if slot["fill"] == "loop" else []
-        inputs += ["-ss", f"{slot['start_s']:.3f}", "-i", visual["path"]]
-        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5))
+        source = f"[0:v]fps={FPS},{lead_hold(slot)}"
+        x, y, w, h = crop_box(visual)[:4]
+        picture = (f"crop={w}:{h}:{x}:{y},scale={cw}:{ch}:flags=lanczos:{COLOUR_OUT},setsar=1,"
+                   "tpad=stop=-1:stop_mode=clone")
+    grow = ""
+    if slot.get("card_in"):
+        s = f"({CARD_IN_FROM}+{1 - CARD_IN_FROM:.2f}*(1-pow(1-min(t/{CARD_IN_S}\\,1)\\,2)))"
+        grow = f",scale=w='trunc({lw}*{s}/2)*2':h='trunc({lh}*{s}/2)*2':eval=frame"
+    # The background's brightness is measured where the shot starts, so the loop ending matches the opening.
+    background = background_chain(visual, frames, slot.get("bg_zoom", (1.0, 1.0)), visual.get("start", 0.0))
+    centre_x, centre_y = ox + ow / 2, oy + oh / 2
+    grade_picture = f",{GRADE}" if grade else ""
+    vignette = f",{VIGNETTE}" if grade else ""
+    return (f"{source}split=2[a][b];[a]{background}[bg];[b]{picture}{grade_picture},format=rgba[pic];"
+            f"[2:v]format=gray[m];[pic][m]alphamerge[art];[1:v]format=rgba[frame];"
+            f"[frame][art]overlay={CARD_MARGIN + CARD_BORDER}:{CARD_MARGIN + CARD_BORDER}:format=auto{grow}[card];"
+            f"[bg][card]overlay=x='{centre_x:.0f}-w/2':y='{centre_y:.0f}-h/2':eval=frame:format=auto{vignette},"
+            f"scale={COLOUR_OUT}{FINISH}")
+
+
+def render_segment(slot, out, encode):
+    """One visual as its exact number of frames. -an: a source's own audio never comes along. A slot's grade is off
+    unless render() turns it on, so the pieces render as they did before PR 17 when called on their own."""
+    visual, frames = slot["visual"], slot["frames"]
+    grade = slot.get("grade", False)
+    if visual["kind"] == "card":
+        behind = visual["bg"]
+        inputs = picture_input(behind, {})
+        picture = (background_chain(behind, frames, slot.get("bg_zoom", (1.0, 1.0)), behind.get("start", 0.0))
+                   + (f",{VIGNETTE}" if grade else "") + f",scale={COLOUR_OUT}{FINISH}")
+        ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
+        return
+    if visual.get("layout") == "framed":
+        layer, mask = card_layer(Path(out).parent, visual["frame"])
+        inputs = [*picture_input(visual, slot, slot.get("start_s")), "-loop", "1", "-framerate", FPS, "-i", layer,
+                  "-loop", "1", "-framerate", FPS, "-i", mask]
+        ffmpeg([*inputs, "-an", "-sn", "-dn", "-filter_complex", framed_graph(slot), "-frames:v", frames, *encode,
+                *COLOUR_TAGS, out])
+        return
+    if visual["kind"] == "image":
+        inputs = picture_input(visual, slot)
+        picture = image_filter(visual, slot["motion"], frames, graded(grade) + FINISH)
+    else:
+        inputs = picture_input(visual, slot, slot["start_s"])
+        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5), grade, lead_hold(slot))
     ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
 
 
 def font_warning(work):
-    """A warning if libass ended up with another font: it would swap one in without saying so."""
-    (work / "check.ass").write_text(ass_document([dialogue(0, 0, 1, "Caption", "TEST")]), encoding="utf-8")
+    """A warning if libass ended up with another font for Anton or Lilita One: it would swap one in without saying so."""
+    events = [dialogue(0, 0, 1, "Caption", "TEST"), dialogue(0, 0, 1, "Caption", f"{{\\fn{CHUNKY}}}TEST")]
+    (work / "check.ass").write_text(ass_document(events), encoding="utf-8")
     err = ffmpeg(["-f", "lavfi", "-i", "color=black:s=64x64:d=0.1", "-frames:v", "1", "-vf", "ass=check.ass:fontsdir=.",
                   "-f", "null", "-"], cwd=work, loglevel="debug")
-    m = re.search(r"fontselect: \(.*?\) -> ([^,\r\n]+)", err)
-    return None if m and FONT in m.group(1) else f"libass didn't confirm {FONT}: {m.group(1).strip() if m else 'no font line'}"
+    picked = {m.group(1).strip(): m.group(2).strip() for m in re.finditer(r"fontselect: \((.*?),.*?\) -> ([^,\r\n]+)", err)}
+    wrong = [f"{family} -> {picked.get(family, 'no font line')}" for family in (FONT, CHUNKY)
+             if family.replace(" ", "") not in picked.get(family, "").replace(" ", "")]
+    return f"libass didn't confirm {'; '.join(wrong)}" if wrong else None
 
 
 def render(script_path, root, out_root):
@@ -1349,14 +2152,21 @@ def render(script_path, root, out_root):
 
         slots = plan_slots(script["lines"], line_starts, total_frames)
         assign_motions(slots, script["slug"])
+        assign_backgrounds(slots)
         plan_videos(slots)
+        for slot in slots:
+            slot["grade"] = script["grade"]
         last_line = sum(s["frames"] for s in slots if s["line"] == len(script["lines"]) - 1 and not s.get("loop_tail"))
         warnings += slot_warnings(slots, script["lines"], last_line)
         warnings += runtime_warnings(voice_s)
 
-        events = card_events(slots, script["open_card"]) + caption_events(words, total_s)
+        hidden = card_spans(slots)
+        captions = (word_events(words, total_s, hidden) if script["caption_style"] == "word"
+                    else caption_events(words, total_s, hidden))
+        events = card_events(slots, script["open_card"]) + captions + overlay_events(slots, script["open_card"])
         (run_dir / "captions.ass").write_text(ass_document(events), encoding="utf-8")
-        shutil.copy(FONT_FILE, work)
+        for font in FONT_FILES:
+            shutil.copy(font, work)
         font_problem = font_warning(work)
         if font_problem:
             warnings.append(font_problem)
@@ -1411,7 +2221,13 @@ def render(script_path, root, out_root):
                      "under_voice_lu": round(TARGET_LUFS - MUSIC_LUFS - 20 * math.log10(script["music_volume"]), 1)
                      if music else None,
                      "lift_in_pauses_db": GAP_LIFT_DB if music else None, "lifted_s": sound.get("lifted_s")},
-           "sfx": sfx, "captions": "word by word: the word being said turns yellow; tagged words keep their colour",
+           "sfx": sfx,
+           "captions": ("one word at a time, yellow; tagged words keep their colour (green tags draw cyan)"
+                        if script["caption_style"] == "word" else
+                        "2-4 words, the one being said turns yellow; tagged words keep their colour (green tags draw cyan)"),
+           "look": {"caption_style": script["caption_style"], "grade": script["grade"],
+                    "layout": script["layout"] or "framed for landscape pictures, full for portrait",
+                    "captions_hidden_over_cards_s": [[round(a, 3), round(b, 3)] for a, b in hidden]},
            "longest_quiet_s": round(quiet, 2), "words": len(words),
            "word_times": [{"text": w["text"], "start_s": round(w["start"], 3), "end_s": round(w["end"], 3)} for w in words],
            "visuals": [{"line": s["line"] + 1, "source": s["visual"]["source"], "start_s": round(s["start"] / FPS, 3),
@@ -1422,7 +2238,16 @@ def render(script_path, root, out_root):
                         "motion": s["motion"]["kind"] if "motion" in s else None,
                         "motion_speed": s["motion"]["speed"] if "motion" in s else None,
                         "pan_widths_per_s": round(pan_speed(s), 2) if s.get("motion", {}).get("wide") else None,
-                        "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail"))} for s in slots],
+                        "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail")),
+                        "lead_hold_s": round(s["lead_hold"] / FPS, 3) if s.get("lead_hold") else None,
+                        "layout": s["visual"].get("layout", "card"),
+                        "card_aspect": s["visual"].get("card_aspect") if s["visual"].get("layout") == "framed" else None,
+                        "card": list(s["visual"]["frame"]["outer"]) if "frame" in s["visual"] else None,
+                        "label": ({k: s["visual"]["label"][k] for k in ("text", "style", "pos", "y")}
+                                  if s["visual"].get("label") else None),
+                        "marks": len(s["visual"].get("marks", [])),
+                        "behind": s["visual"]["bg"]["source"] if s["visual"]["kind"] == "card" else None}
+                       for s in slots],
            "per_second": [{"second": sec, "visual": at_second(sec)} for sec in range(math.ceil(total_s))],
            "warnings": warnings, "render_s": timing}
     (run_dir / "log.json").write_text(json.dumps(log, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1439,6 +2264,9 @@ def render(script_path, root, out_root):
     kinds = [e["kind"] for e in sfx]
     print(f"  Sound effects: {kinds.count('whoosh')} whooshes, {kinds.count('hit')} hits" if script["sfx"] else
           "  Sound effects: off")
+    framed = sum(1 for s in slots if s["visual"].get("layout") == "framed" and not s.get("loop_tail"))
+    print(f"  Look: {framed} framed, {shots['own'] - framed - len(hidden)} full screen, {len(hidden)} text cards; "
+          f"{script['caption_style']} captions; grade {'on' if script['grade'] else 'off'}")
     print(f"  Loudness: {final_lufs:.1f} LUFS, true peak {final_peak:.1f} dB")
     print(f"  Voice {script['voice']} at speed {script['speed']:g}, made in {timing['total']:.0f} s with {encoder}")
     for warning in warnings:

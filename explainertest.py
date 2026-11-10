@@ -4,7 +4,11 @@ using ffmpeg-made test videos, test images and test-tone music.
 
 The test videos carry a loud 13.5 kHz tone, which a voice at Kokoro's 24 kHz can't contain (it stops at 12 kHz), so
 any of that tone in the Short is game audio that got through. Their colours avoid the caption colours for the same
-reason: green or red on screen can only come from a caption.
+reason: cyan or red on screen can only come from a caption (their box and the photo's bar are a green the palette
+doesn't use).
+
+The renders that check the PR 14-16 pictures pin "layout": "full", "caption_style": "phrase" and "grade": false, which
+is also the proof that old fields mean what they did. The PR 17 look has its own checks and its own render.
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error). The last line is
 RESULT: PASS or FAIL; exit code 0 or 1. Needs .venv-tts, the Kokoro model files and ffmpeg/ffprobe on PATH; about 1 minute.
@@ -34,7 +38,8 @@ ROOT = Path(_TMP.name)
 OUT = ROOT / "out"
 W, H, FPS = 1080, 1920, 30
 BLUE, PURPLE, AMBER = (10, 60, 200), (90, 24, 154), (200, 150, 0)
-GREEN, RED = (57, 255, 20), (255, 42, 42)
+CYAN, RED = (0, 229, 255), (255, 42, 42)
+BOX = (0, 200, 80)            # the test pictures' marker colour, outside the palette
 GAME_HZ, MUSIC_HZ = 13500, 15000
 SAFE = (60, 959, 380, 1539)   # x1, x2, y1, y2 where captions may draw, in frame pixels
 TOP_BAND = 370                # rows above every caption and card
@@ -63,10 +68,10 @@ def tone(hz, seconds):
 
 
 def make_video(name, colour, size, seconds, box=None, audio=True):
-    """A flat colour with a cyan box. box is its x and y expressions; no tone with audio off."""
+    """A flat colour with a green box. box is its x and y expressions; no tone with audio off."""
     w, h = size
     x, y = box or ("100+60*t", "60")
-    graph = (f"color=c={hexcolour(colour)}:s={w}x{h}:r={FPS}:d={seconds}[bg];color=c=0x00E5FF:s=160x160:r={FPS}:d={seconds}[b];"
+    graph = (f"color=c={hexcolour(colour)}:s={w}x{h}:r={FPS}:d={seconds}[bg];color=c={hexcolour(BOX)}:s=160x160:r={FPS}:d={seconds}[b];"
              f"[bg][b]overlay=x='{x}':y='{y}'[v]")
     audio_args = tone(GAME_HZ, seconds) if audio else []
     run_ffmpeg("-f", "lavfi", "-i", "anullsrc=r=48000:d=0.01", *audio_args, "-filter_complex", graph, "-map", "[v]",
@@ -87,7 +92,7 @@ def assets():
     make_video("rocks.mp4", BLUE, (1080, 1920), 1, ("460+40*sin(2*PI*t)", "880"), audio=False)
     # A photo: amber, with a white square right of centre inside what the crop keeps, and a left half to tell focus by.
     run_ffmpeg("-f", "lavfi", "-i", f"color=c={hexcolour(AMBER)}:s=1920x1080:d=0.04",
-               "-vf", "drawbox=x=0:y=0:w=500:h=ih:color=0x00E5FF:t=fill,"
+               "-vf", f"drawbox=x=0:y=0:w=500:h=ih:color={hexcolour(BOX)}:t=fill,"
                "drawbox=x=1420:y=0:w=500:h=ih:color=0xFFFFFF:t=fill,"
                "drawbox=x=1060:y=300:w=40:h=40:color=0xFFFFFF:t=fill", "-frames:v", "1", ROOT / "shot.png")
     run_ffmpeg("-f", "lavfi", "-i", f"sine=f={MUSIC_HZ}:r=48000:d=2,volume=0.5", "-c:a", "pcm_s16le", ROOT / "music.wav")
@@ -97,6 +102,14 @@ def assets():
     # A picture narrower than the screen, which can't pan.
     run_ffmpeg("-f", "lavfi", "-i", f"color=c={hexcolour(AMBER)}:s=800x1600:d=0.04", "-frames:v", "1", ROOT / "tall.png")
     return True
+
+
+def copy_fonts(folder):
+    for font in ex.FONT_FILES:
+        shutil.copy(font, folder)
+
+
+OLD_LOOK = {"layout": "full", "caption_style": "phrase", "grade": False}   # the PR 14-16 pictures, for their checks
 
 
 def write_script(name, **fields):
@@ -441,21 +454,22 @@ def tags_colour_the_right_words():
 
 @check
 def text_stays_in_the_safe_area():
-    """the widest captions, open cards and cards, drawn in Anton, stay out of Shorts' top, bottom, left and right zones (real pixels)"""
+    """the widest phrase captions (Anton), and open cards and cards (Lilita One, counting numbers too), stay out of Shorts' top, bottom, left and right zones (real pixels)"""
     captions = [["WWWWWWWWWWWWWWWW"], ["MMMM", "WWWW", "MMMM", "WWWW"], ["CONGRATULATIONS,", "EVERYBODY"], ["212", "GIGABYTES"],
                 ["GALLERY", "ALREADY", "SHOWS", "YOU"], ["ABSOLUTELY-UNBELIEVABLE-THING"]]
     titles = ["EVERY PLACE IN GTA 6", "WWWWWWWWWWWWW", "THE LONGEST WAIT IN THE WHOLE SERIES", "13 YEARS",
-              "~NOV 12~|*NOV 10*", "*NOV 10*|12 AM LOCAL", "~WWWWWWWWWWWWWWWW~", "MMMM|~WWWWWWWWWWWW~|*MMMMMMMMMMMMM*"]
+              "~NOV 12~|*NOV 10*", "*NOV 10*|12 AM LOCAL", "~WWWWWWWWWWWWWWWW~", "MMMM|~WWWWWWWWWWWW~|*MMMMMMMMMMMMM*",
+              "1,200,000 PLAYERS", "212 GB"]
     events = [ex.dialogue(2, i, i + 1, "Caption", ex.caption_text([fake_word(w) for w in c])) for i, c in enumerate(captions)]
     at = len(events)
-    for y in (ex.OPEN_CARD_Y, ex.CARD_Y):
-        for t in titles:
-            events += ex.title_events(1, at, at + 1, t, y, ex.POP)
-            at += 1
+    for t in titles:
+        events += ex.open_card_events(t, at, at + 1)
+        events += ex.title_events(0, at + 1, at + 2, t, ex.CARD_Y, ex.POP, count=True)
+        at += 2
     folder = ROOT / "safe"
     folder.mkdir(exist_ok=True)
     (folder / "t.ass").write_text(ex.ass_document(events), encoding="utf-8")
-    shutil.copy(ex.FONT_FILE, folder)
+    copy_fonts(folder)
     err = subprocess.run([FFMPEG, "-hide_banner", "-nostats", "-f", "lavfi", "-i", f"color=black:s={W}x{H}:r=10:d={at}",
                           "-vf", "ass=t.ass:fontsdir=.,bbox=min_val=24", "-f", "null", "-"], cwd=folder, capture_output=True,
                          text=True, encoding="utf-8", errors="replace").stderr
@@ -474,7 +488,7 @@ def ink_boxes(events, count, name):
     folder = ROOT / name
     folder.mkdir(exist_ok=True)
     (folder / "t.ass").write_text(ex.ass_document(events), encoding="utf-8")
-    shutil.copy(ex.FONT_FILE, folder)
+    copy_fonts(folder)
     raw = subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", f"color=0x808080:s={W}x{H}:r=2:d={count}", "-vf",
                           "ass=t.ass:fontsdir=.,select='mod(n\\,2)'", "-fps_mode", "passthrough", "-f", "rawvideo",
                           "-pix_fmt", "rgb24", "-"], cwd=folder, capture_output=True, check=True).stdout
@@ -489,16 +503,15 @@ def ink_boxes(events, count, name):
 
 @check
 def outline_and_shadow_stay_in_the_safe_area_and_off_the_cards():
-    """drawn over grey, so the black outline and the shadow count too: the widest captions stay in Shorts' safe area, and a two-line caption's top sits below the bottom of the tallest card, open card and crossed-out bar"""
+    """drawn over grey, so the black outline and the shadow count too: the widest captions stay in Shorts' safe area, and a two-line caption's top sits below the bottom of the tallest open card and its crossed-out bar (no caption shows over a text card since PR 17)"""
     captions = [["WWWWWWWWWWWWWWWW"], ["MMMM", "WWWW", "MMMM", "WWWW"], ["CONGRATULATIONS,", "EVERYBODY"],
                 ["ABSOLUTELY-UNBELIEVABLE-THING"], ["GALLERY", "ALREADY", "SHOWS", "YOU"]]
     tall = ["MMMM|~WWWWWWWWWWWW~|*MMMMMMMMMMMMM*", "~WWWWWWWWWWWWWWWW~|MMMM|WWWW", "THE LONGEST WAIT IN THE WHOLE SERIES"]
     events = [ex.dialogue(2, i, i + 1, "Caption", ex.caption_text([fake_word(w) for w in c])) for i, c in enumerate(captions)]
     at = len(events)
-    for y in (ex.OPEN_CARD_Y, ex.CARD_Y):
-        for t in tall:
-            events += ex.title_events(1, at, at + 1, t, y, ex.POP)
-            at += 1
+    for t in tall:
+        events += ex.open_card_events(t, at, at + 1)
+        at += 1
     boxes = ink_boxes(events, at, "ink")
     caption_boxes, card_boxes = boxes[:len(captions)], boxes[len(captions):]
     x1, x2 = min(b[0] for b in caption_boxes), max(b[1] for b in caption_boxes)
@@ -513,12 +526,17 @@ def outline_and_shadow_stay_in_the_safe_area_and_off_the_cards():
 
 @check
 def anton_is_really_used():
-    """libass picks Anton when the font is there, and the check notices when it isn't"""
-    good, bad = ROOT / "font_good", ROOT / "font_bad"
-    good.mkdir(exist_ok=True)
-    bad.mkdir(exist_ok=True)
-    shutil.copy(ex.FONT_FILE, good)
-    return ex.font_warning(good) is None and ex.font_warning(bad) is not None and (HERE / "fonts" / "OFL.txt").is_file()
+    """libass picks Anton and Lilita One when the fonts are there, the check notices when either isn't, and both licences are in the repo"""
+    good, bad, half = ROOT / "font_good", ROOT / "font_bad", ROOT / "font_half"
+    for folder in (good, bad, half):
+        folder.mkdir(exist_ok=True)
+    copy_fonts(good)
+    shutil.copy(ex.FONT_FILE, half)
+    missing = ex.font_warning(half)
+    print(f"       with Anton alone: {missing}")
+    return (ex.font_warning(good) is None and ex.font_warning(bad) is not None and missing is not None
+            and "Lilita One" in missing and (HERE / "fonts" / "OFL.txt").is_file()
+            and (HERE / "fonts" / "LilitaOne-OFL.txt").is_file())
 
 
 # --- The timeline ---
@@ -610,7 +628,7 @@ def framing_picks_the_part_of_the_photo():
     motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (1.0, 1.0), "centre": (0.5, 0.5)}
     left = frame_number(render_motion(motion, 2, "shot.png@0"), 0)
     right = frame_number(render_motion(motion, 2, "shot.png@1"), 0)
-    return count_near(left, (0, 229, 255)) > W * H * 0.5 and count_near(right, (255, 255, 255)) > W * H * 0.5
+    return count_near(left, BOX) > W * H * 0.5 and count_near(right, (255, 255, 255)) > W * H * 0.5
 
 
 def still_of(visual, zoom=1.0):
@@ -640,7 +658,7 @@ def focus_centres_the_subject():
     expected = {"top": (667, 756), "middle": (427, 516), "bottom": (187, 276)}
     print(f"       square's middle at x {middle:.0f} (frame middle 540); rows at 1.25 zoom {spans}, expected {expected}")
     return (abs(middle - 540) <= 6 and all(abs(spans[k][i] - expected[k][i]) <= 8 for k in expected for i in (0, 1))
-            and count_near(edge, (0, 229, 255)) > W * H * 0.5)
+            and count_near(edge, BOX) > W * H * 0.5)
 
 
 @check
@@ -701,6 +719,29 @@ def pan_opening_loops_back():
     return tail.get("wide") and diff < 2.0
 
 
+@check
+def video_opening_loops_back():
+    """when the first shot is a video with no footage before its start (a clip used from 0), the loop ending holds that first frame, so the Short's last frame is its first, full screen and framed; an opening later in a file plays the 1.5 s just before it, as since PR 15"""
+    assets()
+    results = []
+    for name, raw in (("full", {"file": "stops.mp4"}), ("framed", {"file": "b.mp4", "layout": "framed"}),
+                      ("later", {"file": "b.mp4", "at": "3", "layout": "framed"})):
+        v = settled(raw)
+        assert not ex.place_visuals([{"visuals": [v]}], "word")[0]
+        slots = [{"line": 0, "start": 0, "end": 30, "frames": 30, "visual": v},
+                 {"line": 0, "start": 30, "end": 75, "frames": 45, "visual": v, "loop_tail": True}]
+        ex.plan_videos(slots)
+        ex.assign_backgrounds(slots)
+        outs = [ROOT / f"vloop_{name}_{k}.mp4" for k in range(2)]
+        for slot, out in zip(slots, outs):
+            ex.render_segment(slot, out, ex.pick_encoder()[1])
+        diff = float(np.abs(frame_number(outs[0], 0) - frame_number(outs[1], 44)).mean())
+        results.append((name, v["layout"], slots[1]["start_s"], slots[1].get("lead_hold", 0), round(diff, 2)))
+    print(f"       (shot, layout, loop ending's start s, frames held, first vs last frame) {results}")
+    return (all(r[4] < 2.0 for r in results) and [r[1] for r in results] == ["full", "framed", "framed"]
+            and results[0][3] == 45 and results[1][3] == 45 and results[2][2:4] == (1.5, 0))
+
+
 def still_frame(visual, motion, frames, n):
     out = ROOT / f"seg_{motion['kind']}_{frames}.mp4"
     ex.render_segment({"visual": visual, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])
@@ -741,7 +782,7 @@ def crossed_out_card_draws_a_bar_over_its_text():
     folder.mkdir(exist_ok=True)
     events = ex.title_events(0, 0, 2, "~NOV 12~|*NOV 10*", ex.CARD_Y, ex.POP)
     (folder / "b.ass").write_text(ex.ass_document(events), encoding="utf-8")
-    shutil.copy(ex.FONT_FILE, folder)
+    copy_fonts(folder)
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=black:s={W}x{H}:r=10:d=2",
                     "-vf", "ass=b.ass:fontsdir=.", "-c:v", "libx264", "-preset", "veryfast", "-crf", "12", "-pix_fmt", "yuv444p",
                     "b.mp4"], cwd=folder, check=True, capture_output=True)
@@ -802,7 +843,7 @@ def main_run():
     """A 3-line script with test videos, a test image and a card."""
     assets()
     script = write_script("three.json", title="Test: Three Lines!", voice="am_puck", speed=1.18, open_card="BIG TOPIC",
-                          music=None, lines=[
+                          music=None, **OLD_LOOK, lines=[
         {"say": "The first line has two parts, and 212 gigabytes is one of them.", "visuals": ["a.mp4@0:03", "shot.png"],
          "green": ["212 GIGABYTES"], "red": []},
         {"say": "Danger is the word you should remember today. It comes up right here.", "visuals": ["b.mp4@1.5"], "green": [], "red": ["DANGER"]},
@@ -863,24 +904,25 @@ def video_length_matches_the_voice():
 
 @check
 def captions_hold_the_tag_colours():
-    """the .ass has 212 GIGABYTES in neon green and DANGER in red, and untagged words have no colour of their own"""
+    """the .ass has 212 GIGABYTES in cyan (a green tag since PR 17) and DANGER in red, and untagged words have no colour of their own"""
     text = (main_run()[0] / "captions.ass").read_text(encoding="utf-8")
     white_line = next(line for line in text.splitlines() if "THE FIRST" in plain(line))
-    return ("{\\c&H14FF39&}212" in text and "{\\c&H14FF39&}GIGABYTES" in text and "{\\c&H2A2AFF&}DANGER" in text
-            and "\\c&H14FF39&" not in white_line and "\\c&H2A2AFF&" not in white_line and "Anton" in text)
+    cyan, red = ex.COLOURS["green"], ex.COLOURS["red"]
+    return (cyan == "&HFFE500&" and f"{{\\c{cyan}}}212" in text and f"{{\\c{cyan}}}GIGABYTES" in text
+            and f"{{\\c{red}}}DANGER" in text and cyan not in white_line and red not in white_line and "Anton" in text)
 
 
 @check
 def colours_really_show_on_screen():
-    """while a tagged chunk shows, the caption band has that exact green or red; while an untagged one shows, neither"""
+    """while a tagged chunk shows, the caption band has that exact cyan or red; while an untagged one shows, neither"""
     folder = main_run()[0]
     short = folder / "short.mp4"
     band = lambda seconds: frame_at(short, seconds + 0.25)[1100:1540]
     green = band(caption_starts(folder, "GIGABYTES")[0])
     red = band(caption_starts(folder, "DANGER")[0])
     plain = band(caption_starts(folder, "THE FIRST")[0])
-    counts = count_near(green, GREEN), count_near(red, RED), count_near(plain, GREEN), count_near(plain, RED), count_near(green, RED)
-    print(f"       green px {counts[0]}, red px {counts[1]}; untagged chunk: green {counts[2]}, red {counts[3]}")
+    counts = count_near(green, CYAN), count_near(red, RED), count_near(plain, CYAN), count_near(plain, RED), count_near(green, RED)
+    print(f"       cyan px {counts[0]}, red px {counts[1]}; untagged chunk: cyan {counts[2]}, red {counts[3]}")
     return counts[0] > 2000 and counts[1] > 2000 and counts[2] == counts[3] == counts[4] == 0
 
 
@@ -1051,7 +1093,7 @@ def pacing_run():
     """A script with this PR's shots: a pan to open (so the loop ending slides back), a crossed-out card, a weighted
     video with a focus, and an image with [across, down]."""
     assets()
-    script = write_script("pacing.json", title="Pacing test", lines=[
+    script = write_script("pacing.json", title="Pacing test", **OLD_LOOK, lines=[
         {"say": "This line opens on a slow pan and then shows a card with a date crossed out.",
          "visuals": [{"file": "ramp.png", "pan": "right", "weight": 2}, {"card": "~NOV 12~|*NOV 10*"}]},
         {"say": "Then a clip framed on its left edge, and a photo held near its top.",
@@ -1073,7 +1115,7 @@ def pacing_render_joins_and_loops():
     card = by_source["card:~NOV 12~|*NOV 10*"]
     clip = next(x for x in log["visuals"] if x["source"].startswith("a.mp4"))
     bar = frame_at(short, card["start_s"] + card["seconds"] - 0.2)
-    red = int(((bar[..., 0] > 190) & (bar[..., 1] < 100) & (bar[..., 2] < 100))[500:700].sum())
+    red = int(((bar[..., 0] > 190) & (bar[..., 1] < 100) & (bar[..., 2] < 100)).sum())
     clip_frame = frame_at(short, clip["start_s"] + 0.1)
     magenta_left = count_near(clip_frame[:, :W // 2], (255, 0, 255), 40)
     first, last = frame_number(short, 0)[:TOP_BAND], frame_number(short, int(v["nb_read_frames"]) - 1)[:TOP_BAND]
@@ -1209,6 +1251,409 @@ def auto_with_no_music_folder_still_renders():
     return (log["music"]["file"] is None and log["sfx"] == [] and any("has no audio files" in w for w in log["warnings"])
             and "Music: none" in result.stdout and "Sound effects: off" in result.stdout
             and band_level(folder / "short.mp4", MUSIC_HZ) < -70 and abs(log["loudness"]["final_lufs"] + 14) <= 1)
+
+
+# --- PR 17: the look ---
+
+def look_shot(**fields):
+    return {"file": "shot.png", **fields}
+
+
+def settled(raw, default=None):
+    """A shot read and given its layout, as load_script does."""
+    visual = ex.parse_visual(raw, ROOT)
+    ex.resolve_layout(visual, default)
+    return visual
+
+
+@check
+def new_fields_are_read():
+    """layout, card_aspect (which means framed), a label (its text alone, or text, style and pos), marks and a card's bg; the script's layout, caption_style and grade; with none set: framed for a landscape picture, full for a portrait one, a square card, word captions, grade on"""
+    assets()
+    a = settled(look_shot(layout="full"))
+    b = settled(look_shot(card_aspect="4:5", label="gta v  |  2013"))
+    c = settled(look_shot(label={"text": "no way in", "style": "no", "pos": "bottom"},
+                          marks=[{"icon": "circle", "x": 0.55, "y": 0.3, "at": 0.5}, {"x": 0.5, "y": 0.5}]))
+    d = ex.parse_visual({"card": "212 GB", "bg": "b.mp4@2", "label": {"text": "PS5", "style": "number"}}, ROOT)
+    tall, forced = settled("tall.png"), settled("tall.png", "framed")
+    aspect_wins = settled({"file": "tall.png", "card_aspect": "16:9"}, "full")
+    script = ex.load_script(write_script("look_defaults.json", **one_line()), ROOT)
+    pinned = ex.load_script(write_script("look_pinned.json", **one_line(**OLD_LOOK)), ROOT)
+    shot = script["lines"][0]["visuals"][0]
+    return (a["layout"] == "full" and b["layout"] == "framed" and b["aspect"] == (4, 5)
+            and b["label"] == {"text": "GTA V | 2013", "style": "info", "pos": "top"}
+            and c["layout"] == "framed" and c["card_aspect"] == "1:1" and c["label"]["style"] == "no"
+            and c["label"]["pos"] == "bottom"
+            and c["marks"] == [{"icon": "circle", "x": 0.55, "y": 0.3, "at": 0.5},
+                               {"icon": "x", "x": 0.5, "y": 0.5, "at": ex.MARK_EARLIEST_S}]
+            and d["bg"]["kind"] == "video" and d["bg"]["start"] == 2 and d["label"]["style"] == "number"
+            and tall["layout"] == "full" and forced["layout"] == "framed" and aspect_wins["layout"] == "framed"
+            and script["caption_style"] == "word" and script["grade"] is True and script["layout"] is None
+            and shot["layout"] == "framed" and shot["card_aspect"] == "1:1" and shot["frame"]["outer"] == (60, 510, 900, 900)
+            and pinned["caption_style"] == "phrase" and pinned["grade"] is False
+            and pinned["lines"][0]["visuals"][0]["layout"] == "full")
+
+
+@check
+def bad_new_fields_stop():
+    """a bad layout or card_aspect (or one on a full-screen shot), label, mark or bg, a pan that a 16:9 card leaves no room for, a label too wide to read, a mark outside what the shot shows, and bad look settings for the script: all listed, exit 2, nothing written"""
+    assets()
+    out = ROOT / "bad_look_out"
+    bad = [look_shot(layout="wide"), look_shot(card_aspect="3:2"), look_shot(layout="full", card_aspect="1:1"),
+           look_shot(label={"text": "X", "style": "pink"}), look_shot(label={"text": "X", "pos": "middle"}),
+           look_shot(label={"text": " "}), look_shot(label={"text": "X", "size": 3}),
+           look_shot(marks=[{"icon": "star", "x": 0.5, "y": 0.5}]), look_shot(marks=[{"x": 1.5, "y": 0.5}]),
+           look_shot(marks=[{"x": 0.5, "y": 0.5, "at": -1}]), look_shot(marks=[]), look_shot(bg="b.mp4"),
+           {"card": "X", "bg": "card:Y"}, {"file": "shot.png", "pan": "right", "card_aspect": "16:9"}]
+    first = run_tool(write_script("bad_look.json", title="Bad look", lines=[{"say": "One two three.", "visuals": bad}]), out)
+    second = run_tool(write_script("bad_look2.json", title="Bad look", layout="stretched", caption_style="karaoke",
+                                   grade="yes", lines=[{"say": "One two three.", "visuals": ["shot.png"]}]), out)
+    third = run_tool(write_script("bad_look3.json", title="Bad look", lines=[{"say": "One two three.", "visuals": [
+        look_shot(label="THIS LABEL IS FAR TOO LONG TO EVER FIT"), look_shot(marks=[{"x": 0.02, "y": 0.5}]),
+        look_shot(pan="right", marks=[{"x": 0.5, "y": 0.5}])]}]), out)
+    wanted = ["layout is framed", "card_aspect is 1:1, 4:5, 16:9", "this shot fills the screen", "label style is info",
+              "label pos is top or bottom", "a label needs its text", "not 'size'", "a mark's icon is",
+              "a mark's x and y", "a mark's at", "marks is a list", "bg is for cards", "bg is the picture behind the card",
+              "already shows its whole width"]
+    missing = [w for w in wanted if w not in first.stderr]
+    missing += [w for w in ("layout is framed (pictures", "caption_style is word", "grade is true") if w not in second.stderr]
+    missing += [w for w in ("too wide to read", "outside the part of the picture", "can't pan") if w not in third.stderr]
+    if missing:
+        print(f"       missing from the errors: {missing}")
+    return (first.returncode == second.returncode == third.returncode == 2 and not missing
+            and first.stderr.count("line 1:") >= len(bad) and not out.exists())
+
+
+def placed(caption_style, **fields):
+    visual = settled(look_shot(**fields))
+    problems, warnings = ex.place_visuals([{"visuals": [visual]}], caption_style)
+    assert not problems, problems
+    return visual, warnings
+
+
+def label_clear(visual, caption_style):
+    up, down = ex.label_reach(visual["label"])
+    lo, hi = ex.CAPTION_BANDS[caption_style]
+    top, bottom = visual["label"]["y"] - up, visual["label"]["y"] + down
+    return (bottom + ex.LABEL_GAP <= lo or top - ex.LABEL_GAP >= hi) and top >= 380 and bottom <= 1540
+
+
+@check
+def cards_and_labels_find_their_place():
+    """a square card is 900 px wide at x 60-960 in the middle of the safe area, with an 880 px picture inside; a label sits on its edge and clears the captions; a 16:9 card with a bottom label moves up to clear the word captions; with phrase captions a square card's bottom label goes to the top edge and says so; a full-screen bottom label clears the word captions"""
+    assets()
+    plain_card, _ = placed("word")
+    square, w1 = placed("word", label={"text": "PS5", "pos": "bottom"})
+    on_top, _ = placed("word", label="PS5")
+    wide, w2 = placed("word", card_aspect="16:9", label={"text": "PS5", "pos": "bottom"})
+    moved, w3 = placed("phrase", label={"text": "PS5", "pos": "bottom"})
+    full, w4 = placed("word", layout="full", label={"text": "PS5", "pos": "bottom"})
+    ox, oy, ow, oh = wide["frame"]["outer"]
+    print(f"       square {plain_card['frame']}; with a bottom label {square['frame']['outer']}, label y "
+          f"{square['label']['y']}; 16:9 {wide['frame']['outer']}, label y {wide['label']['y']}; phrase: {w3}")
+    return (plain_card["frame"] == {"outer": (60, 510, 900, 900), "content": (70, 520, 880, 880)}
+            and square["label"]["y"] == square["frame"]["outer"][1] + 900 and label_clear(square, "word") and not w1
+            and on_top["label"]["y"] == on_top["frame"]["outer"][1] and label_clear(on_top, "word")
+            and (ow, oh) == (900, 506) and wide["label"]["y"] == oy + oh and oy + oh / 2 < 960
+            and label_clear(wide, "word") and not w2
+            and moved["label"]["pos"] == "top" and any("goes on the top edge" in w for w in w3)
+            and label_clear(moved, "phrase") and full["label"]["y"] == ex.FULL_LABEL_Y["bottom"]
+            and label_clear(full, "word") and not w4)
+
+
+def render_ass(events, times, name, size=(W, H)):
+    """The events drawn over mid grey, one frame at each of the times, as RGB arrays."""
+    folder = ROOT / name
+    folder.mkdir(exist_ok=True)
+    (folder / "t.ass").write_text(ex.ass_document(events), encoding="utf-8")
+    copy_fonts(folder)
+    frames = []
+    for t in times:
+        raw = subprocess.run([FFMPEG, "-v", "error", "-f", "lavfi", "-i", f"color=0x808080:s={size[0]}x{size[1]}:r=100:d={t + 0.02}",
+                              "-vf", f"ass=t.ass:fontsdir=.,select='gte(t\\,{t:.3f})'", "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "rgb24", "-"], cwd=folder, capture_output=True, check=True).stdout
+        frames.append(np.frombuffer(raw, np.uint8).reshape(size[1], size[0], 3).astype(np.int32))
+    return frames
+
+
+def box_of(mask):
+    ys, xs = np.nonzero(mask)
+    return (int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())) if len(xs) else None
+
+
+@check
+def word_captions_follow_each_word():
+    """one event a word from its own start, yellow unless tagged (cyan for green, red for red), gone when the next word starts or a moment after a pause, none while a card is up (a word that outlasts the card comes back); on real pixels each word's capitals sit on WORD_Y and a word too long for the screen is drawn smaller to stay in the safe area"""
+    tag = ("green", "212 GIGS", 1)
+    words = [fake_word("THE", start=0.0, end=0.2), fake_word("212", colour="green", tag=tag, start=0.2, end=0.5),
+             fake_word("GIGS", colour="green", tag=tag, pause=True, start=0.5, end=0.9),
+             fake_word("DANGER", 1, colour="red", tag=("red", "DANGER", 3), start=1.4, end=1.8),
+             fake_word("ABSOLUTELY-UNBELIEVABLE", 1, start=1.8, end=2.5)]
+    events = ex.word_events(words, 3.0, hidden=[(2.0, 2.3)])
+    spans = [(ass_seconds(m.group(1)), ass_seconds(m.group(2)), plain(e).split(",,")[-1])   # the word, after the fields
+             for e in events for m in [re.match(r"Dialogue: 2,([\d:.]+),([\d:.]+),", e)]]
+    colours = [re.search(r"\\c(&H[0-9A-F]+&)", e).group(1) for e in events]
+    sizes = [int(re.search(r"\\fs(\d+)", e).group(1)) for e in events]
+    want = [(0.0, 0.2, "THE"), (0.2, 0.5, "212"), (0.5, 1.15, "GIGS"), (1.4, 1.8, "DANGER"),
+            (1.8, 2.0, "ABSOLUTELY-UNBELIEVABLE"), (2.3, 2.75, "ABSOLUTELY-UNBELIEVABLE")]
+    timing = all(abs(a - wa) < 0.006 and abs(b - wb) < 0.006 and t == wt for (a, b, t), (wa, wb, wt) in zip(spans, want))
+    painted = colours[:4] == [ex.HIGHLIGHT, ex.COLOURS["green"], ex.COLOURS["green"], ex.COLOURS["red"]]
+    # Real pixels: each word alone, one a second, half a second in (after the pop).
+    alone = ex.word_events([fake_word(w, start=i, end=i + 0.8) for i, w in enumerate(["MIDNIGHT", "WWWWWWWWWWWWWWWW", "6"])], 3.0)
+    frames = render_ass(alone, [0.5, 1.5, 2.5], "words")
+    yellow = [box_of(np.abs(f - np.array(YELLOW)).max(axis=2) <= 40) for f in frames]
+    ink = [box_of(np.abs(f - 128).max(axis=2) > 12) for f in frames]
+    middles = [(b[2] + b[3]) / 2 for b in yellow]
+    print(f"       spans {[(round(a, 2), round(b, 2), t[:8]) for a, b, t in spans]}; sizes {sizes}; yellow boxes {yellow}; "
+          f"ink with outline {ink}")
+    return (len(events) == 6 and timing and painted and sizes[0] == ex.WORD_SIZE and sizes[4] < ex.WORD_SIZE
+            and all(abs(m - ex.WORD_Y) <= 4 for m in middles)
+            and all(b[0] >= SAFE[0] and b[1] <= SAFE[1] and b[2] >= ex.CAPTION_BANDS["word"][0]
+                    and b[3] <= ex.CAPTION_BANDS["word"][1] for b in ink))
+
+
+@check
+def phrase_captions_step_aside_for_cards():
+    """with phrase captions, a chunk that runs into a text card stops when the card comes and, if it outlasts it, comes back with its highlight still timed to the words (the last chunk still stays to the end, as in PR 16)"""
+    words = [fake_word("ONE", start=0.0, end=0.3), fake_word("TWO", start=0.3, end=0.6), fake_word("THREE", start=1.2, end=1.5)]
+    events = ex.caption_events(words, 2.0, hidden=[(0.2, 0.9)])
+    spans = [(ass_seconds(m.group(1)), ass_seconds(m.group(2))) for e in events for m in [re.match(r"Dialogue: 2,([\d:.]+),([\d:.]+),", e)]]
+    back = events[1]
+    print(f"       spans {spans}; after the card: {back[back.index(',,') + 2:][:120]}")
+    return (spans == [(0.0, 0.2), (0.9, 2.0)] and "\\c&H00E6FF&" in back.split("THREE")[0]
+            and ex.visible(0, 1, [(0.2, 0.4), (0.5, 0.6)]) == [(0, 0.2), (0.4, 0.5), (0.6, 1)])
+
+
+PINK = (255, 46, 147)
+
+
+@check
+def numbers_count_up_and_hold_their_place():
+    """a card starting with 212 counts 0 to 212 over 0.6 s, a value a frame, easing out; on real pixels the number's right edge and the unit after it never move; text without a number at its start, or with it crossed out, doesn't count"""
+    events = ex.title_events(0, 0, 2, "212 GB", ex.CARD_Y, ex.POP, count=True)
+    values = [int(plain(e).split(",,")[-1]) for e in events[1:]]
+    starts = [ass_seconds(re.match(r"Dialogue: 0,([\d:.]+),", e).group(1)) for e in events[1:]]
+    # Two moments mid-count (after the 130 ms pop of the unit) and one long after. The unit's white is looked for right
+    # of the number and its own white outline, which changes with the value.
+    frames = render_ass(events, [0.15, 0.3, 1.0], "count")
+    pink = [box_of(np.abs(f - np.array(PINK)).max(axis=2) <= 40) for f in frames]
+    unit_from = pink[-1][1] + 40
+    white = [box_of(f[:, unit_from:].min(axis=2) > 235) for f in frames]
+    plainer = ex.title_events(0, 0, 2, "*NOV 10*|12 AM", ex.CARD_Y, ex.POP, count=True)
+    struck = ex.title_events(0, 0, 2, "~212~ GB", ex.CARD_Y, ex.POP, count=True)
+    print(f"       values {values[:5]}...{values[-3:]} ({len(values)}); pink (number) boxes {pink}; white (GB) boxes {white}")
+    return (values[0] == 0 and values[-1] == 212 and all(a <= b for a, b in zip(values, values[1:])) and len(values) == 19
+            and values[9] > 212 / 2 and all(abs(s - k / FPS) < 0.006 for k, s in enumerate(starts))
+            and all(abs(p[1] - pink[-1][1]) <= 3 for p in pink) and pink[0][1] - pink[0][0] < pink[-1][1] - pink[-1][0]
+            and all(w == white[-1] for w in white)
+            and len(plainer) == 1 and len(struck) == 2)
+
+
+@check
+def labels_are_pills_on_the_card_edge():
+    """on real pixels: a label is a pill of its colour (cyan info, red no, pink number) with white text inside, centred across on CENTRE_X and on its edge, at least as big as the C2 sample's; halfway through the pop the text is still in the pill's middle"""
+    labels = [{"text": "GTA V | 2013", "style": "info", "pos": "top", "y": 600},
+              {"text": "NO WAY IN", "style": "no", "pos": "top", "y": 1000},
+              {"text": "212 GB", "style": "number", "pos": "top", "y": 1400}]
+    ex.measure_labels(labels)
+    events = [e for label in labels for e in ex.label_events(label, 0, 2)]
+    late, early = render_ass(events, [1.0, 0.07], "pills")
+    ok, notes = True, []
+    for label, colour in zip(labels, (CYAN, RED, PINK)):
+        y = label["y"]
+        for frame, when in ((late, "settled"), (early, "popping")):
+            band = frame[y - 80:y + 80]
+            pill = box_of(np.abs(band - np.array(colour)).max(axis=2) <= 40)
+            text = box_of(band.min(axis=2) > 235)
+            inner = band[:, pill[0]:pill[1]] if pill else band
+            centre = ((pill[0] + pill[1]) / 2, (pill[2] + pill[3]) / 2 + y - 80)
+            words = box_of(inner.min(axis=2) > 235)
+            words_centre = (pill[0] + (words[0] + words[1]) / 2, (words[2] + words[3]) / 2 + y - 80) if words else (0, 0)
+            notes.append(f"{label['text']} {when}: pill {pill} text centre {words_centre[0]:.0f},{words_centre[1]:.0f}")
+            ok &= (abs(centre[0] - ex.CENTRE_X) <= 3 and abs(centre[1] - y) <= 3 and abs(words_centre[0] - centre[0]) <= 4
+                   and abs(words_centre[1] - centre[1]) <= 5)
+            if when == "settled":
+                ok &= label["size"][1] >= 95 and text is not None
+    print("       " + "; ".join(notes))
+    return ok
+
+
+@check
+def marks_land_on_their_spot():
+    """a mark's spot on the picture goes through the shot's crop to the screen (framed and full), and on real pixels the X's red disc and the arrow's tip land there"""
+    assets()
+    framed = settled(look_shot(marks=[{"x": 0.5, "y": 0.3}, {"icon": "arrow", "x": 0.35, "y": 0.6}]))
+    full = settled(look_shot(layout="full", marks=[{"x": 0.5, "y": 0.3}]))
+    for v in (framed, full):
+        assert not ex.place_visuals([{"visuals": [v]}], "word")[0]
+    # Framed: the square crop is x 420-1500 of the 1920 x 1080 photo, drawn at 880 px from (70, 520).
+    want_x = (70 + (960 - 420) / 1080 * 880, 520 + 0.3 * 880)
+    want_arrow = (70 + (672 - 420) / 1080 * 880, 520 + 0.6 * 880)
+    want_full = ((960 - 656) / 608 * W, 0.3 * H)    # the 9:16 crop is 608 px wide from x 656
+    frames = render_ass(ex.mark_events(framed["marks"], 0, 2), [1.0], "marks")
+    red = (frames[0][..., 0] > 200) & (frames[0][..., 1] < 90) & (frames[0][..., 2] < 90)
+    ys, xs = np.nonzero(red[:, :400])  # the arrow, left of the X
+    disc = box_of(red[:, 400:])
+    centre = (400 + (disc[0] + disc[1]) / 2, (disc[2] + disc[3]) / 2)
+    tip = (float(xs[ys == ys.max()].mean()), float(ys.max()))
+    got = [m["screen"] for m in framed["marks"]] + [full["marks"][0]["screen"]]
+    print(f"       screen spots {[(round(x), round(y)) for x, y in got]}, wanted {[(round(x), round(y)) for x, y in (want_x, want_arrow, want_full)]}; "
+          f"X disc centre {centre[0]:.0f},{centre[1]:.0f}; arrow tip {tip[0]:.0f},{tip[1]:.0f}")
+    return (all(abs(a - b) < 1 for p, q in zip(got, (want_x, want_arrow, want_full)) for a, b in zip(p, q))
+            and abs(centre[0] - want_x[0]) <= 3 and abs(centre[1] - want_x[1]) <= 3
+            and abs(tip[0] - want_arrow[0]) <= 4 and abs(tip[1] - want_arrow[1]) <= 6)
+
+
+@check
+def grade_adds_contrast_and_a_vignette():
+    """the same full-screen shot rendered with the grade and without: with it, more contrast and colour in the middle and darker corners; without it, exactly the old picture"""
+    assets()
+    visual = ex.parse_visual("shot.png", ROOT)
+    motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (1.0, 1.0), "centre": (0.5, 0.5)}
+    frames = {}
+    for grade in (False, True):
+        out = ROOT / f"grade_{grade}.mp4"
+        ex.render_segment({"visual": visual, "frames": 2, "motion": motion, "grade": grade}, out, ex.pick_encoder()[1])
+        frames[grade] = frame_number(out, 0)
+    plain, graded = frames[False], frames[True]
+    corner = lambda f: f[:200, :200].mean()
+    middle = lambda f: f[860:1060, 440:640].astype(float)
+    spread = lambda f: f.max(axis=2) - f.min(axis=2)
+    print(f"       corner {corner(plain):.0f} -> {corner(graded):.0f}; middle colour spread {spread(middle(plain)).mean():.0f} -> "
+          f"{spread(middle(graded)).mean():.0f}")
+    return corner(graded) < corner(plain) - 8 and spread(middle(graded)).mean() > spread(middle(plain)).mean() + 3
+
+
+@functools.cache
+def look_run():
+    """A script in the PR 17 look with nothing pinned: a framed photo with a label and marks, a counting number card
+    over the next shot's picture, a framed video whose card grows in, a portrait picture full screen, a crossed-out
+    card and a closing photo."""
+    assets()
+    script = write_script("look.json", title="Look test", lines=[
+        {"say": "This first picture sits in a card, and then 212 gigabytes counts up over the next one.",
+         "visuals": [{"file": "shot.png", "label": "GTA V | 2013", "marks": [{"icon": "x", "x": 0.4, "y": 0.62, "at": 0.4}]},
+                     {"card": "212 GB", "label": {"text": "PS5", "style": "number"}},
+                     {"file": "b.mp4", "at": "1", "label": {"text": "No way in", "style": "no", "pos": "bottom"}, "weight": 1.5}],
+         "green": ["212 GIGABYTES"]},
+        {"say": "A tall picture fills the whole screen here, a crossed out date comes after it, and then the first photo "
+                "closes the test.",
+         "visuals": [{"file": "tall.png", "label": "Tall"}, {"card": "~NOV 12~|*NOV 10*"}, "shot.png"]}])
+    result = run_tool(script)
+    assert result.returncode == 0, result.stderr[-800:]
+    folder = Path(re.search(r"Run folder: (.+)", result.stdout).group(1).strip())
+    return folder, json.loads((folder / "log.json").read_text(encoding="utf-8")), result.stdout
+
+
+def shot_of(log, start):
+    return next(v for v in log["visuals"] if v["source"].startswith(start))
+
+
+@check
+def look_render_has_no_black_screen():
+    """a real render in the new look: every quarter second has a picture (never black or flat), the number card shows the next shot's picture blurred behind it, a portrait picture fills the screen, and the log and console say which layout each shot took"""
+    folder, log, stdout = look_run()
+    short = folder / "short.mp4"
+    times = [t / 4 for t in range(int(log["durations"]["video_s"] * 4))]
+    frames = [frame_at(short, t)[::8, ::8] for t in times]
+    means, spreads = [f.mean() for f in frames], [f.std() for f in frames]
+    card = shot_of(log, "card:212")
+    behind = frame_at(short, card["start_s"] + card["seconds"] / 2)[:370].mean(axis=(0, 1))   # above the text
+    tall = shot_of(log, "tall.png")
+    edges = frame_at(short, tall["start_s"] + 0.3)
+    edge_colours = [edges[5, 5], edges[5, W - 6], edges[H - 6, 5], edges[H - 6, W - 6]]
+    layouts = [v["layout"] for v in log["visuals"]]
+    print(f"       darkest moment mean {min(means):.0f}, flattest spread {min(spreads):.0f}; behind the number card "
+          f"{behind.round()} (b.mp4 is purple {PURPLE}); layouts {layouts}")
+    return (min(means) > 25 and min(spreads) > 5 and behind[2] > behind[1] + 15 and behind.max() > 25
+            and card["behind"].startswith("b.mp4") and all(np.abs(e - np.array(AMBER)).max() < 60 for e in edge_colours)
+            and layouts == ["framed", "card", "framed", "full", "card", "framed", "framed"]
+            and "Look: 3 framed, 1 full screen, 2 text cards; word captions; grade on" in stdout
+            and log["look"]["caption_style"] == "word" and tall["label"]["pos"] == "top")
+
+
+@check
+def look_render_frames_labels_and_marks():
+    """in the same render: the photo shows whole inside its square card (the white square where the crop puts it), with a white border, its cyan label on the card's top edge and its red X on its spot; the video's card grows from 96 % to full size; the first and last frames match"""
+    folder, log, _ = look_run()
+    short = folder / "short.mp4"
+    first = shot_of(log, "shot.png")
+    picture = frame_at(short, first["start_s"] + 0.9)
+    # The photo's white square (x 1060-1100, y 300-340) through the square crop (x 420-1500), drawn 880 px from (70, 520).
+    sx, sy = 70 + (1060 - 420) / 1080 * 880, 520 + 300 / 1080 * 880
+    square = box_of(picture[int(sy) - 30:int(sy) + 60, int(sx) - 30:int(sx) + 60].min(axis=2) > 225)
+    border = (picture[516, 100:900].min(axis=1) > 225).mean()        # the top border, under the label's ends
+    label = box_of(np.abs(picture[430:600] - np.array(CYAN)).max(axis=2) <= 40)
+    mark = box_of((picture[..., 0] > 200) & (picture[..., 1] < 90) & (picture[..., 2] < 90))
+    want_mark = (70 + (768 - 420) / 1080 * 880, 520 + 0.62 * 880)
+    video = shot_of(log, "b.mp4")
+    n0 = round(video["start_s"] * FPS)
+    widths = []
+    for n in (n0, n0 + 12):
+        row = frame_number(short, n)[video["card"][1] + video["card"][3] // 2]
+        white = np.nonzero(row.min(axis=1) > 225)[0]
+        widths.append(int(white.max() - white.min() + 1) if len(white) else 0)
+    seam = float(np.abs(frame_number(short, 0) - frame_number(short, log["durations"]["frames"] - 1)).mean())
+    print(f"       white square at {square} in its window (expected near 30,30); top border white {border:.2f}; "
+          f"label box {label}; X at {mark}, spot {want_mark[0]:.0f},{want_mark[1]:.0f}; video card width {widths}; "
+          f"first vs last frame {seam:.2f}")
+    return (square is not None and abs(square[0] - 30) <= 6 and abs(square[2] - 30) <= 6 and border > 0.6
+            and label is not None and abs((label[0] + label[1]) / 2 - ex.CENTRE_X) <= 4
+            and abs((label[2] + label[3]) / 2 + 430 - 510) <= 6
+            and mark is not None and abs((mark[0] + mark[1]) / 2 - want_mark[0]) <= 6
+            and abs((mark[2] + mark[3]) / 2 - want_mark[1]) <= 6
+            and 850 <= widths[0] <= 880 and widths[1] == 900 and seam < 2.0)
+
+
+@check
+def look_render_hides_captions_over_cards():
+    """in the same render: one yellow word at a time sits on WORD_Y while a picture shows; while a text card is up no caption event is on in the .ass, and the caption band has no yellow, nor cyan over the 212 card while its cyan words are said (the NOV card's own *NOV 10* is cyan); the .ass counts 212 up and draws every caption in Lilita One"""
+    folder, log, _ = look_run()
+    short = folder / "short.mp4"
+    text = (folder / "captions.ass").read_text(encoding="utf-8")
+    band = lambda f: f[ex.CAPTION_BANDS["word"][0]:ex.CAPTION_BANDS["word"][1]]
+    words = log["word_times"]
+    spans = [(card["start_s"], card["start_s"] + card["seconds"]) for card in (shot_of(log, "card:212"), shot_of(log, "card:~NOV"))]
+    events = [(ass_seconds(m.group(1)), ass_seconds(m.group(2))) for m in re.finditer(r"^Dialogue: 2,([\d:.]+),([\d:.]+),", text, re.M)]
+    overlaps = [(a, b) for a, b in events for s, e in spans if a < e - 0.01 and b > s + 0.01]
+    # The cyan check means something only if a tagged (cyan) word is said while the 212 card is up.
+    cyan_said = [w["text"] for w in words if spans[0][0] <= w["start_s"] < spans[0][1] and w["text"] in ("212", "GIGABYTES")]
+    during = []
+    for (s, e), cyan_too in zip(spans, (True, False)):
+        for k in (0.25, 0.5, 0.75):
+            f = band(frame_at(short, s + (e - s) * k))
+            during.append(count_near(f, YELLOW, 40) + (count_near(f, CYAN, 30) if cyan_too else 0))
+    first = shot_of(log, "shot.png")
+    spoken = next(w for w in words if w["start_s"] > first["start_s"] + 0.3 and w["text"] not in ("212", "GIGABYTES"))
+    lit = band(frame_at(short, spoken["start_s"] + 0.1))
+    yellow = box_of(np.abs(lit - np.array(YELLOW)).max(axis=2) <= 40)
+    captions = [line for line in text.splitlines() if line.startswith("Dialogue: 2,")]
+    print(f"       caption-coloured px in the band while cards are up {during}; caption events over a card {overlaps}; "
+          f"cyan words said over the 212 card {cyan_said}; {spoken['text']} yellow box {yellow}; "
+          f"{len(captions)} caption events for {len(words)} words")
+    return (max(during) == 0 and not overlaps and cyan_said and yellow is not None and abs((yellow[2] + yellow[3]) / 2 + ex.CAPTION_BANDS["word"][0]
+                                                            - ex.WORD_Y) <= 6
+            and all("\\fnLilita One" in c for c in captions) and len(captions) <= len(words)
+            and ",,{\\" in text and re.search(r"\}212\s*$", text, re.M) and re.search(r"\}0\s*$", text, re.M))
+
+
+@check
+def old_example_scripts_still_read():
+    """the PR 14-16 example scripts still read with no changes and keep their shots, focus, pans and weights (checked when the Rockstar files are on this PC)"""
+    root = Path(r"C:\AI\gta")
+    if not (root / "rockstar").is_dir():
+        print("       C:\\AI\\gta\\rockstar isn't here; skipped")
+        return True
+    old = ex.load_script(HERE / "examples" / "nov10_preload.json", root)
+    sample = ex.load_script(HERE / "examples" / "explainer_sample.json", root)
+    first = old["lines"][0]["visuals"]
+    pans = [v for line in old["lines"] for v in line["visuals"] if v.get("pan")]
+    print(f"       nov10: {sum(len(l['visuals']) for l in old['lines'])} shots, layouts "
+          f"{sorted({v.get('layout', 'card') for l in old['lines'] for v in l['visuals']})}; sample: "
+          f"{sum(len(l['visuals']) for l in sample['lines'])} shots")
+    return (first[0]["focus"] == 0.36 and first[0]["focus_y"] == 0.4 and first[1] == {**first[1], "kind": "card", "text": "212 GB"}
+            and first[3]["kind"] == "video" and len(pans) == 3 and all(p["layout"] == "framed" for p in pans)
+            and old["lines"][5]["visuals"][1]["weight"] == 2.2 and old["caption_style"] == "word")
 
 
 def main():

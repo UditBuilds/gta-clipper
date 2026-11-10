@@ -236,17 +236,19 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
     the right edge (`"left"` goes the other way), at full height and a steady speed. It suits wide city and landscape
     shots, and needs a big enough share to stay smooth: over 1.2 screen widths a second warns.
   - `at` is where a video starts (`"0:16"`). A video's own audio is always dropped.
-  - Images with no pan get a varied slow zoom or drift. Videos fill the frame. Nothing is ever shrunk onto a blurred copy.
+  - Images with no pan get a varied slow zoom or drift. Where a shot sits on screen (in a card or full screen) is in
+    [Explainer style](#explainer-style).
 - **Cards.** `{"card": "~NOV 12~|*NOV 10*"}`: `|` starts a new line (3 at most), `~words~` get a red bar struck through
-  them a moment after the card appears, and `*words*` are green.
+  them a moment after the card appears, and `*words*` are cyan (the field is still called green).
 - **The short form** still works: `"rockstar/x.mp4@0:42"` (a video from 0:42), `"rockstar/x.jpg@0.3"` (an image with focus
   0.3) and `"card:SOME TEXT"`.
 - A clip too short for its slot loops only if its last and first frames nearly match, and otherwise holds its last frame.
   Rockstar's character clips last 1-1.5 s and all hold, so give them short slots.
 - `green` and `red` list words or phrases from that line's `say`, which must match or the render stops.
-- **Captions** show 2-4 words at a time, and the word being said turns yellow, timed from Kokoro's own sound durations.
-  Words in `green` and `red` keep their colour. They have a black outline and a soft shadow, so they read on bright and
-  dark pictures and on video alike, and they stay inside Shorts' safe area and below every card.
+- **Captions** follow Kokoro's own sound durations. By default each word shows alone as it is said (see
+  [Explainer style](#explainer-style)); `"caption_style": "phrase"` shows 2-4 words at a time with the spoken one yellow,
+  as in PR 16. Words in `green` (drawn cyan) and `red` keep their colour. Captions stay inside Shorts' safe area, and none
+  shows while a text card is up.
 - **Voice.** `voice` is any of Kokoro's English voices (`af_`, `am_`, `bf_`, `bm_`); the default is `am_puck`. A name
   that doesn't exist stops the run and lists them.
 - **Music.** `music` is a file name in `C:\AI\gta\music\` (or a path under `C:\AI\gta\`), `"auto"` to pick one from
@@ -264,5 +266,36 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
   `log.json` records the durations, every shot with its focus, pan speed and weight, the visual on screen each second,
   and any warnings.
 
-Font: [Anton](fonts/OFL.txt), SIL Open Font License. Kokoro's weights are Apache-2.0. `phonemizer` and eSpeak NG, which it
-installs, are GPL-3.0.
+### Explainer style
+
+The default look since PR 17 is "look C". I picked it from three style samples (A, B and C, made from Rockstar's
+media) and approved its second version, C2.
+
+- **Framed pictures.** A landscape picture or clip sits in a square card with a white border and a hard shadow, cut
+  around the shot's `focus`, over a blurred, darkened copy of itself. A portrait picture fills the screen. Set
+  `"layout": "framed"` or `"full"` on a shot, or for the whole script; `"card_aspect"` is `"1:1"` (the default), `"4:5"`
+  or `"16:9"`.
+- **Word captions.** One word at a time in Lilita One, yellow with a thick black outline, over the lower part of the card.
+- **Text cards.** A number at the start of a card counts up from 0 in 0.6 s (`{"card": "212 GB"}`), and a `~struck~`
+  line gets a red bar drawn left to right. Behind a card is the next picture, blurred (`"bg"` picks another).
+- **Labels and marks.** `"label": "PS5 | 12 AM local"` puts a pill on the card's edge; the long form is
+  `{"text": ..., "style": "info" | "no" | "number", "pos": "top" | "bottom"}` (cyan, red, pink). `"marks"` pins an icon
+  to a spot on the picture: `[{"icon": "x", "x": 0.74, "y": 0.3, "at": 0.4}]`, with `x`, `check`, `arrow` or `circle`.
+- **Grade.** A little more contrast and colour, and a soft vignette. `"grade": false` at the top of the script turns it
+  off.
+- **Loop.** The last frame's picture is the first frame's again (the last spoken word's caption can still be up). When
+  the Short opens on a clip used from its start, the ending holds that clip's first frame for 1.5 s.
+
+```powershell
+.\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload_v2.json   # the Nov 10 Short in look C
+.\.venv-tts\Scripts\python.exe explainer.py examples\look_c_videos.json      # Rockstar clips framed and full screen
+```
+
+What the checks caught: text must stay inside x 60-960, y 380-1540, clear of YouTube's buttons on the right and its title
+and bar at the bottom. `explainertest.py` measures this on real pixels, and on the way it found three ways text got out.
+Very wide text was too big for the canvas the tool measures text on, so it was measured too small and drawn 1050 px
+wide. Text grows to 106 % for a moment as it pops in. And a count-up passes wider numbers than its final one ("204" is
+wider than "212"). Cards are now sized for all three.
+
+Fonts: [Anton](fonts/OFL.txt) and [Lilita One](fonts/LilitaOne-OFL.txt), both SIL Open Font License. Kokoro's weights are
+Apache-2.0. `phonemizer` and eSpeak NG, which it installs, are GPL-3.0.
