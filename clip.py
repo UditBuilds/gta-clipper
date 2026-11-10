@@ -93,6 +93,15 @@ ACTION_GAP = LEAD_IN + TAIL  # quiet seconds that end the action; a shorter gap 
 
 OUT_W, OUT_H = 1080, 1920
 
+# PS5 VP9 captures: the container says limited range but the VP9 header says full range, and ffmpeg follows the header.
+# Pictures then come out flagged full range and look washed out, so the header is rewritten to match the container.
+# These go before the input's -i. explainer.py uses the same two for video backgrounds.
+RANGE_FIX_ARGS = ["-bsf:v", "vp9_metadata=color_range=tv"]
+
+
+def needs_range_fix(codec, color_range):
+    return codec == "vp9" and color_range == "tv"
+
 
 def fail(msg):
     print("ERROR: " + msg, file=sys.stderr)
@@ -814,7 +823,7 @@ def vertical_filter(crop):
 def render(ffmpeg, video, clip, out_path, crop, enc_args, has_audio, range_fix):
     cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "error", "-y"]
     if range_fix:
-        cmd += ["-bsf:v", "vp9_metadata=color_range=tv"]
+        cmd += RANGE_FIX_ARGS
     cmd += ["-ss", f"{clip['start_s']:.3f}", "-i", str(video), "-t", f"{clip['duration_s']:.3f}",
             "-filter_complex", vertical_filter(crop), "-map", "[v]"]
     if has_audio:
@@ -1082,7 +1091,7 @@ def main():
         print("WARNING: input is HDR. v1 encodes SDR without tone mapping, so colours may look washed out.")
     # PS5 VP9 captures: the container says limited range but the VP9 header says full range, and ffmpeg
     # follows the header. Clips then come out flagged full range and look washed out, so trust the container.
-    range_fix = info["video_codec"] == "vp9" and info["color_range"] == "tv"
+    range_fix = needs_range_fix(info["video_codec"], info["color_range"])
     info["vp9_range_relabel"] = range_fix
     if range_fix:
         print("Input is VP9 marked limited range by its container: clips will be flagged limited range too.")

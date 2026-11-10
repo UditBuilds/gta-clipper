@@ -381,12 +381,14 @@ def dollar_amounts_warn():
 
 @check
 def speed_and_length_warn():
-    """a voice faster than 1.1 warns (1.1 itself doesn't); a Short over 50 s warns, 40-50 s and under 40 s don't"""
+    """a voice faster than 1.1 warns (1.1 itself doesn't); the target is 34-39 s since PR 18 (it was 40-50 s, and only over it warned): a Short over 39 s warns, one under 34 s warns, and 34-39 s doesn't"""
     fast = ex.script_warnings({"speed": 1.18, "lines": []})
     edge = ex.script_warnings({"speed": 1.1, "lines": []})
-    return (len(fast) == 1 and "faster than 1.1" in fast[0] and not edge and ex.runtime_warnings(50.5)
-            and "over" in ex.runtime_warnings(50.5)[0] and not ex.runtime_warnings(45) and not ex.runtime_warnings(37.6)
-            and "under" in ex.runtime_note(37.6) and "inside" in ex.runtime_note(45) and "over" in ex.runtime_note(51))
+    return (len(fast) == 1 and "faster than 1.1" in fast[0] and not edge and ex.runtime_warnings(39.5)
+            and "over" in ex.runtime_warnings(39.5)[0] and ex.runtime_warnings(33.5) and "under" in ex.runtime_warnings(33.5)[0]
+            and not ex.runtime_warnings(34) and not ex.runtime_warnings(37.6) and not ex.runtime_warnings(39)
+            and "under" in ex.runtime_note(33.5) and "inside" in ex.runtime_note(37.6) and "over" in ex.runtime_note(39.5)
+            and (ex.MIN_TOTAL_S, ex.MAX_TOTAL_S) == (34, 39))
 
 
 # --- Word timing ---
@@ -721,9 +723,10 @@ def pan_opening_loops_back():
 
 @check
 def video_opening_loops_back():
-    """when the first shot is a video with no footage before its start (a clip used from 0), the loop ending holds that first frame, so the Short's last frame is its first, full screen and framed; an opening later in a file plays the 1.5 s just before it, as since PR 15"""
+    """when the first shot is a video with no footage before its start (a clip used from 0), the loop ending plays the clip backwards into its first frame, so the Short's last frame is its first and the picture never stands still (before PR 18 it held that first frame for 1.5 s): a 1 s clip full screen, which turns round to fill the 1.5 s, and a long clip framed; an opening later in a file plays the 1.5 s just before it, as since PR 15"""
     assets()
     results = []
+    moved = lambda a, b: float((np.abs(a - b).max(axis=2) > 40).mean())
     for name, raw in (("full", {"file": "stops.mp4"}), ("framed", {"file": "b.mp4", "layout": "framed"}),
                       ("later", {"file": "b.mp4", "at": "3", "layout": "framed"})):
         v = settled(raw)
@@ -736,10 +739,18 @@ def video_opening_loops_back():
         for slot, out in zip(slots, outs):
             ex.render_segment(slot, out, ex.pick_encoder()[1])
         diff = float(np.abs(frame_number(outs[0], 0) - frame_number(outs[1], 44)).mean())
-        results.append((name, v["layout"], slots[1]["start_s"], slots[1].get("lead_hold", 0), round(diff, 2)))
-    print(f"       (shot, layout, loop ending's start s, frames held, first vs last frame) {results}")
-    return (all(r[4] < 2.0 for r in results) and [r[1] for r in results] == ["full", "framed", "framed"]
-            and results[0][3] == 45 and results[1][3] == 45 and results[2][2:4] == (1.5, 0))
+        tail = [frame_number(outs[1], k) for k in (0, 11, 22, 33, 44)]
+        still = min(moved(a, b) for a, b in zip(tail, tail[1:]))      # the least any quarter of the ending moves
+        length = int(probe(outs[1])["streams"][0]["nb_read_frames"])
+        results.append((name, v["layout"], slots[1]["start_s"], bool(slots[1].get("bounce")), round(diff, 2),
+                        round(still, 4), length))
+    print(f"       (shot, layout, loop ending's start s, runs backwards, first vs last frame, share of the picture "
+          f"that moves in its stillest quarter, frames) {results}")
+    return (all(r[4] < 2.0 and r[5] > 0.0005 and r[6] == 45 for r in results)
+            and [r[1] for r in results] == ["full", "framed", "framed"]
+            and results[0][2:4] == (0.0, True) and results[1][2:4] == (0.0, True) and results[2][2:4] == (1.5, False)
+            and ex.bounce_order(30, 45)[:2] == [14, 15] and ex.bounce_order(30, 45)[15:17] == [29, 28]
+            and ex.bounce_order(30, 45)[-2:] == [1, 0] and ex.bounce_order(45, 45) == list(range(44, -1, -1)))
 
 
 def still_frame(visual, motion, frames, n):
@@ -1082,8 +1093,8 @@ def log_says_what_happened():
     return (len(log["per_second"]) == math.ceil(log["durations"]["frames"] / FPS) and log["per_second"][0]["visual"] == "a.mp4@0:03"
             and all(v["motion"] for v in images) and log["voice"] == "am_puck" and log["speed"] == 1.18
             and any("faster than 1.1" in w for w in log["warnings"]) and "WARNING" in stdout
-            and log["durations"]["target_s"] == [40, 50] and log["shots"]["count"] == len(log["visuals"])
-            and re.search(r"Runtime \d+\.\d s \(target 40-50 s", stdout)
+            and log["durations"]["target_s"] == [34, 39] and log["shots"]["count"] == len(log["visuals"])
+            and re.search(r"Runtime \d+\.\d s \(target 34-39 s", stdout)
             and re.search(rf"Shots: {len(log['visuals'])} \({len(log['visuals']) - 1} plus the 1.5 s loop ending\), average", stdout)
             and {"voice_lufs", "final_lufs"} <= set(log["loudness"]))
 
