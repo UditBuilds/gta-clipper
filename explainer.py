@@ -3168,9 +3168,10 @@ def runtime_warnings(seconds):
 
 def visual_changes(slots, pill_frames_total=None):
     """Every moment the picture changes in a way the eye catches, as (seconds, what): each cut, and what arrives inside
-    a shot (a lock-on box, a compare's second card, a snippet's marker sweeps, marks), and the subscribe pill and its
-    click when pill_frames_total (the Short's length in frames) is given. Changes closer than CHANGE_MERGE_S to the
-    one before count as part of it."""
+    a shot (a lock-on box, a compare's second card, a snippet's marker, marks), and the subscribe pill when
+    pill_frames_total (the Short's length in frames) is given. Small follow-ups don't count again: a snippet's second
+    sweep, the cursor's click, a label popping in after its cut. Changes closer than CHANGE_MERGE_S to the one before
+    count as part of it. A slow zoom or pan is movement, not a change."""
     found = []
     for i, slot in enumerate(slots):
         visual, at, end = slot["visual"], slot["start"] / FPS, slot["end"] / FPS
@@ -3185,11 +3186,10 @@ def visual_changes(slots, pill_frames_total=None):
         if visual["kind"] == "compare":
             inside.append((COMPARE_SECOND_S, "the second card slides in"))
         if visual["kind"] == "snippet":
-            inside += [(t, "a marker sweep") for t in visual["snippet"]["sweeps"]]
+            inside += [(t, "the marker sweeps the highlight") for t in visual["snippet"]["sweeps"][:1]]
         found += [(at + t, what) for t, what in inside if at + t < end - 0.1]
     if pill_frames_total:
-        f_in, f_click, _ = pill_frames(pill_frames_total)
-        found += [(f_in / FPS, "the subscribe pill pops in"), (f_click / FPS, "the cursor clicks the pill")]
+        found.append((pill_frames(pill_frames_total)[0] / FPS, "the subscribe pill pops in"))
     counted = []
     for at, what in sorted(found):
         if not counted or at - counted[-1][0] >= CHANGE_MERGE_S:
@@ -3244,10 +3244,16 @@ def print_pacing(run):
     path = Path(run)
     path = path / "log.json" if path.is_dir() else path
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))["pacing"]
-    except (OSError, ValueError, KeyError):
-        raise ScriptError(f"{path} isn't the log.json of a run made since PR 18, which is where the pacing check is "
-                          "kept") from None
+        log = json.loads(path.read_text(encoding="utf-8"))
+        report = log.get("pacing")
+        if report is None:   # a run from before PR 18: its log has the cuts, which is most of it
+            cuts = [(v["start_s"], "the loop ending: back to the first shot" if v.get("loop_tail") else f"cut to {v['source']}")
+                    for v in log["visuals"][1:]]
+            report = pacing_report(cuts, log["durations"]["video_s"], log.get("words"))
+            report["warnings"] = runtime_warnings(log["durations"]["video_s"]) + report["warnings"]
+            print("An older run: its log has only the cuts, so marks inside a shot aren't counted.")
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ScriptError(f"{path} isn't the log.json of an explainer run") from None
     print(f"Run: {path.parent}")
     for line in pacing_lines(report):
         print(line)
