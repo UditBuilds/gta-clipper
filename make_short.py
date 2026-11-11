@@ -187,7 +187,8 @@ def pick_row_text(pick, entry):
     """The words beside a picture on picks.jpg."""
     where = f"Line {pick['line']}, shot {pick['shot']}" + (f" ({pick['side']})" if pick.get("side") else "")
     how = (f"PICKED for \"{pick['query']}\"" if pick["picked"] else "NAMED in the script")
-    lines = [f"{where}   |   {pick.get('beat') or 'shot'}   |   {how}" + ("   |   WEAK MATCH" if pick.get("weak") else "")]
+    lines = [f"{where}   |   {pick.get('beat') or 'shot'}   |   {how}" + ("   |   WEAK MATCH" if pick.get("weak") else "")
+             + ("   |   NOT SHOWN: the loop ending covers it" if pick.get("shown") is False else "")]
     lines += textwrap.wrap("SAYS: " + pick["say"], 104)[:3]
     shown = [re.sub(r"[~*|]+", " ", t).strip() for t in pick.get("text", []) if t and t.strip()]
     lines.append("ON SCREEN: " + (" / ".join(shown) if shown else "(no words on this picture)"))
@@ -203,7 +204,8 @@ def pick_row_text(pick, entry):
 
 def build_picks_sheet(picks, tags, out, root=GTA_ROOT):
     """picks.jpg: one row per picture in the Short, the part of it the viewer sees on the left and the line's words on
-    the right. A green edge is a picked picture, blue one the script named, red a weak match."""
+    the right. A green edge is a picked picture, blue one the script named, red a weak match, grey one that the
+    render left no time for."""
     rows = [p for p in picks if p.get("path") or p.get("file")]
     if not rows:
         return None
@@ -215,8 +217,9 @@ def build_picks_sheet(picks, tags, out, root=GTA_ROOT):
             size = (entry or {}).get("size")
             if not size and source.is_file():
                 size = list(tag_media.probe_media(source)[:2])
-            (tmp / f"row_{n}.txt").write_text(pick_row_text(pick, entry), encoding="utf-8")
-            colour = "0xD92B2B" if pick.get("weak") else ("0x1E9E55" if pick["picked"] else "0x2B6CD9")
+            (tmp / f"row_{n}.txt").write_text(pick_row_text(pick, entry), encoding="utf-8", newline="\n")
+            colour = ("0x999999" if pick.get("shown") is False else "0xD92B2B" if pick.get("weak") else
+                      "0x1E9E55" if pick["picked"] else "0x2B6CD9")
             base = (f"drawbox=x=0:y=0:w=10:h={ROW_H}:color={colour}:t=fill,"
                     f"drawbox=x=0:y={ROW_H - 2}:w={ROW_W}:h=2:color=0xCCCCCC:t=fill,"
                     f"drawtext=fontfile='{FONT}':textfile=row_{n}.txt:expansion=none:x={THUMB_W + 40}:y=18:"
@@ -338,8 +341,16 @@ def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORT
                          f"{pacing['target_s'][1]} s (cut or add words, or change the speed, 1.1 at most)")
     not_ready += pacing["warnings"]
     ready = not not_ready
+    # A picture of the last line can be left with no time of its own, because the loop ending shows the first shot
+    # again. The sheet says so, and such a picture doesn't count as used.
+    if isinstance(run_log.get("visuals"), list):
+        on_screen = " ".join(str(v.get("source", "")) + " " + str(v.get("behind") or "") for v in run_log["visuals"])
+        for pick in result["picks"]:
+            pick["shown"] = Path(pick.get("path") or pick.get("file") or "?").name in on_screen
+        build_picks_sheet(result["picks"], tags, out / "picks.jpg", root)
     if ready:
-        picker.save_used(name, [p["file"] for p in result["picks"] if p.get("file")], used_log)
+        picker.save_used(name, [p["file"] for p in result["picks"] if p.get("file") and p.get("shown") is not False],
+                         used_log)
     log(f"Folder: {out}")
     for item in ("short.mp4", "script.json", "upload.txt", "claims.txt", "picks.jpg", "pacing.txt"):
         log(f"  {out / item}")

@@ -12,6 +12,7 @@ and the picker finds the best tagged picture. A file path still works and is lef
   (the log is C:\\AI\\gta\\shorts\\_used_media.json).
 - A picture with big text or a logo on it is used only when the shot says "text_ok": true. One with an age-rating
   card is never used, and a video starts after its rating card.
+- A picture of a paid edition's bonus items is used only when the shot says "type": "edition".
 - A full-screen shot prefers a phone-shaped picture, so less of it is cropped away.
 - If nothing matches well, the pick is refused and the closest match is named. Nothing unrelated is picked quietly.
 - A label that names a region ("MOUNT KALAGA") is allowed only on a picture from that region's folder whose subjects
@@ -52,6 +53,11 @@ SAME_WORDS = [{"cop", "police", "policeman", "officer"}, {"gator", "alligator", 
               {"gun", "pistol", "rifle", "shotgun", "revolver"}, {"skyline", "skyscraper", "cityscape"},
               {"sea", "ocean"}, {"wood", "forest"}, {"lake", "river"}, {"cash", "money"}, {"club", "nightclub"},
               {"dusk", "sunset", "sunrise"}]
+JOINED = {"boat", "plane", "bike", "ship", "light", "board", "tower"}    # words that end other words of the same kind
+# A main subject with one of these words is a picture of somebody, not of a place. Under a label that names a region
+# such a picture comes after every picture of the place itself.
+PERSON_WORDS = {"man", "men", "woman", "women", "couple", "people", "person", "guy", "girl", "lady", "boy", "crowd",
+                "dancer", "friend", "group", "gang"}
 # The shapes a shot likes, best first. "full" fills the 9:16 screen, a card is square unless it says otherwise, and a
 # compare's two cards are 16:9.
 SHAPE_ORDER = {"full": ("portrait", "phone", "square", "landscape", "ultrawide"),
@@ -86,13 +92,13 @@ def query_words(query):
 
 
 def same_word(wanted, found):
-    """Does a query word match a tag word? The same word, a listed synonym, or the end of a joined word ("boat" finds
-    "airboat" and "speedboat")."""
+    """Does a query word match a tag word? The same word, a listed synonym, or one of JOINED at the end of a joined
+    word ("boat" finds "airboat" and "speedboat"). Only those few: "phone" must not find "headphones"."""
     if wanted == found:
         return True
     if any(wanted in group and found in group for group in SAME_WORDS):
         return True
-    return len(wanted) >= 4 and len(found) > len(wanted) and found.endswith(wanted)
+    return wanted in JOINED and len(found) > len(wanted) and found.endswith(wanted)
 
 
 # --- Regions ---
@@ -249,13 +255,18 @@ class Picker:
                 continue
             if kind and entry.get("type") != kind:
                 continue
+            if entry.get("type") == "edition" and kind != "edition":
+                continue                         # a paid edition's bonus car is not for a Short about something else
             if region and (find_region(entry.get("region") or "", self.regions) or {}).get("name") != region["name"]:
                 continue
             yield rel, entry
 
-    def pick(self, query="", region=None, target="any", text_ok=False, media="image", kind=None, where=""):
+    def pick(self, query="", region=None, target="any", text_ok=False, media="image", kind=None, where="",
+             place=False):
         """The best picture for a shot, as a dict: file (relative to the media folder), ok, why, and what matched.
-        ok is False when nothing matches well: file is then the closest match, to be named and not used."""
+        ok is False when nothing matches well: file is then the closest match, to be named and not used.
+        place is True for a shot whose label names a region: a picture of the place then comes before a picture that
+        is mainly of a person, even one used lately."""
         wanted_region = None
         if region:
             wanted_region = find_region(region, self.regions)
@@ -269,9 +280,11 @@ class Picker:
             good = not m["missing"] and not m["half"]
             shape = SHAPE_BONUS[order.index(entry["shape"])] if entry.get("shape") in order else 0.0
             tie = hashlib.sha1(f"{self.seed}|{where}|{rel}".encode("utf-8")).hexdigest()
-            # Best first: a full match, then more of the words, then not seen lately, then the stronger tags and shape.
-            ranked.append((good, len(m["matched"]) + 0.5 * len(m["half"]), -(self.group(rel) in self.recent and good),
-                           m["score"] + shape, tie, rel, m))
+            person = place and any(w in PERSON_WORDS for w in words_of(entry.get("main_subject", "")))
+            # Best first: a full match, then more of the words, then (under a region label) a place over a person,
+            # then not seen lately, then the stronger tags and shape.
+            ranked.append((good, len(m["matched"]) + 0.5 * len(m["half"]), -person,
+                           -(self.group(rel) in self.recent and good), m["score"] + shape, tie, rel, m))
         if not ranked:
             limits = [f"region {wanted_region['name']}" if wanted_region else "", f"type {kind}" if kind else "",
                       "videos only" if media == "video" else "", "" if text_ok else "no text or logos on it"]
@@ -279,7 +292,7 @@ class Picker:
                     "why": "no picture is left to pick from (" + ", ".join(x for x in limits if x)
                            + "; pictures already in this Short don't count)"}
         ranked.sort(reverse=True)
-        good, _, _, score, _, rel, m = ranked[0]
+        good, _, _, _, score, _, rel, m = ranked[0]
         entry = self.tags[rel]
         result = {"file": rel, "ok": bool(good), "query": query, "where": where, "score": round(score, 2),
                   "matched": m["matched"], "missing": m["missing"] + m["half"], "region": entry.get("region"),
@@ -411,7 +424,8 @@ def resolve_script(script, tags, recent=None, regions=None, allow_weak=False):
                     try:
                         got = picker.pick(str(part.get("query", "")), region,
                                           "wide" if side else shot_target(part, script.get("layout")),
-                                          part.get("text_ok") is True, media, part.get("type"), name)
+                                          part.get("text_ok") is True, media, part.get("type"), name,
+                                          place=label_region is not None)
                     except PickError as e:
                         problems.append(str(e))
                         continue

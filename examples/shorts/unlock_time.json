@@ -1,0 +1,62 @@
+{
+  "topic": "what time GTA 6 unlocks",
+  "topic_score": {"score": 5, "why": "Every player wants to know the exact moment they can start playing on launch day."},
+  "title": "What time does GTA 6 ACTUALLY unlock!?",
+  "description": "Rockstar has not announced an unlock time for GTA 6. Based on PlayStation Store listings, it is expected to unlock at midnight local time on November 19. Pre-load starts at midnight local time on November 12, and pre-loading does not let you play early.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Launch", "#Shorts"],
+  "voice": "am_puck",
+  "speed": 1.1,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "Rockstar has not announced when GTA 6 unlocks. It is only expected to unlock at midnight local time. Here's why.",
+     "facts": ["unlock-time"],
+     "beats": [
+       {"beat": "full", "query": "Lucia"},
+       {"beat": "card", "card": "NO OFFICIAL|*TIME*"},
+       {"beat": "snippet", "text": "Expected to unlock at midnight local time.", "highlight": ["Expected"],
+        "label": "Not official", "weight": 1.3}],
+     "green": ["MIDNIGHT"], "red": ["NOT ANNOUNCED"]},
+    {"say": "The date is confirmed. GTA 6 launches on November 19, on PS5 and Xbox Series X and S.",
+     "facts": ["release-date"],
+     "beats": [
+       {"beat": "count", "card": "19 NOV", "label": "Confirmed"},
+       {"beat": "full", "query": "city skyline night"},
+       {"beat": "card", "query": "pool palm trees", "label": "PS5 + Xbox Series X|S"}],
+     "green": ["NOVEMBER 19"], "red": []},
+    {"say": "The time is not. It comes from PlayStation Store listings, so it is expected to unlock at midnight local time, not promised.",
+     "facts": ["unlock-time"],
+     "beats": [
+       {"beat": "card", "card": "~OFFICIAL~|*EXPECTED*"},
+       {"beat": "full", "query": "yacht"},
+       {"beat": "snippet", "text": "From PlayStation Store listings. Not announced by Rockstar.",
+        "highlight": ["Not announced"], "label": "The source", "weight": 1.3},
+       {"beat": "full", "query": "police car night"}],
+     "green": ["EXPECTED"], "red": ["NOT PROMISED"]},
+    {"say": "Here's the twist. Pre-load starts at midnight local time on November 12, a full week earlier.",
+     "facts": ["preload-date"],
+     "beats": [
+       {"beat": "banner", "text": "The twist", "query": "helicopter"},
+       {"beat": "count", "card": "12 NOV", "label": "Pre-load starts"},
+       {"beat": "full", "query": "boat ocean"}],
+     "green": ["NOVEMBER 12"], "red": []},
+    {"say": "But pre-loading does not let you play early.",
+     "facts": ["preload-no-early-play"],
+     "beats": [
+       {"beat": "card", "query": "Jason gun", "label": {"text": "No early play", "style": "no"}}],
+     "green": [], "red": ["PLAY EARLY"]},
+    {"say": "So download it early and be ready the moment November 19 begins.",
+     "facts": ["release-date"],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "card", "card": "*NOV 19*|BE READY"}],
+     "green": ["NOVEMBER 19"], "red": []},
+    {"say": "Just remember one thing:",
+     "facts": [],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia car"}],
+     "green": [], "red": []}
+  ]
+}
+

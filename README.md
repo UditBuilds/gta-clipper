@@ -360,7 +360,7 @@ by hand, in Windows PowerShell:
 .\.venv\Scripts\python.exe tag_media.py                                  # once, and after adding pictures (needs Ollama)
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --check   # checks only, renders nothing
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
-.\.venv\Scripts\python.exe shorttest.py                                  # 37 checks, about 20 s, no Ollama needed
+.\.venv\Scripts\python.exe shorttest.py                                  # 38 checks, about 20 s, no Ollama needed
 ```
 
 Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
@@ -412,12 +412,17 @@ A shot then asks for a picture instead of naming a file (a file path still works
   Shorts are avoided while another good match exists (`C:\AI\gta\shorts\_used_media.json`).
 - A full-screen shot prefers a phone-shaped picture, a card a square one and a compare a landscape one.
 - A picture with big text or a logo needs `"text_ok": true`. One with a rating card is never picked. A video needs
-  `"media": "video"` and starts after its rating card.
+  `"media": "video"` and starts after its rating card. A picture of a paid edition's bonus items needs
+  `"type": "edition"`.
 - If nothing matches well, the Short stops and names the closest picture. `--allow-weak` uses it and marks it red on
   `picks.jpg`.
-- A label that names a region picks from that region's folder, and is refused on a picture from anywhere else or on one
-  whose subjects clearly contradict it (`regions.json`). The folder is trusted over the "where" tags, which are the
-  model's weakest.
+- A label that names a region picks from that region's folder, a picture of the place before one that is mainly of a
+  person, and is refused on a picture from anywhere else or on one whose subjects clearly contradict it
+  (`regions.json`). The folder is trusted over the "where" tags, which are the model's weakest.
+- `lockon` and `marks` point at a spot in one picture, so those shots name a `file`.
+
+The three demo scripts are in `examples\shorts\`. The 34-39 s target is checked on the real voice: short, choppy lines
+are read faster, so a script of place names needed speed 1.0 and 111 words where the others fit at 1.1 with 100-105.
 
 **Which model.** `qwen3-vl:8b-instruct`, compared with the 4b on 20 files that I judged by eye against notes written
 before reading the answers. The tags were equally good (98 of 100 checks each). The 8b put the focus point within a

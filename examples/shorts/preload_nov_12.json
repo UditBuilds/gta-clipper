@@ -1,0 +1,70 @@
+{
+  "topic": "GTA 6 pre-load starts Nov 12",
+  "topic_score": {"score": 5, "why": "Every digital buyer has to download the game before launch day, and it is a very big download."},
+  "title": "GTA 6 pre-load starts NOV 12, a week EARLY...",
+  "description": "GTA 6 digital pre-load starts at midnight local time on November 12, a week before the game launches on November 19. Pre-loading does not let you play early, but it gets a download of over 200 GB out of the way.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Preload", "#Shorts"],
+  "voice": "am_puck",
+  "speed": 1.1,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "You can download GTA 6 a full week before it comes out. Here's why that matters.",
+     "facts": ["preload-date", "release-date"],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "card", "card": "A WEEK|*EARLY*"},
+       {"beat": "full", "query": "city skyline night", "region": "Vice City"}],
+     "green": ["FULL WEEK"], "red": []},
+    {"say": "Digital pre-load starts at midnight local time on November 12.",
+     "facts": ["preload-date"],
+     "beats": [
+       {"beat": "count", "card": "12 NOV", "label": "Pre-load starts"},
+       {"beat": "snippet", "text": "Digital pre-load starts at midnight local time on November 12.",
+        "highlight": ["November 12"], "label": "Confirmed", "weight": 1.4}],
+     "green": ["NOVEMBER 12"], "red": []},
+    {"say": "The game itself launches on November 19, on PS5 and Xbox Series X and S.",
+     "facts": ["release-date"],
+     "beats": [
+       {"beat": "full", "query": "yacht city skyline"},
+       {"beat": "count", "card": "19 NOV", "label": "Launch day"},
+       {"beat": "card", "query": "pool palm trees", "label": "PS5 + Xbox Series X|S"}],
+     "green": ["NOVEMBER 19"], "red": []},
+    {"say": "But here's the catch. Pre-loading does not let you play early.",
+     "facts": ["preload-no-early-play"],
+     "beats": [
+       {"beat": "banner", "text": "The catch", "query": "police car night"},
+       {"beat": "card", "query": "Jason gun", "label": {"text": "No early play", "style": "no"},
+        "marks": [{"icon": "x", "x": 0.76, "y": 0.28, "at": 0.4}], "weight": 1.3}],
+     "green": [], "red": ["PLAY EARLY"]},
+    {"say": "So why bother? The PS5 download is reported to be over 200 gigabytes.",
+     "facts": ["ps5-download-size"],
+     "beats": [
+       {"beat": "full", "query": "helicopter"},
+       {"beat": "card", "card": "OVER|*200 GB*", "label": "PS5, reported", "weight": 1.6},
+       {"beat": "full", "query": "motorcycle road"}],
+     "green": ["200 GIGABYTES"], "red": []},
+    {"say": "You waited about 13 years. Don't spend launch night watching a download bar.",
+     "facts": ["thirteen-year-wait"],
+     "beats": [
+       {"beat": "count", "card": "13 YEARS", "label": "The wait"},
+       {"beat": "full", "query": "Lucia"},
+       {"beat": "card", "query": "woman phone night"}],
+     "green": ["13 YEARS"], "red": []},
+    {"say": "Start it on November 12, and you are ready when GTA 6 is expected to unlock at midnight local time.",
+     "facts": ["preload-date", "unlock-time"],
+     "beats": [
+       {"beat": "card", "query": "boat ocean", "label": "Start it Nov 12"},
+       {"beat": "snippet", "text": "Expected to unlock at midnight local time.", "highlight": ["midnight local time"],
+        "label": "Launch", "weight": 1.3},
+       {"beat": "full", "query": "neon sign night street"}],
+     "green": ["MIDNIGHT"], "red": []},
+    {"say": "So clear the space now, and remember:",
+     "facts": [],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia car"}],
+     "green": [], "red": []}
+  ]
+}
+

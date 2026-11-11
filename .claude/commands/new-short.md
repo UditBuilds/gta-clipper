@@ -68,7 +68,8 @@ Write numbers as digits. Write "70 dollars", not "$70". Every line has `"facts"`
 
 - Ask for pictures by what they show: `"query": "swamp airboat"`, with `"region"` when the place matters. Use words
   the tags use: things you can see (helicopter, yacht, skyline, alligator, police car, Jason, Lucia).
-- Use a `"file"` only when one exact picture is needed (a `lockon` needs one, for its `box`).
+- Use a `"file"` only when one exact picture is needed. A `lockon` needs one for its `box`, and so does a shot with
+  `"marks"`: a mark sits on a spot of one picture, and the check refuses a mark that misses the picked picture.
 - Pictures with logos or big text are left out unless the shot says `"text_ok": true`. Use that only when the
   logo or text is the point (an editions topic, the cover art).
 - A video is picked only with `"media": "video"`. Rockstar's character loops last 1-1.5 s, so give them short shots.

@@ -394,13 +394,17 @@ def resolved(*shots, allow_weak=False, recent=None, **top):
 @check
 def picker_finds_a_picture_by_what_it_shows():
     """a query finds the picture whose tags hold its words: "swamp airboat" in Grassrivers is the airboat, "gators"
-    (a plural and a nickname) is the alligator, and "boat" finds the airboat because it ends in boat"""
+    (a plural and a nickname) is the alligator, and "boat" finds the airboat because it ends in boat, while "phone"
+    does not find "headphones\""""
     p = picker.Picker(fake_tags(), seed="x")
     first = p.pick("swamp airboat", "Grassrivers")
     second = p.pick("gators")
     third = picker.Picker(fake_tags(), seed="x").pick("a boat in the swamp")
+    dj = {JASON: tagged(JASON, "woman with headphones", ["woman", "headphones", "speaker"])}
     return (first["file"] == AIRBOAT and first["ok"] and second["file"] == GATOR and second["ok"]
-            and third["file"] == AIRBOAT and third["matched"] == ["boat", "swamp"])
+            and third["file"] == AIRBOAT and third["matched"] == ["boat", "swamp"]
+            and picker.Picker(dj).pick("woman phone")["ok"] is False        # "phone" is not "headphones"
+            and picker.Picker(dj).pick("woman headphone")["ok"] is True)
 
 
 @check
@@ -483,10 +487,18 @@ def used_media_log_keeps_each_short_once():
 @check
 def text_logos_and_rating_cards_stay_out():
     """a picture with big text or a logo is never picked unless the shot says "text_ok": true; with it the edition
-    picture can be picked; a picture with an age-rating card is never picked, even then"""
-    plain, _, problems, _ = resolved({"beat": "card", "query": "sports car"})
-    asked, _, asked_problems, _ = resolved({"beat": "card", "query": "sports car", "text_ok": True},
-                                           {"beat": "card", "query": "sports car", "text_ok": True})
+    picture can be picked; a picture with an age-rating card is never picked, even then; and an edition picture,
+    even a clean one, is picked only by a shot that says "type": "edition\""""
+    plain, _, problems, _ = resolved({"beat": "card", "query": "sports car", "type": "edition"})
+    asked, _, asked_problems, _ = resolved({"beat": "card", "query": "sports car", "type": "edition", "text_ok": True},
+                                           {"beat": "card", "query": "sports car", "type": "edition", "text_ok": True})
+    tags = fake_tags()
+    clean = "GTAVI_Ultimate_Edition_Benefits/ULTIMATE_EDITION_03.jpg"
+    tags[clean] = tagged(clean, "sports car", ["car", "road"])
+    general = picker.Picker(tags).pick("sports car")
+    edition = picker.Picker(tags).pick("sports car", kind="edition")
+    if general["ok"] or edition["file"] != clean:
+        return False
     logo, _, _, _ = resolved({"beat": "compare", "top": {"query": "Jason Lucia", "label": "Then"},
                               "bottom": {"file": "rockstar/" + DEER, "label": "Now"}})
     return ("file" not in plain[0] and len(problems) == 1
@@ -547,12 +559,23 @@ def a_region_label_needs_a_picture_from_that_region():
 
 @check
 def a_region_label_steers_the_pick_and_an_override_can_move_a_picture():
-    """a query under a region label is answered only from that region's folder, in a compare too; and a "region"
-    fix in the override file lets the owner put a picture in a region, or take it out"""
+    """a query under a region label is answered only from that region's folder, in a compare too, and with a picture
+    of the place before one that is mainly of a person; and a "region" fix in the override file lets the owner put a
+    picture in a region, or take it out"""
     shots, _, problems, _ = resolved({"beat": "card", "query": "trees", "label": "Mount Kalaga"},
                                      {"beat": "compare", "top": {"query": "swamp", "label": "Grassrivers"},
                                       "bottom": {"query": "skyscrapers", "label": "Vice City"}})
     nothing = resolved({"beat": "card", "query": "airboat", "label": "Vice City"})[2]
+    # Under a region label a picture of the place comes before one that is mainly of a person, even a fresher one.
+    crowd = SHOTS + "Grassrivers/Grassrivers_09.jpg"
+    swamp = {**fake_tags(), crowd: tagged(crowd, "men with guns", ["man", "gun", "dock"], ["swamp"])}
+    swamp.pop(GATOR)
+    seen = {AIRBOAT: 1}
+    labelled = picker.resolve_script(shot_script({"beat": "card", "query": "swamp", "label": "Grassrivers"}), swamp, seen)
+    free = picker.resolve_script(shot_script({"beat": "card", "query": "swamp"}), swamp, seen)
+    if (labelled[0]["lines"][0]["beats"][0]["file"] != "rockstar/" + AIRBOAT or len(labelled[3]) != 1
+            or free[0]["lines"][0]["beats"][0]["file"] != "rockstar/" + crowd):
+        return False
     tags = fake_tags()
     moved = picker.region_label_problem("Vice City", JASON, {**tags[JASON], "region": "Vice City"}, picker.load_regions())
     taken_out = picker.region_label_problem("MOUNT KALAGA", HELI, {**tags[HELI], "region": None}, picker.load_regions())
@@ -706,7 +729,7 @@ def short_script(**changes):
     return script
 
 
-def short_run(tmp, script, pacing=None, **more):
+def short_run(tmp, script, pacing=None, visuals=None, **more):
     """make_short on a script, with made-up facts and tags, tiny real pictures and a stand-in for the render."""
     tmp = Path(tmp)
     tags = fake_tags()
@@ -723,7 +746,8 @@ def short_run(tmp, script, pacing=None, **more):
         rendered.append(json.loads(Path(resolved_path).read_text(encoding="utf-8")))
         (out / "short.mp4").write_bytes(b"not a real video")
         report = {"length_s": 36.0, "length_ok": True, "target_s": [34, 39], "warnings": [], **(pacing or {})}
-        (out / "log.json").write_text(json.dumps({"pacing": report, "warnings": []}), encoding="utf-8")
+        run_log = {"pacing": report, "warnings": [], **({"visuals": visuals} if visuals is not None else {})}
+        (out / "log.json").write_text(json.dumps(run_log), encoding="utf-8")
         return lambda p: [f"  Pacing check: {p['length_s']} s"]
     path = tmp / "script.json"
     path.write_text(json.dumps(script), encoding="utf-8")
@@ -851,6 +875,18 @@ def a_short_outside_the_length_or_pacing_is_not_ready():
                 and any(line.startswith("NOT READY") and "41.0 s" in line for line in long["lines"])
                 and slow["ready"] is False and any("nothing changes for 3.6 s" in line for line in slow["lines"])
                 and picker.load_used(long["shorts"] / "_used_media.json") == [])
+
+
+@check
+def a_picture_the_loop_ending_covers_is_not_counted_as_used():
+    """when the render's log shows that a picture never got on screen (the loop ending took the last line's time), it
+    is left out of the used-media log, so a later Short can still use it"""
+    with tempfile.TemporaryDirectory() as tmp:
+        shown = [{"source": f"rockstar/{AIRBOAT}@0.3,0.6", "behind": None},
+                 {"source": "card:19 NOV", "behind": f"rockstar/{DEER}"}]
+        run = short_run(tmp, short_script(), visuals=shown)
+        used = picker.load_used(run["shorts"] / "_used_media.json")
+        return (run["ready"] and set(used[0]["files"]) == {AIRBOAT, DEER} and (run["out"] / "picks.jpg").is_file())
 
 
 @check
