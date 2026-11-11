@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 import facts
+import make_short
 import picker
 import tag_media
 
@@ -679,6 +680,195 @@ def the_real_facts_file_reads_and_keeps_the_owners_statuses():
             and all(f.get("checked") for f in real.values() if f["status"] != "unverified")
             and sum(1 for f in real.values() if f["status"] == "unverified") >= 15
             and broken and "status is" in broken and "two facts have this id" in broken and "needs safe_wording" in broken)
+
+
+# --- make_short.py ---
+
+GOOD_TITLE = "GTA 6 pre-load starts SOONER than you think"      # 43 characters, one word in capitals
+
+
+def short_script(**changes):
+    """A whole script make_short.py accepts: 98 spoken words, real fact IDs of FACTS, two pictures asked for."""
+    filler = "This line has no claim in it and only fills the time with plain words for the count."
+    script = {"title": GOOD_TITLE, "topic": "a test topic", "topic_score": {"score": 4, "why": "every player needs it"},
+              "description": "A test Short about the launch.", "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
+              "voice": "am_puck", "speed": 1.1,
+              "lines": [{"say": "The game launches on November 19. Here's why that matters.", "facts": ["date"],
+                         "beats": [{"beat": "full", "query": "swamp airboat"},
+                                   {"beat": "count", "card": "19 NOV"}]},
+                        {"say": "The download is over 200 gigabytes, across six regions.", "facts": ["size", "regions"],
+                         "beats": [{"beat": "card", "query": "deer", "label": "Mount Kalaga"}]},
+                        *({"say": filler, "facts": [], "beats": [{"beat": "card", "card": "WAIT"}]} for _ in range(4)),
+                        {"say": "So the game launches on November 19.", "facts": ["date"],
+                         "beats": [{"beat": "card", "file": "rockstar/" + GATOR}]}]}
+    script.update(changes)
+    return script
+
+
+def short_run(tmp, script, pacing=None, **more):
+    """make_short on a script, with made-up facts and tags, tiny real pictures and a stand-in for the render."""
+    tmp = Path(tmp)
+    tags = fake_tags()
+    for rel in (AIRBOAT, GATOR, DEER, HELI):
+        path = tmp / "gta" / "rockstar" / rel
+        if not path.is_file():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=64x36", "-frames:v", "1",
+                            str(path)], check=True)
+        tags[rel]["size"] = [64, 36]
+    rendered = []
+
+    def render(resolved_path, out):
+        rendered.append(json.loads(Path(resolved_path).read_text(encoding="utf-8")))
+        (out / "short.mp4").write_bytes(b"not a real video")
+        report = {"length_s": 36.0, "length_ok": True, "target_s": [34, 39], "warnings": [], **(pacing or {})}
+        (out / "log.json").write_text(json.dumps({"pacing": report, "warnings": []}), encoding="utf-8")
+        return lambda p: [f"  Pacing check: {p['length_s']} s"]
+    path = tmp / "script.json"
+    path.write_text(json.dumps(script), encoding="utf-8")
+    lines = []
+    try:
+        out, ready = make_short.make_short(path, shorts_dir=tmp / "shorts", root=tmp / "gta", today="2026-11-11",
+                                           facts=FACTS, tags=tags, render=render, log=lines.append, **more)
+        error = None
+    except make_short.ShortError as e:
+        out, ready, error = None, False, str(e)
+    return {"out": out, "ready": ready, "error": error, "rendered": rendered, "lines": lines, "shorts": tmp / "shorts"}
+
+
+@check
+def title_rules():
+    """a title must be 32-46 characters with 1 or 2 words in ALL CAPS and no hashtag; it may end with "..." or "!?";
+    GTA, PS5 and other names that are always capitals don't count as the capital words"""
+    ok = ("GTA 6 pre-load starts SOONER than you think", "The 6 regions of GTA 6 are HUGE...",
+          "What time does GTA 6 ACTUALLY unlock!?", "Your PS5 is NOT READY for GTA 6 day one")
+    problems = make_short.title_problems
+    return (all(problems(t) == [] for t in ok)
+            and any("31 characters" in p for p in problems("GTA 6 pre-load starts NOV 12..."))
+            and any("47 characters" in p for p in problems("GTA 6 pre-load starts SOONER than you think now"))
+            and any("0 word(s) in ALL CAPS" in p for p in problems("GTA 6 on PS5 unlocks at midnight local time"))
+            and any("3 word(s) in ALL CAPS" in p for p in problems("GTA 6 pre-load is LIVE and it is SO BIG"))
+            and any("hashtag" in p for p in problems("GTA 6 pre-load starts SOONER #GTA6 #Shorts"))
+            and problems("") == ["title is missing"] and problems(None) == ["title is missing"])
+
+
+@check
+def upload_text_needs_a_description_and_three_to_five_hashtags():
+    """the description must be there and hold no hashtag; hashtags must be 3 to 5 different tags; a topic score must be
+    1-5 with a reason, and under 3 it warns without stopping; upload.txt has the title, the description and the tags"""
+    def problems(**changes):
+        return make_short.upload_problems(short_script(**changes))
+    low = make_short.check_script(short_script(topic_score={"score": 2, "why": "PC players only"}), FACTS, fake_tags())
+    text = make_short.upload_text(short_script())
+    return (problems() == []
+            and len(problems(description="")) == 1 and len(problems(description="Out now #GTA6")) == 1
+            and len(problems(hashtags=["#GTA6", "#GTAVI"])) == 1
+            and len(problems(hashtags=["#GTA6", "#GTAVI", "#Shorts", "#PS5", "#Xbox", "#Rockstar"])) == 1
+            and len(problems(hashtags=["#GTA6", "#gta6", "#Shorts"])) == 1
+            and len(problems(hashtags=["GTA6", "#GTA VI", "#Shorts"])) == 1
+            and len(problems(topic_score={"score": 7, "why": "x"})) == 1 and problems(topic_score=None) == []
+            and low["problems"] == [] and any("topic score 2 of 5" in w for w in low["warnings"])
+            and text == f"TITLE\n{GOOD_TITLE}\n\nDESCRIPTION\nA test Short about the launch.\n\n#GTA6 #GTAVI #Shorts\n")
+
+
+@check
+def word_count_is_checked_before_anything_renders():
+    """a script far outside 95-105 spoken words (under 85 or over 115) stops before rendering; one a little outside
+    only warns"""
+    script = short_script()
+    words = make_short.spoken_words(script)
+    short = short_script(lines=script["lines"][:3])
+    with tempfile.TemporaryDirectory() as tmp:
+        run = short_run(tmp, short)
+    near = short_script()
+    near["lines"][2] = {"say": "This one is a short plain line now.", "facts": [], "beats": [{"beat": "card", "card": "WAIT"}]}
+    result = make_short.check_script(near, FACTS, fake_tags())
+    return (words == 98 and run["error"] and "37 spoken words" in run["error"] and run["rendered"] == []
+            and not (run["shorts"]).exists()
+            and result["problems"] == [] and result["words"] == 88
+            and any("88 spoken words" in w for w in result["warnings"]))
+
+
+@check
+def make_short_writes_every_file_and_strips_its_own_settings():
+    """a good script is rendered and its folder, <date>-<slug>, holds short.mp4, script.json (as given),
+    script_resolved.json (what explainer.py got: no facts, description, hashtags or topic, every query now a file),
+    upload.txt, claims.txt, picks.jpg and pacing.txt; it is READY, and its pictures go in the used-media log"""
+    with tempfile.TemporaryDirectory() as tmp:
+        script = short_script()
+        run = short_run(tmp, script)
+        out = run["out"]
+        if run["error"] or out is None:
+            raise AssertionError(run["error"])
+        got = run["rendered"][0]
+        names = sorted(p.name for p in out.iterdir())
+        used = picker.load_used(run["shorts"] / "_used_media.json")
+        shots = [s for line in got["lines"] for s in line["beats"]]
+        return (out.name == "2026-11-11-gta-6-pre-load-starts-sooner-than-you-think" and run["ready"]
+                and names == ["claims.txt", "log.json", "pacing.txt", "picks.jpg", "script.json", "script_resolved.json",
+                              "short.mp4", "upload.txt"]
+                and json.loads((out / "script.json").read_text(encoding="utf-8")) == script
+                and not any(k in got for k in ("description", "hashtags", "topic", "topic_score"))
+                and not any("facts" in line for line in got["lines"])
+                and not any("query" in s or "region" in s for s in shots)
+                and shots[0]["file"] == "rockstar/" + AIRBOAT and shots[2]["file"] == "rockstar/" + DEER
+                and (out / "picks.jpg").stat().st_size > 2000
+                and "[size]  REPORTED" in (out / "claims.txt").read_text(encoding="utf-8")
+                and GOOD_TITLE in (out / "upload.txt").read_text(encoding="utf-8")
+                and "Pacing check" in (out / "pacing.txt").read_text(encoding="utf-8")
+                and [s["name"] for s in used] == [out.name] and set(used[0]["files"]) == {AIRBOAT, DEER, GATOR}
+                and any(line.startswith("READY") for line in run["lines"]))
+
+
+@check
+def a_bad_fact_or_picture_stops_before_the_render():
+    """an unverified fact, a reported fact said the exact way, a query nothing matches and a region label on the
+    wrong picture are all listed together, nothing is rendered and no folder is made; --check renders nothing either"""
+    script = short_script()
+    script["lines"][0]["facts"] = ["date", "rumour"]
+    script["lines"][1]["say"] = "The download is 212 gigabytes, across six regions."
+    script["lines"][0]["beats"][0] = {"beat": "full", "query": "spaceship"}
+    script["lines"][1]["beats"][0] = {"beat": "card", "file": "rockstar/" + GATOR, "label": "Mount Kalaga"}
+    with tempfile.TemporaryDirectory() as tmp:
+        run = short_run(tmp, script)
+        dry = short_run(tmp, short_script(), check_only=True)
+        error = run["error"] or ""
+        return ("'rumour' is unverified" in error and "safe wording" in error and "number 212" in error
+                and "nothing shows spaceship" in error and "is from Grassrivers" in error
+                and run["rendered"] == [] and not run["shorts"].exists()
+                and dry["error"] is None and dry["rendered"] == [] and dry["out"] is None and not dry["shorts"].exists())
+
+
+@check
+def a_short_outside_the_length_or_pacing_is_not_ready():
+    """a render that comes out 41 s long, or with a pacing warning, still writes its files but is NOT READY, and its
+    pictures are not logged as used, so making it again can pick the same ones"""
+    with tempfile.TemporaryDirectory() as tmp:
+        long = short_run(tmp, short_script(), pacing={"length_s": 41.0, "length_ok": False})
+        slow = short_run(tmp, short_script(), pacing={"warnings": ["pacing: nothing changes for 3.6 s"]})
+        return (long["out"] is not None and long["ready"] is False and (long["out"] / "short.mp4").is_file()
+                and any(line.startswith("NOT READY") and "41.0 s" in line for line in long["lines"])
+                and slow["ready"] is False and any("nothing changes for 3.6 s" in line for line in slow["lines"])
+                and picker.load_used(long["shorts"] / "_used_media.json") == [])
+
+
+@check
+def the_next_short_avoids_the_last_ones_pictures():
+    """after a Short is made, another Short asking for the same thing gets a different picture, while making the first
+    Short again keeps its own"""
+    with tempfile.TemporaryDirectory() as tmp:
+        one = short_script()
+        one["lines"][-1]["beats"][0] = {"beat": "card", "file": "rockstar/" + HELI}    # so the alligator stays unused
+        first = short_run(tmp, one)
+        other = json.loads(json.dumps(one))
+        other["title"] = "GTA 6 has a swamp and it looks UNREAL..."
+        other["lines"][0]["beats"][0] = {"beat": "full", "query": "swamp"}
+        second = short_run(tmp, other)
+        again = short_run(tmp, one)
+        pick = lambda run: run["rendered"][0]["lines"][0]["beats"][0]["file"]
+        return (not first["error"] and not second["error"] and pick(first) == "rockstar/" + AIRBOAT
+                and pick(second) == "rockstar/" + GATOR and pick(again) == "rockstar/" + AIRBOAT
+                and len(picker.load_used(first["shorts"] / "_used_media.json")) == 2)
 
 
 def main():

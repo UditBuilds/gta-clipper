@@ -2968,14 +2968,15 @@ def font_warning(work):
     return f"libass didn't confirm {'; '.join(wrong)}" if wrong else None
 
 
-def render(script_path, root, out_root):
+def render(script_path, root, out_root, run_dir=None):
+    """Render a script. The files go to out_root/<slug>/<time>, or to run_dir when it is given (make_short.py)."""
     started = time.perf_counter()
     if not FFMPEG or not FFPROBE:
         raise ScriptError("ffmpeg and ffprobe must be on PATH")
     script = load_script(script_path, root)
     kokoro = load_kokoro()
     warnings = script_warnings(script)
-    run_dir = Path(out_root) / script["slug"] / datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = Path(run_dir) if run_dir else Path(out_root) / script["slug"] / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     timing = {}
 
