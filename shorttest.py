@@ -1,8 +1,9 @@
-"""Checks for the topic-to-Short tools (PR 19): the picture tagger (tag_media.py) on made-up model answers, and the
-picture picker (picker.py) on made-up tags.
+"""Checks for the topic-to-Short tools (PR 19): the picture tagger (tag_media.py) on made-up model answers, the
+picture picker (picker.py) on made-up tags, the facts file and its validator (facts.py), and make_short.py with a
+stand-in for the render.
 
-No Ollama and no Rockstar files are used. ffmpeg makes two tiny pictures and a one-second video in a temporary folder,
-and a stand-in answers for the vision model.
+No Ollama, no Rockstar files and no Kokoro are used. ffmpeg makes a few tiny pictures and short videos in a temporary
+folder, and stand-ins answer for the vision model and for explainer.py's render.
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error), so a missing
 function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL; exit code 0 or 1.

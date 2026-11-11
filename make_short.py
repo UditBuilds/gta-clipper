@@ -258,6 +258,24 @@ def read_script(path):
     return script
 
 
+def explainer_problems(resolved, root, log=print):
+    """What explainer.py itself says is wrong with the script it would get (a bad beat, a label too wide, a tag that
+    isn't in the line), or None. It reads the script the way a render does, without rendering."""
+    try:
+        import explainer
+    except ImportError as e:                        # the checks run anywhere; explainer.py needs .venv-tts
+        log(f"  Note: explainer.py's own check was skipped ({e}); run with .venv-tts to include it")
+        return None
+    with tempfile.TemporaryDirectory(prefix="check_") as tmp:
+        path = Path(tmp) / "script.json"
+        path.write_text(json.dumps(resolved, ensure_ascii=False), encoding="utf-8")
+        try:
+            explainer.load_script(path, root)
+        except explainer.ScriptError as e:
+            return str(e)
+    return None
+
+
 def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORTS_DIR, root=GTA_ROOT, today=None,
                facts=None, tags=None, render=None, log=print):
     """Check a script and make its Short. Returns (folder or None, ready). ShortError lists what stops it.
@@ -281,6 +299,10 @@ def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORT
         log(f"  WARNING: {warning}")
     if result["problems"]:
         raise ShortError("the script needs fixing before it can be made:\n  " + "\n  ".join(result["problems"]))
+    if render is None:
+        wrong = explainer_problems(result["resolved"], root, log)
+        if wrong:
+            raise ShortError(f"explainer.py can't render it: {wrong}")
     log(f"  Checks passed: {result['words']} spoken words, {len({f['id'] for c in result['claims'] for f in c['facts']})} "
         f"facts used, {sum(1 for p in result['picks'] if p['picked'])} pictures picked")
     if check_only:

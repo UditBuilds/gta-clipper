@@ -342,3 +342,93 @@ wider than "212"). Cards are now sized for all three.
 
 Fonts: [Anton](fonts/OFL.txt) and [Lilita One](fonts/LilitaOne-OFL.txt), both SIL Open Font License. Kokoro's weights are
 Apache-2.0. `phonemizer` and eSpeak NG, which it installs, are GPL-3.0.
+
+## Topic to Short
+
+Since PR 19 a topic becomes a finished Short with its upload text, and my job is only to review it. In Claude Code:
+
+```
+/new-short GTA 6 pre-load starts Nov 12
+/batch-shorts GTA 6 pre-load starts Nov 12; the 6 regions of Leonida; what time GTA 6 unlocks
+```
+
+Claude scores the topic (1-5: does it matter to almost every player on day one?), writes the script from `facts.json`
+only, picks the pictures, renders, looks at the picks, and reports the paths. Nothing is ever uploaded. The same thing
+by hand, in Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe tag_media.py                                  # once, and after adding pictures (needs Ollama)
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --check   # checks only, renders nothing
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
+.\.venv\Scripts\python.exe shorttest.py                                  # 37 checks, about 20 s, no Ollama needed
+```
+
+Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
+
+| File | What it is for |
+|---|---|
+| `short.mp4` | The Short. |
+| `upload.txt` | The title, and the description with its 3-5 hashtags. |
+| `claims.txt` | Every line next to the facts it uses, their status and their source links. |
+| `picks.jpg` | Each picture (the part the viewer sees) next to the words said and shown over it. |
+| `pacing.txt` | The pacing check. |
+| `script.json`, `script_resolved.json` | The script as written, and as rendered (every query now a file). |
+
+The last line `make_short.py` prints is `READY` (34-39 s long and no pacing warning) or `NOT READY` and why.
+
+### The facts file
+
+`facts.json` is the only source of claims. Each fact has an id, the plain claim, a safe wording, a status, a source
+link and the date it was checked. Only I change a status; Claude adds new facts as `unverified`.
+
+| Status | In a script |
+|---|---|
+| `confirmed` | May be stated. |
+| `reported` | Only in its safe wording: "over 200 GB", never "212 GB". |
+| `unverified` | Refused. |
+
+Every line of a script lists its facts (`"facts": ["release-date"]`, or `[]` for a line like "Let me explain."). The
+check refuses a missing list, an unknown or unverified fact, a reported fact without its safe wording in that line, and
+any number said or shown that is not in the wording of a fact that line lists. It can't read meaning, so a wrong claim
+with no number in it still passes under a real fact ID: that is what `claims.txt` is for.
+
+### Pictures by what they show
+
+`tag_media.py` has a local vision model look at Rockstar's 334 pictures and 9 video loops and saves, for each one, a
+description, the main subject, the things in view, the setting, a focus point, its type (screenshot, wallpaper,
+edition, key art, video loop), its shape, and whether big text, a logo or an age-rating card is printed on it. The tags
+are in `C:\AI\gta\rockstar\_tags.json`. `_tag_check\index.html` in that folder shows every thumbnail with its tags; fixes
+made there are saved as `_tags_override.json`, which always wins over the model.
+
+A shot then asks for a picture instead of naming a file (a file path still works):
+
+```json
+{"beat": "full", "query": "swamp airboat", "region": "Grassrivers"}
+{"beat": "card", "query": "bridge ocean", "label": "Leonida Keys"}
+{"beat": "full", "query": "game logo", "media": "video", "text_ok": true}
+```
+
+- A picture is never used twice in a Short (the six cuts of one wallpaper are one picture), and pictures of the last 5
+  Shorts are avoided while another good match exists (`C:\AI\gta\shorts\_used_media.json`).
+- A full-screen shot prefers a phone-shaped picture, a card a square one and a compare a landscape one.
+- A picture with big text or a logo needs `"text_ok": true`. One with a rating card is never picked. A video needs
+  `"media": "video"` and starts after its rating card.
+- If nothing matches well, the Short stops and names the closest picture. `--allow-weak` uses it and marks it red on
+  `picks.jpg`.
+- A label that names a region picks from that region's folder, and is refused on a picture from anywhere else or on one
+  whose subjects clearly contradict it (`regions.json`). The folder is trusted over the "where" tags, which are the
+  model's weakest.
+
+**Which model.** `qwen3-vl:8b-instruct`, compared with the 4b on 20 files that I judged by eye against notes written
+before reading the answers. The tags were equally good (98 of 100 checks each). The 8b put the focus point within a
+tenth of the frame of the subject on 14 files against 8, and the 4b answered the exact centre 8 times. The 8b takes
+about 7 s a picture against 4.5 s. The plain `qwen3-vl:4b` and `:8b` return nothing, because they spend the whole
+answer thinking, so the `-instruct` builds are used. The check for text and logos got 12 of 14 sample files right; both
+misses were big signs inside the scene called "big text", which only keeps a picture out.
+
+### Title rules
+
+32-46 characters, ALL CAPS on only 1 or 2 words (GTA, PS5 and other always-capital names don't count), no hashtags, and
+it may end with `...` or `!?`. Like the hook, it must be literally true. The script rules (a true, surprising first
+line, then "let me explain", proof by second 3, a twist, a payoff, a last line that loops) are in
+`.claude/commands/new-short.md`.
