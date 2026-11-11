@@ -1970,7 +1970,7 @@ def beat_sounds_are_planned_and_sit_under_the_voice():
 
 @check
 def pacing_counts_changes_and_warns():
-    """a visual change is a cut or something arriving inside a shot (a lock-on box, a compare's second card, a snippet's first sweep, a mark, the subscribe pill); two within 0.3 s count once; the report gives the length, the count, the rate every 10 s and the longest gap; a rate under 4 or over 6 per 10 s warns and so does a gap over 3 s (3.0 s itself doesn't); nothing fails"""
+    """a visual change is a cut or something arriving inside a shot (a compare's second card, a mark, the subscribe pill); changes within 0.5 s of the one before count with it, so a lock-on box or a marker sweep that follows its cut at once is that cut, and so is a second mark; the report gives the length, the count, the rate every 10 s and the longest gap; a rate under 4 or over 6 per 10 s warns and so does a gap over 3 s (3.0 s itself doesn't); nothing fails"""
     image = {"source": "img", "kind": "image"}
     slots = [{"start": 0, "end": 60, "visual": image},
              {"start": 60, "end": 150, "visual": {"source": "lock", "kind": "image", "lock": {"zoom": 1.5}}},
@@ -1982,7 +1982,9 @@ def pacing_counts_changes_and_warns():
              {"start": 420, "end": 465, "visual": image, "loop_tail": True}]
     changes = ex.visual_changes(slots, 465)
     times = [at for at, _ in changes]
-    want = [2.0, 2.0 + ex.LOCK_SNAP_S, 5.0, 5.0 + ex.COMPARE_SECOND_S, 8.0, 8.4, 11.0, 11.7, round((465 - 60) / FPS, 3), 14.0]
+    want = [2.0, 5.0, 5.0 + ex.COMPARE_SECOND_S, 8.0, 11.0, 11.7, round((465 - 60) / FPS, 3), 14.0]
+    late_box = ex.visual_changes([slots[0], {"start": 60, "end": 150, "visual": {"source": "late", "kind": "image",
+                                                                                 "marks": [{"icon": "x", "at": 1.2}]}}])
     report = ex.pacing_report(changes, 15.5, 40)
     slow = ex.pacing_report([(3.0, "cut"), (6.5, "cut"), (9.5, "cut")], 12.5)
     fast = ex.pacing_report([(k * 1.0, "cut") for k in range(1, 20)], 20.0)
@@ -1990,9 +1992,10 @@ def pacing_counts_changes_and_warns():
     print(f"       changes at {times}; report: {report['changes']} changes, {report['per_10_s']} per 10 s, longest gap "
           f"{report['longest_gap_s']} s at {report['longest_gap_at_s']}; slow warnings {slow['warnings']}")
     return (len(times) == len(want) and all(abs(a - b) < 0.002 for a, b in zip(times, want))
-            and report["changes"] == 10 and abs(report["per_10_s"] - 10 / 15.5 * 10) < 0.01
-            and report["longest_gap_s"] == 2.6 and report["longest_gap_at_s"] == [8.4, 11.0] and report["words"] == 40
-            and any("over the target" in w for w in report["warnings"]) and not report["length_ok"]
+            and report["changes"] == 8 and abs(report["per_10_s"] - 8 / 15.5 * 10) < 0.01
+            and report["longest_gap_s"] == 3.0 and report["longest_gap_at_s"] == [8.0, 11.0] and report["words"] == 40
+            and report["warnings"] == [] and not report["length_ok"] and ex.CHANGE_MERGE_S == 0.5
+            and ex.LOCK_SNAP_S < ex.CHANGE_MERGE_S < ex.COMPARE_SECOND_S and [at for at, _ in late_box] == [2.0, 3.2]
             and slow["per_10_s"] == 2.4 and len(slow["warnings"]) == 2 and "under the target" in slow["warnings"][0]
             and "3.5 s, from 3.0 s to 6.5 s" in slow["warnings"][1] and slow["longest_gap_s"] == 3.5
             and any("over the target" in w for w in fast["warnings"]) and len(fast["warnings"]) == 1
@@ -2204,7 +2207,7 @@ def beats_render_never_ends_frozen_and_still_loops():
 
 @check
 def beats_render_prints_the_pacing_check():
-    """in the same render: the console prints the pacing check (length, changes, rate, longest gap), the log holds the same numbers with every change it counted (the lock-on box, the second card, the marker and the pill among them), and a Short this short gets the under-34 s warning without failing"""
+    """in the same render: the console prints the pacing check (length, changes, rate, longest gap), the log holds the same numbers with every change it counted (the compare's second card and the pill among them; the lock-on box and the marker count with their cuts), and a Short this short gets the under-34 s warning without failing"""
     folder, log, stdout = beats_run()
     pacing = log["pacing"]
     what = " | ".join(e["what"] for e in pacing["events"])
@@ -2216,12 +2219,39 @@ def beats_render_prints_the_pacing_check():
     return ("Pacing check:" in stdout and f"Changes       {pacing['changes']} visual changes" in stdout
             and re.search(r"Length\s+\d+\.\d s\s+\(target 34-39 s\)\s+WARN", stdout)
             and re.search(r"Rate\s+\d+\.\d per 10 s\s+\(target 4-6\)", stdout) and re.search(r"Longest gap\s+\d+\.\d s, from", stdout)
-            and pacing["changes"] == len(pacing["events"]) > cuts and abs(pacing["length_s"] - log["durations"]["video_s"]) < 0.05
+            and pacing["changes"] == len(pacing["events"]) and 4 <= pacing["changes"] <= cuts + 2
+            and abs(pacing["length_s"] - log["durations"]["video_s"]) < 0.05
             and abs(pacing["per_10_s"] - pacing["changes"] / pacing["length_s"] * 10) < 0.02
-            and all(k in what for k in ("lock-on box lands", "second card slides in", "marker sweeps", "subscribe pill pops in",
-                                        "loop ending"))
+            and all(k in what for k in ("second card slides in", "subscribe pill pops in", "loop ending"))
+            and "lock-on box lands" not in what and "marker sweeps" not in what
             and any("under the 34-39 s target" in w for w in log["warnings"])
-            and again.returncode == 0 and "Pacing check:" in again.stdout and "the lock-on box lands" in again.stdout)
+            and again.returncode == 0 and "Pacing check:" in again.stdout and "the second card slides in" in again.stdout)
+
+
+@check
+def beat_example_scripts_read():
+    """the two PR 18 example scripts read (checked when the Rockstar files and test1.webm are on this PC): beats_demo.json uses every beat type, has a subscribe pill, opens on a clip and holds only Rockstar's files; the video test is marked TEST ONLY in its file name, title, banner and pill and plays the GTA 5 recording behind every beat; the PR 17 example reads as before, with no beats"""
+    root = Path(r"C:\AI\gta")
+    if not (root / "rockstar").is_dir() or not (root / "input" / "test1.webm").is_file():
+        print("       C:\\AI\\gta\\rockstar or input\\test1.webm isn't here; skipped")
+        return True
+    demo = ex.load_script(HERE / "examples" / "beats_demo.json", root)
+    test = ex.load_script(HERE / "examples" / "beats_video_test_TEST_ONLY.json", root)
+    old = ex.load_script(HERE / "examples" / "nov10_preload_v2.json", root)
+    shots = lambda script: [v for line in script["lines"] for v in line["visuals"]]
+    files = lambda v: ([v["path"]] if "path" in v else []) + [f for k in ("top", "bottom", "bg") if k in v for f in files(v[k])]
+    demo_files = {str(f) for v in shots(demo) for f in files(v)}
+    test_files = {Path(f).name for v in shots(test) for f in files(v)}
+    words = sum(len(ex.spoken_tokens(line["say"])) for line in demo["lines"])
+    print(f"       demo: {len(shots(demo))} shots, beats {sorted({v['beat'] for v in shots(demo)})}, {words} words, "
+          f"{len(demo_files)} files; video test: {len(shots(test))} shots from {sorted(test_files)}; "
+          f"nov10 v2: {len(shots(old))} shots, {sum(1 for v in shots(old) if 'beat' in v)} with a beat")
+    return ({v["beat"] for v in shots(demo)} == set(ex.BEATS) and demo["end_pill"]["text"] == "@NeonGetaway \u2022 Subscribe"
+            and shots(demo)[0]["kind"] == "video" and all("rockstar" in f for f in demo_files) and 95 <= words <= 110
+            and {v["beat"] for v in shots(test)} == set(ex.BEATS) and test_files == {"test1.webm"}
+            and "TEST ONLY" in test["title"] and "TEST ONLY" in test["end_pill"]["text"]
+            and any(v.get("banner", {}).get("text") == "TEST ONLY" for v in shots(test))
+            and all("beat" not in v for v in shots(old)) and old["end_pill"] is None and len(shots(old)) == 23)
 
 
 def main():

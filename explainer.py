@@ -200,7 +200,7 @@ BEAT_KEYS = {"full": {"file", "at", "focus", "pan", "weight", "label", "marks"},
 # "lockon": a red box drops onto a region of the picture (given in the picture's own pixels) LOCK_SNAP_S after the cut,
 # with a small tag on its corner, and the camera zooms at it: fast at first, then a slow creep. The zoom is the largest
 # up to LOCK_ZOOM_MAX that fits the region in LOCK_ROOM and keeps it, and its tag, inside the safe area.
-LOCK_SNAP_S, LOCK_SNAP_FRAMES, LOCK_SNAP_FROM = 0.45, 4, 1.5      # when it lands; frames it takes; its size as it starts
+LOCK_SNAP_S, LOCK_SNAP_FRAMES, LOCK_SNAP_FROM = 0.35, 4, 1.5      # when it lands; frames it takes; its size as it starts
 LOCK_ZOOM_S, LOCK_ZOOM_MIN, LOCK_ZOOM_MAX, LOCK_CREEP_PER_S = 0.9, 1.1, 1.6, 0.012
 LOCK_ROOM, LOCK_TARGET_Y = (760, 600), 815
 LOCK_STROKE, LOCK_EDGE, LOCK_CORNER = 8, 13, 10                   # the red line, the white edge under it, its corners
@@ -221,10 +221,13 @@ BANNER_WORDS, BANNER_SIZE, BANNER_MIN_SIZE, BANNER_Y, BANNER_S, BANNER_DELAY_S =
 PILL_SIZE, PILL_PAD, PILL_MAX_WIDTH, PILL_CHARS = 46, (40, 26), 760, 40
 PILL_S, PILL_CLICK_S, PILL_OUT_S, PILL_Y = 2.0, 1.1, 0.3, {"bottom": 1470, "top": 446}
 PILL_PRESS = "\\fscx91\\fscy91\\t(0,150,\\fscx100\\fscy100)"
-# The pacing checker (PR 18): a visual change is a cut, or something new arriving inside a shot (a lock-on box, the
-# second card of a compare, a marker sweep, a mark, the subscribe pill). Two changes closer than CHANGE_MERGE_S count
-# once. The targets come from a top GTA 6 Shorts channel: 4-5 changes every 10 s, never 3 s without one.
-CHANGE_MERGE_S, MIN_CHANGES_PER_10_S, MAX_CHANGES_PER_10_S, MAX_GAP_S = 0.3, 4.0, 6.0, 3.0
+# The pacing checker (PR 18): a visual change is a cut, or something arriving inside a shot (a lock-on box, the
+# second card of a compare, a marker sweep, a mark, the subscribe pill). Changes closer than CHANGE_MERGE_S to the
+# one before are the same moment to the eye and count once: a lock-on box or a marker that follows its cut by 0.4 s
+# is part of that cut, and a compare's second card, 0.8 s in, is a change of its own. Counting each of those would
+# make a script look busier than a channel counted by its cuts. The targets come from a top GTA 6 Shorts channel:
+# 4-5 changes every 10 s, never 3 s without one.
+CHANGE_MERGE_S, MIN_CHANGES_PER_10_S, MAX_CHANGES_PER_10_S, MAX_GAP_S = 0.5, 4.0, 6.0, 3.0
 TARGET_WORDS = (95, 105)
 
 # Timeline.
@@ -1102,12 +1105,14 @@ def place_snippet(visual, caption_style):
     boxes = dict(zip(ranges, measure([(chunky(ref), escape_ass(" ".join(words[i:j]))) for i, j in ranges])))
     inner = CARD_BOX - 2 * SNIPPET_PAD_X
     bottom = CAPTION_BANDS[caption_style][0] - CARD_SHADOW_DY - 2 * CARD_SHADOW_BLUR - 8
+    # A label sits on the card's top edge, half of it inside: the first line starts clear of it.
+    pad_top = max(SNIPPET_PAD_Y, label_reach(label)[1] + 18) if label else SNIPPET_PAD_Y
     for size in range(SNIPPET_SIZE, SNIPPET_MIN_SIZE - 1, -4):
         def width(i, j):
             box = boxes.get((i, j), False)
             return math.inf if box is False else (box[2] - box[0]) * size / ref if box else 0.0
         lines = wrap_words(n, width, inner * 0.98)
-        if not lines or len(lines) * size * SNIPPET_LINE + 2 * SNIPPET_PAD_Y > bottom - SNIPPET_TOP:
+        if not lines or len(lines) * size * SNIPPET_LINE + pad_top + SNIPPET_PAD_Y > bottom - SNIPPET_TOP:
             continue
         real = measure([(chunky(size), escape_ass(" ".join(words[i:j]))) for i, j in lines] + [(chunky(size), "Hg")])
         if all(box and box[2] - box[0] <= inner for box in real):
@@ -1116,9 +1121,9 @@ def place_snippet(visual, caption_style):
         return [f"{source}: the text doesn't fit a snippet card even at its smallest size; use fewer or shorter words"]
     cap = real[-1]
     pitch = size * SNIPPET_LINE
-    height = round(len(lines) * pitch + 2 * SNIPPET_PAD_Y)
+    height = round(len(lines) * pitch + pad_top + SNIPPET_PAD_Y)
     top = round(min(max(SNIPPET_MIDDLE_Y - height / 2, SNIPPET_TOP), bottom - height))
-    ys = [top + SNIPPET_PAD_Y + pitch * (k + 0.5) for k in range(len(lines))]
+    ys = [top + pad_top + pitch * (k + 0.5) for k in range(len(lines))]
     # A marked phrase may run over a line's end: one bar for each line it is on. Its place inside the line comes from
     # drawing the line with only those words showing.
     parts = []
@@ -3185,7 +3190,8 @@ def visual_changes(slots, pill_frames_total=None):
     a shot (a lock-on box, a compare's second card, a snippet's marker, marks), and the subscribe pill when
     pill_frames_total (the Short's length in frames) is given. Small follow-ups don't count again: a snippet's second
     sweep, the cursor's click, a label popping in after its cut. Changes closer than CHANGE_MERGE_S to the one before
-    count as part of it. A slow zoom or pan is movement, not a change."""
+    count as part of it, so a lock-on box or a marker that follows its cut at once is that cut. A slow zoom or pan is
+    movement, not a change."""
     found = []
     for i, slot in enumerate(slots):
         visual, at, end = slot["visual"], slot["start"] / FPS, slot["end"] / FPS
@@ -3206,9 +3212,9 @@ def visual_changes(slots, pill_frames_total=None):
         found.append((pill_frames(pill_frames_total)[0] / FPS, "the subscribe pill pops in"))
     counted = []
     for at, what in sorted(found):
-        if not counted or at - counted[-1][0] >= CHANGE_MERGE_S:
-            counted.append((round(at, 3), what))
-    return counted
+        if not counted or at - counted[-1][0] >= CHANGE_MERGE_S - 1e-6:   # exactly that far apart is two moments
+            counted.append((at, what))
+    return [(round(at, 3), what) for at, what in counted]
 
 
 def pacing_report(changes, total_s, words=None):
