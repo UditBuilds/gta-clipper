@@ -200,7 +200,7 @@ Render:
 That writes `short.mp4`, `voice.wav` (the voice alone), `captions.ass` and `log.json` to
 `C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`, and prints the runtime, the shots, the music and sound effects used and
 the final loudness.
-`.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in about a minute. `examples\explainer_sample.json` is
+`.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in about 3 minutes. `examples\explainer_sample.json` is
 the longer PR 14 demo, in the short string form.
 
 A script is a JSON file, and paths are relative to `C:\AI\gta\`:
@@ -223,9 +223,9 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
 }
 ```
 
-- **Length.** The target is 40-50 s, with a new picture every 1.5-2 s. At speed 1.0, `am_puck` says about 2.8 words a
-  second, so that is about 110-140 words. Over 50 s warns, and so does a speed above 1.1: to fit the time, cut words
-  rather than rush the voice. A shot that stays up over 2.5 s warns (a pan may stay 3.5 s, because it keeps moving).
+- **Length.** The target is 34-39 s since PR 18 (it was 40-50 s), which is about 95-105 words at speed 1.1. Outside
+  it warns, and so does a speed above 1.1: to fit the time, cut words rather than rush the voice. The
+  [pacing check](#beat-types) prints after every render. A shot that stays up over 2.5 s warns (a pan may stay 3.5 s, because it keeps moving).
 - **Shots.** A line's shots share its time by `weight`, 1 each unless set, so a shot with weight 2 stays twice as long as
   its neighbours. Each shot is an object with `file` or `card`:
   - `focus` is where the subject is across the picture: `"left"`, `"center"`, `"right"` or 0 (left edge) to 1 (right
@@ -284,11 +284,54 @@ media) and approved its second version, C2.
 - **Grade.** A little more contrast and colour, and a soft vignette. `"grade": false` at the top of the script turns it
   off.
 - **Loop.** The last frame's picture is the first frame's again (the last spoken word's caption can still be up). When
-  the Short opens on a clip used from its start, the ending holds that clip's first frame for 1.5 s.
+  the Short opens on a clip used from its start, the ending plays that clip backwards into its first frame, so nothing
+  stands still (before PR 18 it held that frame for 1.5 s).
 
 ```powershell
 .\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload_v2.json   # the Nov 10 Short in look C
 .\.venv-tts\Scripts\python.exe explainer.py examples\look_c_videos.json      # Rockstar clips framed and full screen
+```
+
+### Beat types
+
+Since PR 18 a shot can pick a beat type with `"beat"`, so a Short mixes full-screen shots and cards. A line may call
+its shots `"beats"` instead of `"visuals"`. Shots without a beat are drawn as before.
+
+- `full`: a picture or video on the whole screen, zooming slowly at its `focus`.
+- `lockon`: full screen; a red box drops onto `box` (`[x, y, width, height]` in the picture's own pixels) with a short
+  `label`, the camera zooms at it, and a click plays as it lands.
+- `card`: the square framed card from look C (or a text card, with `"card"`).
+- `compare`: two stacked cards, `top` and `bottom`, each with a `label` (grey above, pink below). The second slides in
+  0.8 s after the first, with a low whoosh and then a higher one.
+- `snippet`: a white card of plain text, 18 words at most, with a yellow marker sweeping across the `highlight` words.
+  It is plain text on purpose and never copies the look of a website or an article.
+- `count`: a text card whose number counts up (`"card": "212 GB"`).
+- `banner`: a pill of 1-3 words (`"text"`) over full-screen footage for 1.5 s.
+
+```json
+{"say": "But here's the catch. The map is bigger than one city.",
+ "beats": [
+   {"beat": "banner", "text": "The catch", "file": "rockstar/a.jpg"},
+   {"beat": "lockon", "file": "rockstar/b.jpg", "box": [1805, 778, 615, 475], "label": "Look here"},
+   {"beat": "compare", "top": {"file": "rockstar/c.jpg", "label": "Vice City"},
+                       "bottom": {"file": "rockstar/d.mp4", "at": "0:03", "label": "Leonida Keys"}},
+   {"beat": "snippet", "text": "Unlocks at midnight on November 19.", "highlight": ["midnight"]}]}
+```
+
+- **Video.** Any beat takes a video (`.mp4`, `.webm`) with `at` for its start, also as a text card's `bg`. PS5 VP9
+  recordings get the same limited-range fix as `clip.py`.
+- **Subscribe pill.** `"end_pill": "@NeonGetaway • Subscribe"` at the top of the script shows a small white pill for the
+  last 2 s, with a cursor click and a click sound. Nothing is spoken, and it is gone before the last frame.
+- **Safe area.** A lock-on region too near the picture's top or bottom can't be brought into the safe area, and the
+  render stops and says so. While a compare is up, the word captions sit between its two cards.
+- **Pacing check.** After a render the tool prints the length, the number of visual changes, the changes every 10 s and
+  the longest gap. It warns (it never fails) outside 34-39 s, under 4 or over 6 changes every 10 s, or with a gap over
+  3 s. A change is a cut, a compare's second card, a mark or the pill; things within 0.5 s of a cut count with it.
+
+```powershell
+.\.venv-tts\Scripts\python.exe explainer.py examples\beats_demo.json                  # every beat type, 35 s
+.\.venv-tts\Scripts\python.exe explainer.py examples\beats_video_test_TEST_ONLY.json  # GTA 5 footage; test only
+.\.venv-tts\Scripts\python.exe explainer.py --pacing C:\AI\gta\explainers\<slug>\<run>   # the pacing check again
 ```
 
 What the checks caught: text must stay inside x 60-960, y 380-1540, clear of YouTube's buttons on the right and its title

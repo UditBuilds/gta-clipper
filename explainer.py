@@ -12,11 +12,18 @@ The look (PR 17, "Neon Getaway"): a landscape picture floats as a framed card ov
 a portrait one fills the screen. Text cards sit over a blurred picture too, never on black. Captions show one chunky
 yellow word at a time.
 
+Beats (PR 18): a shot may pick a beat type with "beat", so a Short mixes full-screen shots and cards instead of being
+a row of square cards: full, lockon (a red box drops onto a region and the camera zooms at it), card, compare (two
+stacked cards), snippet (a text card with a marker sweep), count and banner (a pill over footage). A line may call its
+shots "beats" instead of "visuals". "end_pill" adds a small subscribe pill with a cursor click to the last 2 s. After
+a render the pacing check prints the length, the visual changes, how many that is every 10 s and the longest gap.
+
 Writes short.mp4, voice.wav, captions.ass and log.json to C:\\AI\\gta\\explainers\\<slug>\\<YYYYMMDD-HHMMSS>\\.
 
 Needs .venv-tts (requirements-explainer.txt), the two Kokoro model files and ffmpeg/ffprobe on PATH; see the README.
 
 Usage:  .venv-tts\\Scripts\\python.exe explainer.py script.json [--root FOLDER] [--out FOLDER]
+        .venv-tts\\Scripts\\python.exe explainer.py --pacing RUN_FOLDER     (a finished run's pacing check again)
 """
 
 import argparse
@@ -39,6 +46,7 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
+from clip import RANGE_FIX_ARGS, needs_range_fix
 from hooks import ass_time, escape_ass
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +60,7 @@ FONT_FILES = (FONT_FILE, CHUNKY_FILE)
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 
 W, H, FPS = 1080, 1920, 30
-MIN_TOTAL_S, MAX_TOTAL_S = 40, 50    # the target runtime; over the top of it warns
+MIN_TOTAL_S, MAX_TOTAL_S = 34, 39    # the target runtime since PR 18 (it was 40-50); outside it warns
 DEFAULT_VOICE, DEFAULT_SPEED = "am_puck", 1.0
 MAX_SPEED = 1.1                      # faster than this warns: the length is fixed by cutting words, not by rushing them
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
@@ -89,6 +97,8 @@ MAX_MUSIC_VOLUME = 2.0               # music_volume: 1 is the level above, 0.5 i
 # "s" sounds. The levels are measured as loudness under the voice (explainertest.py checks them).
 WHOOSH_S, WHOOSH_PEAK_S, WHOOSH_DB = 0.6, 0.36, -14.5   # length, where its loudest moment is, peak level
 HIT_S, HIT_DB = 0.5, -15.0
+WHOOSH_PITCH = {"low": 0.62, "high": 1.5}                 # a compare's two whooshes, next to the usual one
+LOCK_SFX_S, LOCK_DB, CLICK_SFX_S, CLICK_DB = 0.3, -17.0, 0.25, -13.0  # the lock-on click and the subscribe pill's click
 SFX_LOWPASS_HZ, SFX_SPACING_S, SFX_EARLIEST_S = 8000, 0.3, 0.1
 
 # Captions. Shorts covers the top 380, bottom 380, right 120 and left 60 px (the same zones as hooks.py), so x centres
@@ -162,17 +172,63 @@ GRADE, VIGNETTE = "eq=contrast=1.09:saturation=1.25", "vignette=angle=0.35"
 
 # Labels: a pill on the card's top or bottom edge (or near the screen's top or bottom in "full", or on a text card),
 # popping in with an overshoot just after the shot starts. Colour has a meaning.
-LABEL_STYLES = {"info": CYAN, "no": RED_RGB, "number": PINK}
+GREY, INK = (124, 130, 142), (20, 20, 28)
+LABEL_STYLES = {"info": CYAN, "no": RED_RGB, "number": PINK, "grey": GREY}
 LABEL_POSITIONS = ("top", "bottom")
 LABEL_SIZE, LABEL_PAD_X, LABEL_PAD_Y, LABEL_BORDER, LABEL_SHADOW = 80, 36, 24, 8, 7
 LABEL_DELAY_S, LABEL_GAP = 0.22, 14
 LABEL_POP = "\\fscx70\\fscy70\\t(0,140,\\fscx112\\fscy112)\\t(140,260,\\fscx100\\fscy100)"
+LABEL_POP_PEAK = 1.12
 FULL_LABEL_Y = {"top": 470, "bottom": 1420}
 
 # Marks on the picture, at a spot given as a share of the picture's width and height: a white cross on a red disc, a
 # white tick on a cyan one (both ringed in white), a red arrow pointing down at the spot, or a red ring around it.
 MARK_ICONS = ("x", "check", "arrow", "circle")
 MARK_SIZE, MARK_EARLIEST_S = 92, 0.3
+
+# Beats (PR 18). A shot may pick a beat type with "beat": how it fills the screen and what moves in it. A shot without
+# one is drawn as before. "full": the whole screen, zooming slowly at its focus. "card": the framed card above (or a
+# text card). "count": a text card whose number counts up. The four below have their own settings.
+BEATS = ("full", "lockon", "card", "compare", "snippet", "count", "banner")
+BEAT_KEYS = {"full": {"file", "at", "focus", "pan", "weight", "label", "marks"},
+             "lockon": {"file", "at", "weight", "box", "label"},
+             "card": {"file", "card", "at", "focus", "pan", "weight", "card_aspect", "label", "marks", "bg"},
+             "compare": {"top", "bottom", "weight"},
+             "snippet": {"text", "highlight", "weight", "bg", "label"},
+             "count": {"card", "weight", "bg", "label"},
+             "banner": {"file", "at", "focus", "weight", "text", "style"}}
+# "lockon": a red box drops onto a region of the picture (given in the picture's own pixels) LOCK_SNAP_S after the cut,
+# with a small tag on its corner, and the camera zooms at it: fast at first, then a slow creep. The zoom is the largest
+# up to LOCK_ZOOM_MAX that fits the region in LOCK_ROOM and keeps it, and its tag, inside the safe area.
+LOCK_SNAP_S, LOCK_SNAP_FRAMES, LOCK_SNAP_FROM = 0.35, 4, 1.5      # when it lands; frames it takes; its size as it starts
+LOCK_ZOOM_S, LOCK_ZOOM_MIN, LOCK_ZOOM_MAX, LOCK_CREEP_PER_S = 0.9, 1.1, 1.6, 0.012
+LOCK_ROOM, LOCK_TARGET_Y = (760, 600), 815
+LOCK_STROKE, LOCK_EDGE, LOCK_CORNER = 8, 13, 10                   # the red line, the white edge under it, its corners
+LOCK_TAG_SIZE, LOCK_TAIL_ZOOM = 56, 0.03
+# "compare": two 16:9 cards, one above the other. The second slides up from below COMPARE_SECOND_S after the first,
+# over COMPARE_SLIDE_S. The top card's label sits on its top edge and the bottom card's on its bottom edge, and the
+# word captions move to the seam between the cards while it is up, so neither picture is covered.
+COMPARE_ASPECT, COMPARE_GAP, COMPARE_SECOND_S, COMPARE_SLIDE_S, COMPARE_LABEL_SIZE = "16:9", 26, 0.8, 0.3, 64
+# "snippet": a white card of plain dark text, at most SNIPPET_MAX_WORDS words, as large as fits. A yellow marker sweeps
+# left to right behind the chosen words. It is plain styled text on purpose: it never imitates a web page or an article.
+SNIPPET_MAX_WORDS, SNIPPET_SIZE, SNIPPET_MIN_SIZE, SNIPPET_LINE = 18, 104, 60, 1.16
+SNIPPET_PAD_X, SNIPPET_PAD_Y, SNIPPET_RADIUS, SNIPPET_TOP, SNIPPET_MIDDLE_Y = 56, 50, 30, 445, 800
+SWEEP_DELAY_S, SWEEP_PX_PER_S, SWEEP_MIN_S, SWEEP_GAP_S = 0.4, 1500, 0.25, 0.1
+# "banner": a pill of 1-3 words over full-screen footage, up for BANNER_S (or the whole shot, if that is shorter).
+BANNER_WORDS, BANNER_SIZE, BANNER_MIN_SIZE, BANNER_Y, BANNER_S, BANNER_DELAY_S = 3, 124, 48, 800, 1.5, 0.1
+# The ending's subscribe pill ("end_pill"): small and white, up for the last PILL_S. A cursor slides onto it and clicks
+# PILL_CLICK_S before the end; it has gone PILL_OUT_S before the end, so the last frame is still the first frame.
+PILL_SIZE, PILL_PAD, PILL_MAX_WIDTH, PILL_CHARS = 46, (40, 26), 760, 40
+PILL_S, PILL_CLICK_S, PILL_OUT_S, PILL_Y = 2.0, 1.1, 0.3, {"bottom": 1470, "top": 446}
+PILL_PRESS = "\\fscx91\\fscy91\\t(0,150,\\fscx100\\fscy100)"
+# The pacing checker (PR 18): a visual change is a cut, or something arriving inside a shot (a lock-on box, the
+# second card of a compare, a marker sweep, a mark, the subscribe pill). Changes closer than CHANGE_MERGE_S to the
+# one before are the same moment to the eye and count once: a lock-on box or a marker that follows its cut by 0.4 s
+# is part of that cut, and a compare's second card, 0.8 s in, is a change of its own. Counting each of those would
+# make a script look busier than a channel counted by its cuts. The targets come from a top GTA 6 Shorts channel:
+# 4-5 changes every 10 s, never 3 s without one.
+CHANGE_MERGE_S, MIN_CHANGES_PER_10_S, MAX_CHANGES_PER_10_S, MAX_GAP_S = 0.5, 4.0, 6.0, 3.0
+TARGET_WORDS = (95, 105)
 
 # Timeline.
 LOOP_FRAMES = 45                     # the last 1.5 s shows the first visual again
@@ -189,10 +245,10 @@ CLEAN_SEAM_DB = 30                   # a clip's last and first frame must be thi
 FOCUS_NAMES = {"left": 1 / 6, "center": 0.5, "centre": 0.5, "right": 5 / 6}
 FOCUS_Y_NAMES = {"top": 1 / 6, "middle": 0.5, "center": 0.5, "centre": 0.5, "bottom": 5 / 6}
 PAN_DIRECTIONS = {"right": (0.0, 1.0), "left": (1.0, 0.0)}   # right: from the left edge to the right edge
-SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight", "layout", "card_aspect", "label", "marks", "bg"}
+SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight", "layout", "card_aspect", "label", "marks", "bg", "beat"}
 CARD_KEYS = {"card", "weight", "bg", "label"}
 SCRIPT_KEYS = {"title", "voice", "speed", "open_card", "music", "music_volume", "sfx", "lines", "layout",
-               "caption_style", "grade"}
+               "caption_style", "grade", "end_pill"}
 OFF_CENTRE = 0.1                     # a subject further than this from the crop's middle gets zooms only, never a drift
 PAN_BLUR = 0.14                      # a pan's motion blur, as a share of its step per frame: a camera's half-open shutter
 
@@ -323,7 +379,7 @@ def parse_label(value, where):
         raise ScriptError(f"{where}: a label needs its text")
     style, pos = value.get("style", "info"), value.get("pos", "top")
     if style not in LABEL_STYLES:
-        raise ScriptError(f"{where}: label style is info (cyan), no (red) or number (pink)")
+        raise ScriptError(f"{where}: label style is info (cyan), no (red), number (pink) or grey")
     if pos not in LABEL_POSITIONS:
         raise ScriptError(f"{where}: label pos is top or bottom")
     return {"text": " ".join(text.split()).upper(), "style": style, "pos": pos}
@@ -365,7 +421,10 @@ def parse_file(name, at, focus, pan, weight, root, source, extra=None):
         raise ScriptError(f"{path.name}: {ext or 'no extension'} is not a video or image type this tool handles")
     if picture is None:
         raise ScriptError(f"{path.name}: ffprobe finds no picture in it")
-    size = (int(picture["width"]), int(picture["height"]))
+    # A PS5 .webm is stored 1920x1088 with the bottom 8 rows cropped by the container, and the decoder gives 1920x1080.
+    cut = next((d for d in picture.get("side_data_list", []) if d.get("side_data_type") == "Frame Cropping"), {})
+    size = (int(picture["width"]) - int(cut.get("crop_left", 0)) - int(cut.get("crop_right", 0)),
+            int(picture["height"]) - int(cut.get("crop_top", 0)) - int(cut.get("crop_bottom", 0)))
     shape = {"weight": weight} if weight != 1.0 else {}
     across, down = focus or (0.5, 0.5)
     if ext in IMAGE_EXTS:
@@ -417,16 +476,163 @@ def parse_visual(raw, root):
     return parse_file(name, at, None, None, 1.0, root, raw)
 
 
+def parse_weight(raw):
+    weight = raw.get("weight", 1.0)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 < weight <= MAX_WEIGHT:
+        raise ScriptError(f"{json.dumps(raw)}: weight is its share of the line, a number above 0 and up to {MAX_WEIGHT:g}")
+    return float(weight)
+
+
+def parse_behind(raw, where, root):
+    """A text card's own label and bg, read."""
+    more = {}
+    if "label" in raw:
+        more["label"] = parse_label(raw["label"], where)
+    if "bg" in raw:
+        if not isinstance(raw["bg"], str) or raw["bg"].startswith("card:"):
+            raise ScriptError(f"{where}: bg is the picture behind the card, an image or video such as rockstar/x.jpg")
+        more["bg"] = parse_visual(raw["bg"], root)
+    return more
+
+
+def parse_beat(raw, root):
+    """A shot that picks a beat type (PR 18). full, card and count are the shots there were before, pinned to one
+    look; lockon, compare, snippet and banner bring their own settings. ScriptError says what is wrong."""
+    beat = raw["beat"]
+    if beat not in BEATS:
+        raise ScriptError(f"{json.dumps(raw)}: beat is one of {', '.join(BEATS)}")
+    unknown = sorted(k for k in raw if k != "beat" and k not in BEAT_KEYS[beat])
+    if unknown:
+        raise ScriptError(f"{json.dumps(raw)}: a {beat} beat takes {', '.join(sorted(BEAT_KEYS[beat]))}, not "
+                          f"{', '.join(map(repr, unknown))}")
+    rest = {k: v for k, v in raw.items() if k != "beat"}
+
+    def need(*keys):
+        missing = [k for k in keys if k not in raw]
+        if missing:
+            raise ScriptError(f"{json.dumps(raw)}: a {beat} beat needs {' and '.join(missing)}")
+
+    if beat == "full":
+        need("file")
+        visual = parse_shot_object({**rest, "layout": "full"}, root)
+    elif beat == "card":
+        if ("file" in raw) == ("card" in raw):
+            raise ScriptError(f"{json.dumps(raw)}: a card beat has a file (a framed picture) or a card (its text), one "
+                              "of the two")
+        visual = parse_shot_object({"layout": "framed", **rest} if "file" in raw else rest, root)
+    elif beat == "count":
+        need("card")
+        visual = parse_shot_object(rest, root)
+        if split_number(title_lines(visual["text"]))[1] is None:
+            raise ScriptError(f"{visual['source']}: a count beat's card starts with the number that counts up, such as "
+                              "212 GB")
+    elif beat == "banner":
+        need("file", "text")
+        text = raw["text"]
+        if not isinstance(text, str) or not 1 <= len(text.split()) <= BANNER_WORDS:
+            raise ScriptError(f"{json.dumps(raw)}: a banner's text is 1-{BANNER_WORDS} words, such as THE CATCH")
+        style = raw.get("style", "number")
+        if style not in LABEL_STYLES:
+            raise ScriptError(f"{json.dumps(raw)}: a banner's style is info (cyan), no (red), number (pink) or grey")
+        visual = parse_shot_object({k: v for k, v in rest.items() if k not in ("text", "style")} | {"layout": "full"}, root)
+        visual["banner"] = {"text": " ".join(text.split()).upper(), "style": style, "pos": "top", "font": BANNER_SIZE,
+                            "y": BANNER_Y}
+    elif beat == "lockon":
+        need("file", "box")
+        visual = parse_shot_object({k: v for k, v in rest.items() if k not in ("box", "label")} | {"layout": "full"}, root)
+        visual["lock"] = parse_lock(raw, visual)
+        visual["source"] += " (lock-on)"
+    elif beat == "compare":
+        need("top", "bottom")
+        visual = parse_compare(raw, root)
+    else:
+        need("text")
+        visual = parse_snippet(raw, root)
+    visual["beat"] = beat
+    return visual
+
+
+def parse_lock(raw, visual):
+    """A lock-on's region, [x, y, width, height] in the picture's own pixels, and its tag. The shot's crop centres on
+    the region, so it takes no focus."""
+    name, box = raw["file"], raw["box"]
+    iw, ih = visual["size"]
+    good = (isinstance(box, list) and len(box) == 4
+            and all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in box))
+    if not good or box[2] < 8 or box[3] < 8 or box[0] < 0 or box[1] < 0 or box[0] + box[2] > iw or box[1] + box[3] > ih:
+        raise ScriptError(f"{name}: box is the region to lock on to, [x, y, width, height] in the picture's own pixels, "
+                          f"and this picture is {iw}x{ih}")
+    x, y, w, h = map(float, box)
+    visual["focus"], visual["focus_y"] = (x + w / 2) / iw, (y + h / 2) / ih
+    lock = {"box": (x, y, w, h), "tag": None}
+    if "label" in raw:
+        tag = parse_label(raw["label"], name)
+        if isinstance(raw["label"], str) or "style" not in raw["label"]:
+            tag["style"] = "no"                      # red, like the box
+        lock["tag"] = {**tag, "font": LOCK_TAG_SIZE, "border": 5, "shadow": 4}
+    return lock
+
+
+def parse_compare(raw, root):
+    """A compare beat's two pictures, each a framed 16:9 card. A label without a style is grey on top and pink below."""
+    sides = {}
+    for side, style, pos in (("top", "grey", "top"), ("bottom", "number", "bottom")):
+        part = raw[side]
+        if not isinstance(part, dict) or not isinstance(part.get("file"), str):
+            raise ScriptError(f"{json.dumps(raw)}: a compare beat's {side} is a picture, such as "
+                              '{"file": "rockstar/x.jpg", "label": "GTA V"}')
+        extra = sorted(set(part) - {"file", "at", "focus", "label"})
+        if extra:
+            raise ScriptError(f"{part['file']}: a compare beat's {side} takes file, at, focus and label, not "
+                              f"{', '.join(map(repr, extra))}")
+        visual = parse_shot_object({**part, "layout": "framed", "card_aspect": COMPARE_ASPECT}, root)
+        if visual.get("label"):
+            if isinstance(part["label"], str) or "style" not in part["label"]:
+                visual["label"]["style"] = style
+            visual["label"].update(pos=pos, font=COMPARE_LABEL_SIZE)
+        sides[side] = visual
+    weight = parse_weight(raw)
+    names = " / ".join(Path(sides[side]["path"]).name for side in ("top", "bottom"))
+    return {"source": f"compare: {names}", "kind": "compare", **sides, **({"weight": weight} if weight != 1.0 else {})}
+
+
+def parse_snippet(raw, root):
+    """A snippet beat: its words as typed, and the word ranges the marker sweeps."""
+    text = raw["text"]
+    if not isinstance(text, str) or not text.split():
+        raise ScriptError(f"{json.dumps(raw)}: a snippet's text is the words on its card")
+    words = text.split()
+    where = "snippet:" + " ".join(words)
+    if len(words) > SNIPPET_MAX_WORDS:
+        raise ScriptError(f"{where}: a snippet is at most {SNIPPET_MAX_WORDS} words, to be read in a second, and this "
+                          f"has {len(words)}")
+    marked = raw.get("highlight", [])
+    marked = [marked] if isinstance(marked, str) else marked
+    if not isinstance(marked, list) or not all(isinstance(m, str) and m.split() for m in marked):
+        raise ScriptError(f"{where}: highlight is a list of words or phrases from the snippet's text")
+    keys, spans = [word_key(w) for w in words], []
+    for phrase in marked:
+        places = find_phrase(keys, phrase)
+        if not places:
+            raise ScriptError(f"{where}: the highlight {phrase!r} isn't in the snippet's text")
+        spans.append((places[0], places[0] + len(phrase.split())))
+    spans.sort()
+    if any(a[1] > b[0] for a, b in zip(spans, spans[1:])):
+        raise ScriptError(f"{where}: two highlights share a word")
+    weight = parse_weight(raw)
+    return {"source": where, "kind": "snippet", "text": " ".join(words), "words": words, "highlight": spans,
+            **({"weight": weight} if weight != 1.0 else {}), **parse_behind(raw, where, root)}
+
+
 def parse_shot_object(raw, root):
+    if "beat" in raw:
+        return parse_beat(raw, root)
     unknown = sorted(k for k in raw if k not in SHOT_KEYS)
     if unknown:
         raise ScriptError(f"{json.dumps(raw)}: unknown setting {', '.join(map(repr, unknown))}")
     if ("file" in raw) == ("card" in raw):
         raise ScriptError(f"{json.dumps(raw)}: a shot has a file or a card, one of the two")
-    weight = raw.get("weight", 1.0)
-    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 0 < weight <= MAX_WEIGHT:
-        raise ScriptError(f"{json.dumps(raw)}: weight is its share of the line, a number above 0 and up to {MAX_WEIGHT:g}")
-    weight = float(weight)
+    weight = parse_weight(raw)
     if "card" in raw:
         extra = sorted(k for k in raw if k not in CARD_KEYS)
         if extra:
@@ -435,14 +641,7 @@ def parse_shot_object(raw, root):
         if not isinstance(raw["card"], str):
             raise ScriptError(f"{json.dumps(raw)}: card is its text")
         where = "card:" + raw["card"].strip()
-        more = {}
-        if "label" in raw:
-            more["label"] = parse_label(raw["label"], where)
-        if "bg" in raw:
-            if not isinstance(raw["bg"], str) or raw["bg"].startswith("card:"):
-                raise ScriptError(f"{where}: bg is the picture behind the card, an image or video such as rockstar/x.jpg")
-            more["bg"] = parse_visual(raw["bg"], root)
-        return parse_card(raw["card"], where, weight, more)
+        return parse_card(raw["card"], where, weight, parse_behind(raw, where, root))
     name = raw["file"]
     if not isinstance(name, str) or not name.strip():
         raise ScriptError(f"{json.dumps(raw)}: file is a path such as rockstar/x.jpg")
@@ -486,7 +685,11 @@ def resolve_layout(visual, default):
     """Settle a picture's layout (its own; framed if it sets a card_aspect; else the script's; else framed if it is
     landscape and full if not) and its card's shape, and check a pan has room in the window it slides. ScriptError
     says what is wrong."""
-    if visual["kind"] == "card":
+    if visual["kind"] in ("card", "snippet"):
+        return
+    if visual["kind"] == "compare":
+        for side in ("top", "bottom"):
+            resolve_layout(visual[side], "framed")
         return
     iw, ih = visual["size"]
     layout = (visual.get("layout") or ("framed" if "card_aspect" in visual else default)
@@ -576,6 +779,13 @@ def load_script(path, root):
         problems.append("grade is true (a little more contrast and colour, and a soft vignette) or false (none)")
         grade = True
 
+    end_pill = script.get("end_pill")
+    if end_pill is not None and (not isinstance(end_pill, str) or not end_pill.strip()
+                                 or len(" ".join(end_pill.split())) > PILL_CHARS):
+        problems.append(f"end_pill is the subscribe pill's text, up to {PILL_CHARS} characters, such as "
+                        '"@NeonGetaway \u2022 Subscribe", or null for none')
+        end_pill = None
+
     lines = script.get("lines")
     if not isinstance(lines, list) or not lines:
         problems.append("lines is missing or empty")
@@ -585,12 +795,15 @@ def load_script(path, root):
         if not isinstance(line, dict):
             problems.append(f"line {n}: must be an object with say and visuals")
             continue
-        problems += [f"line {n}: unknown setting {k!r}" for k in line if k not in {"say", "visuals", "green", "red"}]
+        problems += [f"line {n}: unknown setting {k!r}" for k in line
+                     if k not in {"say", "visuals", "beats", "green", "red"}]
+        if "visuals" in line and "beats" in line:
+            problems.append(f"line {n}: beats is another name for visuals; use one of the two")
         say = line.get("say")
         if not isinstance(say, str) or not spoken_tokens(say):
             problems.append(f"line {n}: say is missing or has nothing to speak")
             say = ""
-        raws = line.get("visuals")
+        raws = line.get("visuals", line.get("beats"))
         if not isinstance(raws, list) or not raws:
             problems.append(f"line {n}: needs at least one visual")
             raws = []
@@ -612,16 +825,22 @@ def load_script(path, root):
             problems += [f"line {n}: {colour} tag {t!r} isn't in what this line says" for t in tags[colour]
                          if say and not find_phrase(keys, t)]
         parsed.append({"say": say, "visuals": visuals, "tags": tags})
-    notes = []
+    notes, pill = [], None
     if not problems:
         placed, notes = place_visuals(parsed, caption_style)
         problems += placed
+    if not problems and end_pill:
+        pill = {"text": " ".join(end_pill.split()), "style": "info", "pos": "bottom", "font": PILL_SIZE, "pad": PILL_PAD,
+                "fill": (255, 255, 255), "ink_colour": INK, "border": 0, "shadow": 6, "text_border": 0, "round": 0.5}
+        measure_labels([pill])
+        if pill["size"][0] * LABEL_POP_PEAK > PILL_MAX_WIDTH:
+            problems.append(f"end_pill {pill['text']!r} is too wide to stay small; shorten it")
     if problems:
         raise ScriptError("the script needs fixing:\n  " + "\n  ".join(problems))
     return {"title": title, "slug": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "voice": voice, "speed": speed,
             "open_card": open_card.strip().upper() if open_card else None, "music": music,
             "music_volume": float(music_volume), "sfx": sfx, "lines": parsed, "layout": layout,
-            "caption_style": caption_style, "grade": grade, "notes": notes}
+            "caption_style": caption_style, "grade": grade, "notes": notes, "end_pill": pill}
 
 
 def place_visuals(lines, caption_style):
@@ -629,18 +848,29 @@ def place_visuals(lines, caption_style):
     that no label touches the captions. Returns problems (a label too wide) and warnings (a label moved)."""
     problems, warnings = [], []
     order = [v for line in lines for v in line["visuals"]]
-    pictures = [i for i, v in enumerate(order) if v["kind"] != "card"]
+    pictures = [i for i, v in enumerate(order) if picture_of(v)]
     for i, v in enumerate(order):
-        if v["kind"] == "card" and "bg" not in v:
+        if v["kind"] in ("card", "snippet") and "bg" not in v:
             after, before = [j for j in pictures if j > i], [j for j in pictures if j < i]
             if not after and not before:
                 problems.append(f"{v['source']}: a card shows over a blurred picture, and this script has none: give "
                                 "it a bg")
                 continue
-            v["bg"] = order[after[0] if after else before[-1]]   # the next picture, else the one before
-    labels = [v["label"] for v in order if v.get("label")]
-    measure_labels(labels)
+            v["bg"] = picture_of(order[after[0] if after else before[-1]])   # the next picture, else the one before
+    measure_labels([label for v in order for label in labels_of(v)]
+                   + [v["banner"] for v in order if v.get("banner")]
+                   + [v["lock"]["tag"] for v in order if v.get("lock") and v["lock"]["tag"]])
     for v in order:
+        if v["kind"] == "compare":
+            problems += place_compare(v)
+            continue
+        if v["kind"] == "snippet":
+            problems += place_snippet(v, caption_style)
+            continue
+        if v.get("lock"):
+            problems += place_lock(v, caption_style, warnings)
+        if v.get("banner"):
+            problems += fit_banner(v["banner"], v["source"])
         label = v.get("label")
         if label and label["size"][0] + 2 * LABEL_BORDER > CARD_BOX:
             problems.append(f"{v['source']}: the label {label['text']!r} is too wide to read at its size; shorten it")
@@ -680,8 +910,252 @@ def place_marks(visual, warnings):
 
 def label_reach(label):
     """How far a label's pill reaches above and below its middle: its border, and its shadow below."""
-    half = label["size"][1] / 2 + LABEL_BORDER
-    return half, half + LABEL_SHADOW
+    half = label["size"][1] / 2 + label.get("border", LABEL_BORDER)
+    return half, half + label.get("shadow", LABEL_SHADOW)
+
+
+def picture_of(visual):
+    """The picture a text card can blur behind itself: a picture's own, or a compare's top one. None for a text card."""
+    if visual["kind"] in ("image", "video"):
+        return visual
+    return visual["top"] if visual["kind"] == "compare" else None
+
+
+def labels_of(visual):
+    """A shot's label pills: its own, or a compare's two."""
+    sides = [visual[side] for side in ("top", "bottom")] if visual["kind"] == "compare" else [visual]
+    return [v["label"] for v in sides if v.get("label")]
+
+
+# --- Placing the beats (PR 18) ---
+
+def fit_banner(pill, source):
+    """A banner's pill, made smaller until it stays inside the safe area at the top of its pop. Returns a problem if
+    that takes it under BANNER_MIN_SIZE, where it is too small to read at a glance."""
+    while True:
+        wide = (pill["size"][0] + 2 * LABEL_BORDER + 2 * LABEL_SHADOW) * LABEL_POP_PEAK   # centred, shadow on one side
+        if wide <= SAFE_WIDTH:
+            return []
+        pill["font"] = min(pill["font"] - 2, int(pill["font"] * SAFE_WIDTH / wide))
+        if pill["font"] < BANNER_MIN_SIZE:
+            return [f"{source}: the banner {pill['text']!r} is too wide to read at a glance; use shorter words"]
+        measure_labels([pill])
+
+
+def place_compare(visual):
+    """A compare beat's two cards: 16:9, as large as fit one above the other in the safe area with their labels (the top
+    card's on its top edge, the bottom card's on its bottom edge), centred across on CENTRE_X. seam_y is the middle of
+    the gap between them, where the word captions go while it is up."""
+    top, bottom = visual["top"], visual["bottom"]
+    problems = [f"{side['source']}: the label {side['label']['text']!r} is too wide to read at its size; shorten it"
+                for side in (top, bottom)
+                if side.get("label") and (side["label"]["size"][0] + 2 * LABEL_BORDER) * LABEL_POP_PEAK > CARD_BOX]
+    if problems:
+        return problems
+    above = label_reach(top["label"])[0] * LABEL_POP_PEAK if top.get("label") else 0
+    below = max(label_reach(bottom["label"])[1] * LABEL_POP_PEAK if bottom.get("label") else 0,
+                CARD_SHADOW_DY + 2 * CARD_SHADOW_BLUR)
+    first, last = SAFE_TOP + math.ceil(above), SAFE_BOTTOM - math.ceil(below)
+    aw, ah = CARD_ASPECTS[COMPARE_ASPECT]
+    ch = int(min((last - first - COMPARE_GAP) / 2 - 2 * CARD_BORDER, (CARD_BOX - 2 * CARD_BORDER) * ah / aw) // 2) * 2
+    cw = round(ch * aw / ah / 2) * 2
+    ow, oh = cw + 2 * CARD_BORDER, ch + 2 * CARD_BORDER
+    ox, oy = CENTRE_X - ow // 2, round((first + last - 2 * oh - COMPARE_GAP) / 2)
+    for side, y in ((top, oy), (bottom, oy + oh + COMPARE_GAP)):
+        side["frame"] = {"outer": (ox, y, ow, oh), "content": (ox + CARD_BORDER, y + CARD_BORDER, cw, ch)}
+        side["aspect"] = (cw, ch)                    # the card's exact shape, so the crop isn't stretched by a pixel
+    if top.get("label"):
+        top["label"]["y"] = oy
+    if bottom.get("label"):
+        bottom["label"]["y"] = oy + 2 * oh + COMPARE_GAP
+    visual["seam_y"] = oy + oh + COMPARE_GAP // 2
+    return []
+
+
+def lock_rect(lock, zoom):
+    """Where the locked region is on screen at a zoom: left, top, width, height. The camera zooms about a fixed point
+    (the anchor), so every point of the picture moves in a straight line away from it as the zoom grows."""
+    (x, y, w, h), (ax, ay) = lock["screen"], lock["anchor"]
+    return ax + (x - ax) * zoom, ay + (y - ay) * zoom, w * zoom, h * zoom
+
+
+def lock_frames(frames):
+    """The frame the lock-on box lands on, and the frame the fast part of the zoom ends on."""
+    lands = round(LOCK_SNAP_S * FPS)
+    return lands, max(min(lands + round(LOCK_ZOOM_S * FPS), frames - 1), lands + 1)
+
+
+def lock_zoom(lock, n, frames):
+    """The camera's zoom on frame n of a lock-on shot: still until the box lands, then quickly in (easing out), then a
+    slow creep so it never stops dead. lock_motion() gives ffmpeg the same sum."""
+    lands, ends = lock_frames(frames)
+    p = min(max((n - lands) / (ends - lands), 0.0), 1.0)
+    return 1 + (lock["zoom"] - 1) * (1 - (1 - p) ** 3) + LOCK_CREEP_PER_S / FPS * max(n - ends, 0)
+
+
+def lock_tag_place(lock, rect):
+    """The middle of a lock-on's tag for the box at rect: on the box's left corner, above it or below it, and pushed
+    in from the safe area's edges if the box sits near one. So while the zoom is still bringing a high box down, its
+    tag waits at the top of the safe area, over the box's edge, and then rides on it."""
+    tag = lock["tag"]
+    left, top, w, h = rect
+    (pw, ph), border = tag["size"], tag["border"]
+    x = min(max(left - LOCK_EDGE + border + pw / 2, SAFE_LEFT + border + pw / 2),
+            W - SAFE_RIGHT - border - tag["shadow"] - pw / 2)
+    y = top - LOCK_EDGE - border - ph / 2 if lock["tag_at"] == "above" else top + h + LOCK_EDGE + border + ph / 2
+    return x, min(max(y, SAFE_TOP + border + ph / 2), SAFE_BOTTOM - border - tag["shadow"] - ph / 2)
+
+
+def place_lock(visual, caption_style, warnings):
+    """A lock-on's zoom and the point it zooms about. The region should end in the middle of the safe area's width and
+    around LOCK_TARGET_Y, above the captions, as large as LOCK_ROOM allows. The largest zoom up to LOCK_ZOOM_MAX that
+    leaves the box, its outline and its tag inside the safe area is taken; a picture's edge can stop the region
+    reaching the middle, and then a smaller zoom may still fit. Returns problems."""
+    lock, source = visual["lock"], visual["source"]
+    bx, by, bw, bh = lock["box"]
+    x, y, cw, ch = crop_box(visual)[:4]
+    if bx < x or by < y or bx + bw > x + cw or by + bh > y + ch:
+        return [f"{source}: the region is {bw:.0f}x{bh:.0f} px, and the full screen shows {cw}x{ch} px of this picture "
+                "at a time; pick a smaller region"]
+    k = W / cw
+    x0, y0, w0, h0 = lock["screen"] = ((bx - x) * k, (by - y) * k, bw * k, bh * k)
+    tag = lock["tag"]
+    if tag and tag["size"][0] + 2 * tag["border"] + tag["shadow"] > SAFE_WIDTH:
+        return [f"{source}: the label {tag['text']!r} is too wide to read at its size; shorten it"]
+    tag_room = tag["size"][1] + 2 * tag["border"] if tag else 0
+    zoom = min(LOCK_ZOOM_MAX, max(LOCK_ZOOM_MIN, min(LOCK_ROOM[0] / w0, LOCK_ROOM[1] / h0)))
+    creep = 4 * LOCK_CREEP_PER_S                     # the slow creep after the zoom, for a shot up to about 5 s
+
+    def fits(z):
+        left, top, w, h = lock_rect(lock, z)
+        up = LOCK_EDGE + (tag_room if lock["tag_at"] == "above" else 0)
+        down = LOCK_EDGE + (tag_room + (tag["shadow"] if tag else 0) if lock["tag_at"] == "below" else 0)
+        return (left - LOCK_EDGE >= SAFE_LEFT and left + w + LOCK_EDGE <= W - SAFE_RIGHT
+                and top - up >= SAFE_TOP and top + h + down <= SAFE_BOTTOM)
+
+    found = False
+    while zoom >= LOCK_ZOOM_MIN - 1e-9 and not found:
+        for where in ("above", "below"):
+            aim = LOCK_TARGET_Y + (tag_room / 2 if where == "above" else -tag_room / 2)
+            ax = min(max(((x0 + w0 / 2) * zoom - CENTRE_X) / (zoom - 1), 0), W)
+            ay = min(max(((y0 + h0 / 2) * zoom - aim) / (zoom - 1), 0), H)
+            lock.update(anchor=(ax, ay), zoom=zoom, tag_at=where)
+            if fits(zoom) and fits(zoom + creep):
+                found = True
+                break
+        else:
+            zoom -= 0.02
+    if not found:
+        return [f"{source}: the region can't be brought inside the safe area (x {SAFE_LEFT}-{W - SAFE_RIGHT}, "
+                f"y {SAFE_TOP}-{SAFE_BOTTOM}) by zooming up to {LOCK_ZOOM_MAX:g}x: it is too near the picture's top or "
+                "bottom, or too large. Pick a region nearer the middle, or use a card beat with a circle mark"]
+    left, top, w, h = lock_rect(lock, 1.0)
+    if (left - LOCK_EDGE < SAFE_LEFT or left + w + LOCK_EDGE > W - SAFE_RIGHT or top - LOCK_EDGE < SAFE_TOP
+            or top + h + LOCK_EDGE > SAFE_BOTTOM):
+        warnings.append(f"{source}: the lock-on box lands partly where Shorts draws its buttons or titles, and the "
+                        "zoom then brings it into the safe area")
+    left, top, w, h = lock_rect(lock, zoom + creep)
+    band = CAPTION_BANDS[caption_style]
+    if top + h + LOCK_EDGE > band[0] and top - LOCK_EDGE < band[1]:
+        warnings.append(f"{source}: the captions cross the locked region; a region higher up the picture stays clear")
+    return []
+
+
+def wrap_words(n, width, limit):
+    """Word ranges (i, j) that set n words on the fewest lines no wider than limit, evened out: of every way to fill
+    that many lines, the one whose widest line is narrowest. width(i, j) is the width of words i to j on one line.
+    None if a single word is too wide."""
+    lines, i = 0, 0
+    while i < n:
+        j = i + 1
+        if width(i, j) > limit:
+            return None
+        while j < n and width(i, j + 1) <= limit:
+            j += 1
+        lines, i = lines + 1, j
+
+    @functools.lru_cache(maxsize=None)
+    def fill(i, left):
+        if left == 0:
+            return (0.0, ()) if i == n else (math.inf, ())
+        best = (math.inf, ())
+        for j in range(i + 1, n - left + 2):
+            wide = width(i, j)
+            if wide > limit:
+                break
+            rest = fill(j, left - 1)
+            if max(wide, rest[0]) < best[0]:
+                best = (max(wide, rest[0]), ((i, j),) + rest[1])
+        return best
+    return list(fill(0, lines)[1])
+
+
+def place_snippet(visual, caption_style):
+    """A snippet's card: its words at the largest size from SNIPPET_SIZE down that fits them, on centred lines, in a
+    white card 900 px wide that sits above the captions; and the marker bars behind its highlighted words. Every width
+    is libass's own (measure()): first at one size to choose the lines, then at the real size to be sure. Returns
+    problems."""
+    words, source, label = visual["words"], visual["source"], visual.get("label")
+    if label:
+        label["pos"] = "top"
+        if (label["size"][0] + 2 * LABEL_BORDER) * LABEL_POP_PEAK > CARD_BOX:
+            return [f"{source}: the label {label['text']!r} is too wide to read at its size; shorten it"]
+    n, ref = len(words), 100
+    ranges = [(i, j) for i in range(n) for j in range(i + 1, min(i + 8, n) + 1)]
+    boxes = dict(zip(ranges, measure([(chunky(ref), escape_ass(" ".join(words[i:j]))) for i, j in ranges])))
+    inner = CARD_BOX - 2 * SNIPPET_PAD_X
+    bottom = CAPTION_BANDS[caption_style][0] - CARD_SHADOW_DY - 2 * CARD_SHADOW_BLUR - 8
+    # A label sits on the card's top edge, half of it inside: the first line starts clear of it.
+    pad_top = max(SNIPPET_PAD_Y, label_reach(label)[1] + 18) if label else SNIPPET_PAD_Y
+    for size in range(SNIPPET_SIZE, SNIPPET_MIN_SIZE - 1, -4):
+        def width(i, j):
+            box = boxes.get((i, j), False)
+            return math.inf if box is False else (box[2] - box[0]) * size / ref if box else 0.0
+        lines = wrap_words(n, width, inner * 0.98)
+        if not lines or len(lines) * size * SNIPPET_LINE + pad_top + SNIPPET_PAD_Y > bottom - SNIPPET_TOP:
+            continue
+        real = measure([(chunky(size), escape_ass(" ".join(words[i:j]))) for i, j in lines] + [(chunky(size), "Hg")])
+        if all(box and box[2] - box[0] <= inner for box in real):
+            break
+    else:
+        return [f"{source}: the text doesn't fit a snippet card even at its smallest size; use fewer or shorter words"]
+    cap = real[-1]
+    pitch = size * SNIPPET_LINE
+    height = round(len(lines) * pitch + pad_top + SNIPPET_PAD_Y)
+    top = round(min(max(SNIPPET_MIDDLE_Y - height / 2, SNIPPET_TOP), bottom - height))
+    ys = [top + pad_top + pitch * (k + 0.5) for k in range(len(lines))]
+    # A marked phrase may run over a line's end: one bar for each line it is on. Its place inside the line comes from
+    # drawing the line with only those words showing.
+    parts = []
+    for a, b in visual["highlight"]:
+        for k, (i, j) in enumerate(lines):
+            lo, hi = max(a, i), min(b, j)
+            if lo < hi:
+                before, after = " ".join(words[i:lo]), " ".join(words[hi:j])
+                text = (("{\\alpha&HFF&}" + escape_ass(before + " ") if before else "") + "{\\alpha&H00&}"
+                        + escape_ass(" ".join(words[lo:hi])) + ("{\\alpha&HFF&}" + escape_ass(" " + after) if after else ""))
+                parts.append((k, lo == a, text))
+    pad = size * 0.09
+    bars, sweeps, at = [], [], SWEEP_DELAY_S
+    for (k, starts_phrase, _), box in zip(parts, measure([(chunky(size), text) for _, _, text in parts])):
+        if box is None:
+            continue
+        left, right = CENTRE_X + box[0] - pad, CENTRE_X + box[2] + pad
+        middle = ys[k] - (cap[1] + cap[3]) / 2
+        if starts_phrase and bars:
+            at += SWEEP_GAP_S
+        if starts_phrase:
+            sweeps.append(round(at, 3))
+        took = max(SWEEP_MIN_S, (right - left) / SWEEP_PX_PER_S)
+        bars.append({"box": (left, middle + cap[1] - size * 0.05, right, middle + cap[3] + size * 0.03),
+                     "at": at, "seconds": took})
+        at += took
+    visual["snippet"] = {"size": size, "lines": lines, "ys": ys, "ink_middle": (cap[1] + cap[3]) / 2,
+                         "card": (CENTRE_X - CARD_BOX // 2, top, CARD_BOX, height), "bars": bars, "sweeps": sweeps}
+    if label:
+        label["y"] = top
+    return []
+
 
 
 def label_clear(label, y, band):
@@ -1065,12 +1539,14 @@ def swept_noise(rng, seconds, centre, octaves, rate=RATE):
     return out[:n] / np.maximum(weight[:n], 0.1)
 
 
-def whoosh(seed):
-    """A soft whoosh: noise whose pitch climbs to the cut and falls away after it, quiet at the edges."""
+def whoosh(seed, pitch=1.0):
+    """A soft whoosh: noise whose pitch climbs to the cut and falls away after it, quiet at the edges. pitch moves the
+    whole sweep up or down: a compare beat's first card gets a low one and its second a higher one."""
     import numpy as np
     t = np.arange(int(WHOOSH_S * RATE)) / RATE
     rise, fall = WHOOSH_PEAK_S, WHOOSH_S - WHOOSH_PEAK_S
-    centre = lambda s: 350 * (2400 / 350) ** (s / rise) if s < rise else 2400 * (800 / 2400) ** ((s - rise) / fall)
+    low, top, end = 350 * pitch, 2400 * pitch, 800 * pitch
+    centre = lambda s: low * (top / low) ** (s / rise) if s < rise else top * (end / top) ** ((s - rise) / fall)
     sound = swept_noise(np.random.default_rng(seed), WHOOSH_S, centre, 0.55)
     shape = np.where(t < rise, (t / rise) ** 2, np.exp(-(t - rise) / 0.09)) * fade(len(t), 0.02)[::-1]
     return finish(sound * shape, WHOOSH_DB)
@@ -1089,6 +1565,33 @@ def hit(seed):
     return finish(sound, HIT_DB)
 
 
+def lock_click(seed):
+    """A lock-on click: a dry tick, then two short beeps, the second higher, like a target being acquired."""
+    import numpy as np
+    t = np.arange(int(LOCK_SFX_S * RATE)) / RATE
+    tick = swept_noise(np.random.default_rng(seed), LOCK_SFX_S, lambda s: 3200, 0.7) * np.exp(-t / 0.004)
+    tick /= max(np.abs(tick).max(), 1e-9)
+    beep = lambda hz, at, decay: np.where(t >= at, np.sin(2 * np.pi * hz * (t - at)) * np.exp(-np.maximum(t - at, 0) / decay), 0)
+    sound = 0.7 * tick + 0.8 * beep(1250, 0.0, 0.025) + beep(1870, 0.075, 0.045)
+    return finish(sound * fade(len(t), 0.03)[::-1], LOCK_DB)
+
+
+def mouse_click(seed):
+    """A mouse click: the button going down (a tick with a short, round body under it, so it carries over the music)
+    and, softer and higher, coming back up 80 ms later."""
+    import numpy as np
+    t = np.arange(int(CLICK_SFX_S * RATE)) / RATE
+    rng = np.random.default_rng(seed)
+
+    def press(at, hz, body):
+        late = np.maximum(t - at, 0)
+        tick = swept_noise(rng, CLICK_SFX_S, lambda s: hz, 0.8) * np.where(t >= at, np.exp(-late / 0.004), 0)
+        tick /= max(np.abs(tick).max(), 1e-9)
+        return 0.7 * tick + np.where(t >= at, np.sin(2 * np.pi * body * late) * np.exp(-late / 0.03), 0)
+    sound = press(0.0, 2400, 880) + 0.6 * press(0.08, 3100, 1320)
+    return finish(sound * fade(len(t), 0.03)[::-1], CLICK_DB)
+
+
 def finish(sound, peak_db):
     """Cut above SFX_LOWPASS_HZ, then set the loudest sample to peak_db."""
     import numpy as np
@@ -1096,26 +1599,41 @@ def finish(sound, peak_db):
     return (sound / max(np.abs(sound).max(), 1e-9) * 10 ** (peak_db / 20)).astype(np.float32)
 
 
-def plan_sfx(slots):
-    """When each sound effect plays and why: a whoosh when a line starts or a pan begins, a hit when a card appears.
-    A hit wins over a whoosh at the same moment. Nothing on the first frame, which is also where the loop starts again,
-    and nothing in the loop ending."""
+def plan_sfx(slots, pill_click_s=None):
+    """When each sound effect plays and why: a whoosh when a line starts or a pan begins, a hit when a card, a snippet
+    or a banner appears. A hit wins over a whoosh at the same moment. Nothing on the first frame, which is also where
+    the loop starts again, and nothing in the loop ending but the subscribe pill's click (pill_click_s).
+    The beats add their own (PR 18): a compare gets a low whoosh for its first card and a higher one as its second
+    lands, and a lock-on gets a click as its box lands. Those clicks never push another sound out."""
     events, started = [], set()
     for slot in slots:
         if slot.get("loop_tail"):
             continue
-        at, visual, line = slot["start"] / FPS, slot["visual"], slot["line"] + 1
-        if visual["kind"] == "card":
+        at, end, visual, line = slot["start"] / FPS, slot["end"] / FPS, slot["visual"], slot["line"] + 1
+        if visual["kind"] in ("card", "snippet") or visual.get("banner"):
             events.append({"kind": "hit", "at_s": at, "why": f"line {line}: {visual['source']} appears"})
+        elif visual["kind"] == "compare":
+            events.append({"kind": "whoosh", "pitch": "low", "at_s": at, "why": f"line {line}: a compare's first card"})
+            second = at + COMPARE_SECOND_S + COMPARE_SLIDE_S / 2
+            if second < end - 0.1:
+                events.append({"kind": "whoosh", "pitch": "high", "at_s": second,
+                               "why": f"line {line}: a compare's second card slides in"})
         elif slot["line"] not in started:
             events.append({"kind": "whoosh", "at_s": at, "why": f"line {line} starts"})
         elif visual.get("pan"):
             events.append({"kind": "whoosh", "at_s": at, "why": f"line {line}: a pan begins"})
+        if visual.get("lock") and at + LOCK_SNAP_S < end - 0.1:
+            events.append({"kind": "lock", "at_s": at + LOCK_SNAP_S, "why": f"line {line}: the lock-on box lands"})
         started.add(slot["line"])
+    if pill_click_s is not None:
+        events.append({"kind": "click", "at_s": pill_click_s, "why": "the cursor clicks the subscribe pill"})
     events = [e for e in events if e["at_s"] >= SFX_EARLIEST_S]
     kept = []
     for e in events:  # in time order already: a whoosh too near a hit, or near another whoosh, goes
-        near = [k for k in kept if e["at_s"] - k["at_s"] < SFX_SPACING_S]
+        if e["kind"] in ("lock", "click"):
+            kept.append(e)
+            continue
+        near = [k for k in kept if k["kind"] in ("whoosh", "hit") and e["at_s"] - k["at_s"] < SFX_SPACING_S]
         if near and e["kind"] == "whoosh":
             continue
         if near and near[-1]["kind"] == "whoosh":
@@ -1129,8 +1647,9 @@ def sfx_track(events, n):
     moment."""
     import numpy as np
     track = np.zeros(n + int(max(WHOOSH_S, HIT_S) * RATE), dtype=np.float32)
+    makers = {"hit": hit, "lock": lock_click, "click": mouse_click}
     for i, e in enumerate(events):
-        sound = hit(i) if e["kind"] == "hit" else whoosh(i)
+        sound = makers[e["kind"]](i) if e["kind"] in makers else whoosh(i, WHOOSH_PITCH.get(e.get("pitch"), 1.0))
         start = round(e["at_s"] * RATE) - (round(WHOOSH_PEAK_S * RATE) if e["kind"] == "whoosh" else 0)
         cut = max(0, -start)
         track[start + cut:start + len(sound)] += sound[cut:]
@@ -1295,11 +1814,12 @@ def visible(start, end, hidden):
     return [(a, b) for a, b in parts if b - a >= 1 / FPS]
 
 
-def word_events(words, total_s, hidden=()):
+def word_events(words, total_s, hidden=(), places=()):
     """The "word" captions: each word alone in Lilita One, yellow (a tagged word keeps its cyan or red) with a thick
     black outline, popping in when it is said and staying until the next word starts, or a moment after it ends when
     a pause follows. Its capitals are centred on WORD_Y, and a word too wide for the safe area is drawn smaller. None
-    shows while a text card is up (hidden)."""
+    shows while a text card is up (hidden). places holds (start, end, y): a word that starts in one of those spans is
+    centred on that y instead (the seam of a compare beat)."""
     boxes = measure([(chunky(WORD_SIZE), escape_ass(w["text"])) for w in words] + [(chunky(WORD_SIZE), "HH")])
     caps = boxes[-1]
     limit = SAFE_WIDTH / WORD_POP_PEAK - 2 * (WORD_OUTLINE + WORD_SHADOW)   # still in at the top of the pop
@@ -1313,7 +1833,8 @@ def word_events(words, total_s, hidden=()):
         while width > limit:   # measured again, since a very long word can overflow measure()'s canvas
             size = min(size - 1, int(size * limit / width))
             width = centred_width(measure([(chunky(size), escape_ass(w["text"]))])[0])
-        y = WORD_Y - (caps[1] + caps[3]) / 2 * size / WORD_SIZE
+        line_y = next((py for a, b, py in places if a <= w["start"] < b), WORD_Y)
+        y = line_y - (caps[1] + caps[3]) / 2 * size / WORD_SIZE
         colour = COLOURS[w["colour"]] if w["colour"] else HIGHLIGHT
         text = (f"{{\\an5\\pos({CENTRE_X},{y:.0f}){chunky(size)}\\c{colour}\\3c{BLACK}\\bord{WORD_OUTLINE}"
                 f"\\shad{WORD_SHADOW}\\4c{BLACK}\\4a&H60&{WORD_POP}}}{escape_ass(w['text'])}")
@@ -1485,12 +2006,17 @@ def measure_labels(labels):
     a capital plus its padding, whatever its letters."""
     if not labels:
         return
-    boxes = measure([(chunky(LABEL_SIZE), escape_ass(label["text"])) for label in labels] + [(chunky(LABEL_SIZE), "HH")])
-    caps = boxes[-1]
+    fonts = sorted({label.get("font", LABEL_SIZE) for label in labels})
+    boxes = measure([(chunky(label.get("font", LABEL_SIZE)), escape_ass(label["text"])) for label in labels]
+                    + [(chunky(font), "HH") for font in fonts])
+    capitals = dict(zip(fonts, boxes[len(labels):]))
     for label, box in zip(labels, boxes):
+        font = label.get("font", LABEL_SIZE)         # a beat's pill may be smaller or larger, with padding to match
+        caps = capitals[font]
+        pad_x, pad_y = label.get("pad") or (LABEL_PAD_X * font / LABEL_SIZE, LABEL_PAD_Y * font / LABEL_SIZE)
         x1, _, x2, _ = box or (0, 0, 0, 0)
         label["ink"] = (-(x1 + x2) / 2, -(caps[1] + caps[3]) / 2)
-        label["size"] = (x2 - x1 + 2 * LABEL_PAD_X, caps[3] - caps[1] + 2 * LABEL_PAD_Y)
+        label["size"] = (x2 - x1 + 2 * pad_x, caps[3] - caps[1] + 2 * pad_y)
 
 
 def rounded_box(w, h, r):
@@ -1502,19 +2028,28 @@ def rounded_box(w, h, r):
             f"l 0 {r:.1f} b 0 {r - k:.1f} {r - k:.1f} 0 {r:.1f} 0")
 
 
-def label_events(label, start, end, pop=True):
+def label_events(label, start, end, pop=True, at=None, layers=(3, 4), anim=None):
     """A pill: the label's colour with a white border and a hard shadow, white Lilita One text with a thin black
-    outline. Shape and text are both centred on their point, so the pop grows them together."""
+    outline. Shape and text are both centred on their point, so the pop grows them together. at puts it somewhere
+    other than its own place, and anim is its animation if not the pop; a beat's pill may carry its own font size,
+    border, shadow, colours and roundness."""
     pw, ph = label["size"]
     dx, dy = label["ink"]
-    y = label["y"]
-    anim = LABEL_POP if pop else ""
-    colour = ass_colour(LABEL_STYLES[label["style"]])
-    shape = (f"{{\\an5\\pos({CENTRE_X},{y})\\bord{LABEL_BORDER}\\3c{WHITE}\\shad{LABEL_SHADOW}\\4c{BLACK}\\4a&H50&"
-             f"\\c{colour}{anim}\\p1}}{rounded_box(pw, ph, ph * 0.3)}")
-    text = (f"{{\\an5\\pos({CENTRE_X + dx:.1f},{y + dy:.1f}){chunky(LABEL_SIZE)}\\c{WHITE}\\3c{BLACK}\\bord3\\shad0"
-            f"{anim}}}{escape_ass(label['text'])}")
-    return [dialogue(3, start, end, "Title", shape), dialogue(4, start, end, "Title", text)]
+    x, y = at or (label.get("x", CENTRE_X), label["y"])
+    anim = (LABEL_POP if pop else "") if anim is None else anim
+    colour = ass_colour(label.get("fill") or LABEL_STYLES[label["style"]])
+    ink = ass_colour(label["ink_colour"]) if label.get("ink_colour") else WHITE
+    shape = (f"{{\\an5\\pos({px(x)},{px(y)})\\bord{label.get('border', LABEL_BORDER)}\\3c{WHITE}"
+             f"\\shad{label.get('shadow', LABEL_SHADOW)}\\4c{BLACK}\\4a&H50&"
+             f"\\c{colour}{anim}\\p1}}{rounded_box(pw, ph, ph * label.get('round', 0.3))}")
+    text = (f"{{\\an5\\pos({x + dx:.1f},{y + dy:.1f}){chunky(label.get('font', LABEL_SIZE))}\\c{ink}\\3c{BLACK}"
+            f"\\bord{label.get('text_border', 3)}\\shad0{anim}}}{escape_ass(label['text'])}")
+    return [dialogue(layers[0], start, end, "Title", shape), dialogue(layers[1], start, end, "Title", text)]
+
+
+def px(value):
+    """A screen position as an .ass file writes it: a whole number where it is one."""
+    return f"{round(value, 1):g}"
 
 
 def mark_drawing(icon):
@@ -1593,9 +2128,17 @@ def caption_events(words, total_s, hidden=()):
     return events
 
 
-def card_spans(slots):
-    """When text cards are up, in seconds: no caption shows then, because a card says what the voice says."""
-    return [(s["start"] / FPS, s["end"] / FPS) for s in slots if s["visual"]["kind"] == "card"]
+def card_spans(slots, caption_style="word"):
+    """When text cards are up, in seconds: no caption shows then, because a card says what the voice says. Phrase
+    captions also hide over a compare beat, whose two cards leave them no room."""
+    return [(s["start"] / FPS, s["end"] / FPS) for s in slots
+            if s["visual"]["kind"] == "card" or (caption_style == "phrase" and s["visual"]["kind"] == "compare")]
+
+
+def caption_places(slots):
+    """Where the word captions move to and when: the seam between a compare beat's two cards, while both are up."""
+    return [(s["start"] / FPS, s["end"] / FPS, s["visual"]["seam_y"]) for s in slots
+            if s["visual"]["kind"] == "compare" and not s.get("loop_tail")]
 
 
 def card_room(label):
@@ -1623,7 +2166,7 @@ def card_events(slots, open_card):
         visual = slot["visual"]
         if visual["kind"] == "card":
             top, bottom = card_room(visual.get("label"))
-            events += title_events(0, slot["start"] / FPS, slot["end"] / FPS, visual["text"], (top + bottom) / 2, POP,
+            events += title_events(0, frame_time(slot["start"]), frame_time(slot["end"]), visual["text"], (top + bottom) / 2, POP,
                                    CARD_TEXT_SIZE, bottom - top, count=not slot.get("loop_tail"), sized_to_count=True)
     return events
 
@@ -1635,17 +2178,164 @@ def overlay_events(slots, open_card):
     events = []
     open_end = OPEN_CARD_S if open_card else 0.0
     for i, slot in enumerate(slots):
-        visual, start, end = slot["visual"], slot["start"] / FPS, slot["end"] / FPS
-        label = visual.get("label")
+        # A shot's drawings stop on its last frame: a time rounded to the .ass file's hundredths could leave a label
+        # up for one frame of the next shot (frame_time).
+        visual, start, end = slot["visual"], slot["start"] / FPS, frame_time(slot["end"])
+        tail = slot.get("loop_tail")
+        label = visual["top"].get("label") if visual["kind"] == "compare" else visual.get("label")
         if label:
-            if slot.get("loop_tail") or (i == 0 and not open_card):
-                events += label_events(label, start, end, pop=False)
+            if tail or (i == 0 and not open_card):
+                events += label_events(label, frame_time(slot["start"]), end, pop=False)
             else:
                 at = max(start + LABEL_DELAY_S, open_end)
                 if at < end - 0.2:
                     events += label_events(label, at, end)
-        if visual.get("marks") and not slot.get("loop_tail"):
+        if visual.get("marks") and not tail:
             events += mark_events(visual["marks"], start, end)
+        # The beats' own drawings (PR 18). The loop ending repeats the opening's first frame, before any of them.
+        if visual["kind"] == "snippet":
+            events += snippet_events(slot, settled=i == 0)
+        if visual["kind"] == "compare" and not tail and visual["bottom"].get("label"):
+            at = start + COMPARE_SECOND_S + COMPARE_SLIDE_S
+            if at < end - 0.2:
+                events += label_events(visual["bottom"]["label"], at, end)
+        if visual.get("lock") and not tail:
+            events += lock_events(slot)
+        if visual.get("banner") and not tail:
+            events += banner_events(slot)
+    return events
+
+
+# --- The beats' drawings (PR 18) ---
+
+def frame_time(frame):
+    """A time for the .ass file at which an event starts on exactly this frame of the Short. libass is given each
+    frame's time in whole milliseconds (33, 66, 100...) and an .ass time has only hundredths of a second, so a time
+    rounded the usual way can land one frame late. This one is at most 12 ms before the frame and never after it."""
+    return max(0, math.floor((frame * 1000 / FPS - 1.5) / 10)) / 100
+
+
+def lock_events(slot):
+    """A lock-on's red box and tag, drawn a frame at a time so they stay on the region while the camera zooms. The
+    box drops in over LOCK_SNAP_FRAMES frames, from LOCK_SNAP_FROM times its size and faint, and lands LOCK_SNAP_S
+    after the cut; the tag appears as it lands. The box is an outline: a white edge under a red line."""
+    lock, frames, first = slot["visual"]["lock"], slot["frames"], slot["start"]
+    lands = lock_frames(frames)[0]
+    events = []
+    for n in range(max(lands - LOCK_SNAP_FRAMES, 0), frames):
+        left, top, w, h = rect = lock_rect(lock, lock_zoom(lock, n, frames))
+        early = min(max((lands - n) / LOCK_SNAP_FRAMES, 0.0), 1.0)      # 1 as the box starts to drop, 0 once landed
+        grown = 1 + (LOCK_SNAP_FROM - 1) * early ** 2
+        gw, gh = w * grown, h * grown
+        a, b = frame_time(first + n), frame_time(first + n + 1)
+        place = f"\\an7\\pos({left - (gw - w) / 2:.1f},{top - (gh - h) / 2:.1f})\\1a&HFF&\\shad0"
+        faint = f"\\3a&H{round(210 * early):02X}&"
+        shape = rounded_box(gw, gh, LOCK_CORNER)
+        events.append(dialogue(5, a, b, "Title", f"{{{place}\\3c{WHITE}\\bord{LOCK_EDGE}{faint}\\p1}}{shape}"))
+        events.append(dialogue(6, a, b, "Title", f"{{{place}\\3c{COLOURS['red']}\\bord{LOCK_STROKE}{faint}\\p1}}{shape}"))
+        if lock["tag"] and n >= lands:
+            events += label_events(lock["tag"], a, b, pop=False, at=lock_tag_place(lock, rect), layers=(7, 8))
+    return events
+
+
+def snippet_events(slot, settled=False):
+    """A snippet's white card (on layer 0, with the framed card's hard shadow), its marker bars (layer 1) and its lines
+    of dark text (layer 3, so the caption layer stays the captions' own). Each bar grows from its left end, one after
+    another. The card fades in quickly, except on the Short's first shot and in the loop ending, which also has no
+    bars: the last frame is the first frame, before any sweep."""
+    visual = slot["visual"]
+    s, words = visual["snippet"], visual["words"]
+    start, end = frame_time(slot["start"]), frame_time(slot["end"])
+    tail = slot.get("loop_tail")
+    fade = "" if settled or tail else "\\fad(100,0)"
+    x, y, w, h = s["card"]
+    events = [dialogue(0, start, end, "Title",
+                       f"{{\\an7\\pos({x},{y})\\bord0\\xshad{CARD_SHADOW_DX}\\yshad{CARD_SHADOW_DY}\\c{WHITE}\\4c{BLACK}"
+                       f"\\4a&H38&{fade}\\p1}}{rounded_box(w, h, SNIPPET_RADIUS)}")]
+    for bar in ([] if tail else s["bars"]):
+        left, top, right, bottom = bar["box"]
+        a, b = round(bar["at"] * 1000), round((bar["at"] + bar["seconds"]) * 1000)
+        events.append(dialogue(1, start, end, "Title",
+                               f"{{\\an4\\pos({left:.1f},{(top + bottom) / 2:.1f})\\bord0\\shad0\\c{HIGHLIGHT}\\fscx0"
+                               f"\\t({a},{b},\\fscx100)\\p1}}m 0 0 l {right - left:.0f} 0 {right - left:.0f} "
+                               f"{bottom - top:.0f} 0 {bottom - top:.0f}"))
+    for (i, j), line_y in zip(s["lines"], s["ys"]):
+        events.append(dialogue(3, start, end, "Title",
+                               f"{{\\an5\\pos({CENTRE_X},{line_y - s['ink_middle']:.1f}){chunky(s['size'])}"
+                               f"\\c{ass_colour(INK)}\\bord0\\shad0{fade}}}{escape_ass(' '.join(words[i:j]))}"))
+    return events
+
+
+def banner_events(slot):
+    """A banner's pill, popping in just after the cut and up for BANNER_S, or to the end of a shorter shot."""
+    pill = slot["visual"]["banner"]
+    start, end = slot["start"] / FPS + BANNER_DELAY_S, frame_time(slot["end"])
+    if start >= end - 0.2:
+        return []
+    if end - start > BANNER_S + 0.3:
+        return label_events(pill, start, start + BANNER_S, anim=LABEL_POP + "\\fad(0,120)")
+    return label_events(pill, start, end)
+
+
+CURSOR = [(0, 0), (0, 46), (11, 36), (20, 56), (29, 52), (20, 33), (35, 33)]   # an arrow pointer, its tip at (0, 0)
+
+
+def pill_frames(total_frames):
+    """The frames the subscribe pill appears on, is clicked on, and has gone by."""
+    return tuple(total_frames - round(s * FPS) for s in (PILL_S, PILL_CLICK_S, PILL_OUT_S))
+
+
+def place_end_pill(pill, slots, total_frames):
+    """Put the subscribe pill under the captions, or at the top of the safe area if a label or a card is in its way
+    there during its 2 s. Returns a warning if both places are taken."""
+    first = pill_frames(total_frames)[0]
+    half = pill["size"][1] / 2 * LABEL_POP_PEAK + pill["shadow"] + LABEL_GAP
+
+    def taken(y):
+        spans = []
+        for slot in slots:
+            visual = slot["visual"]
+            if slot["end"] <= first:
+                continue
+            spans += [(label["y"] - label_reach(label)[0], label["y"] + label_reach(label)[1]) for label in labels_of(visual)]
+            if visual["kind"] == "snippet":
+                spans.append((visual["snippet"]["card"][1], visual["snippet"]["card"][1] + visual["snippet"]["card"][3]))
+            if visual["kind"] == "compare":
+                spans += [(visual[side]["frame"]["outer"][1], visual[side]["frame"]["outer"][1] + visual[side]["frame"]["outer"][3])
+                          for side in ("top", "bottom")]
+        return any(lo < y + half and hi > y - half for lo, hi in spans)
+    for pos in ("bottom", "top"):
+        pill["pos"], pill["y"] = pos, PILL_Y[pos]
+        if not taken(PILL_Y[pos]):
+            return None
+    pill["pos"], pill["y"] = "bottom", PILL_Y["bottom"]
+    return ("the subscribe pill covers a label or a card in the last 2 s; end the script on a full-screen shot or a "
+            "plain framed card")
+
+
+def end_pill_events(pill, total_frames):
+    """The ending's subscribe pill, on layers above everything: it pops in white with dark text; a cursor slides onto
+    it, easing to a stop; on the click the pill turns pink with white text and dips, and a ring spreads from the
+    cursor's tip; then pill and cursor fade, PILL_OUT_S before the end. Nothing is said: it is only seen."""
+    f_in, f_click, f_out = pill_frames(total_frames)
+    a, c, b = frame_time(f_in), frame_time(f_click), frame_time(f_out)
+    events = label_events(pill, a, c, layers=(9, 10))
+    events += label_events({**pill, "fill": PINK, "ink_colour": None}, c, b, layers=(9, 10), anim=PILL_PRESS + "\\fad(0,130)")
+    cx, cy = CENTRE_X + pill["size"][0] * 0.3, pill["y"] - 4
+    sx, sy = min(cx + 170, W - SAFE_RIGHT - 50), cy + (-150 if pill["pos"] == "bottom" else 150)
+    arrow = "m " + " l ".join(f"{x} {y}" for x, y in CURSOR)
+    first, arrives = f_in + 4, f_click - 3
+    for f in range(first, f_out):
+        e = 1 - (1 - min((f - first) / max(arrives - first, 1), 1.0)) ** 3
+        faint = min(max((f - (f_out - 5)) / 4, 0.0), 1.0)
+        events.append(dialogue(11, frame_time(f), frame_time(f + 1), "Title",
+                               f"{{\\an7\\pos({sx + (cx - sx) * e:.1f},{sy + (cy - sy) * e:.1f})\\c{WHITE}\\3c{BLACK}\\bord4"
+                               f"\\shad3\\4c{BLACK}\\4a&H70&\\alpha&H{round(255 * faint):02X}&\\p1}}{arrow}"))
+    ring = [(30 + 30 * math.cos(2 * math.pi * k / 40), 30 + 30 * math.sin(2 * math.pi * k / 40)) for k in range(40)]
+    events.append(dialogue(11, c, frame_time(f_click + 9), "Title",
+                           f"{{\\an5\\pos({cx:.1f},{cy:.1f})\\1a&HFF&\\3c{WHITE}\\bord5\\shad0\\fscx40\\fscy40"
+                           f"\\t(0,260,\\fscx120\\fscy120)\\fad(0,170)\\p1}}m "
+                           + " l ".join(f"{x:.1f} {y:.1f}" for x, y in ring)))
     return events
 
 
@@ -1757,7 +2447,21 @@ def assign_motions(slots, seed):
     last = None
     for slot in slots:
         visual = slot["visual"]
+        if visual.get("lock"):                       # a lock-on's own zoom, on a picture or a video
+            slot["motion"] = lock_motion(visual, slot["frames"], bool(slot.get("loop_tail")))
+            continue
+        if visual["kind"] == "compare":              # each card's picture zooms slowly at its focus
+            slot["motions"] = [make_motion("zoom_in", 1.0, slot["frames"], *crop_box(visual[side])[4:])
+                               for side in ("top", "bottom")]
+            if slot.get("loop_tail") and slots[0].get("motions"):
+                slot["motions"][0] = return_motion(slots[0]["motions"][0], slots[0]["frames"], slot["frames"])
+            continue
         if visual["kind"] != "image" or slot.get("loop_tail"):
+            continue
+        if visual.get("beat") in ("full", "banner") and not visual.get("pan") and not visual.get("marks"):
+            # A full-screen beat always heads for its focus.
+            slot["motion"] = make_motion("zoom_in", 1.0, slot["frames"], *crop_box(visual)[4:])
+            last = "zoom_in"
             continue
         if visual.get("pan"):
             slot["motion"] = make_reveal(visual, visual["pan"])
@@ -1776,8 +2480,23 @@ def assign_motions(slots, seed):
             kind = "zoom_out" if last == "zoom_in" else "zoom_in"
         slot["motion"] = make_motion(kind, speed, slot["frames"], subject, middle)
         last = kind
-    if slots[-1].get("loop_tail") and slots[0]["visual"]["kind"] == "image":
+    if slots[-1].get("loop_tail") and slots[0]["visual"]["kind"] == "image" and "motion" not in slots[-1]:
         slots[-1]["motion"] = return_motion(slots[0]["motion"], slots[0]["frames"], slots[-1]["frames"])
+
+
+def lock_motion(visual, frames, tail=False):
+    """A lock-on shot's camera, as zoompan's own sums: the zoom lock_zoom() gives, about the anchor, which keeps the
+    window inside the picture at any zoom. The loop ending eases back from a slight zoom to none, without the box."""
+    lock = visual["lock"]
+    ax, ay = lock["anchor"][0] / W, lock["anchor"][1] / H
+    if tail:
+        zoom, kind = f"1+{LOCK_TAIL_ZOOM}*(1-on/{max(frames - 1, 1)})", "back_to_first_frame"
+    else:
+        lands, ends = lock_frames(frames)
+        zoom = (f"1+{lock['zoom'] - 1:.5f}*(1-pow(1-clip((on-{lands})/{ends - lands},0,1),3))"
+                f"+{LOCK_CREEP_PER_S / FPS:.6f}*max(on-{ends},0)")
+        kind = "lock_on"
+    return {"kind": kind, "speed": 1.0, "expr": (zoom, f"{ax:.5f}*iw*(1-1/zoom)", f"{ay:.5f}*ih*(1-1/zoom)")}
 
 
 def assign_backgrounds(slots):
@@ -1803,7 +2522,7 @@ def pan_speed(slot):
 def seam_psnr(path, frames):
     """How alike a clip's last and first frames are, in dB."""
     p = str(path)
-    err = ffmpeg(["-i", p, "-i", p, "-filter_complex",
+    err = ffmpeg([*source_args(path), "-i", p, *source_args(path), "-i", p, "-filter_complex",
                   f"[0:v]select='eq(n,{frames - 1})',setpts=PTS-STARTPTS,scale=270:-2[a];"
                   "[1:v]select='eq(n,0)',setpts=PTS-STARTPTS,scale=270:-2[b];[a][b]psnr",
                   "-frames:v", "1", "-f", "null", "-"], loglevel="info")
@@ -1821,21 +2540,68 @@ def fill_mode(visual, start, frames):
     return "hold"
 
 
+def moving_picture(visual):
+    """The video whose frames a shot shows or blurs: its own, a text card's bg or a compare's top one. None if it is
+    a still."""
+    behind = visual.get("bg") if visual["kind"] in ("card", "snippet") else picture_of(visual)
+    return behind if behind and behind["kind"] == "video" else None
+
+
+def bounce_order(clip_frames, frames):
+    """Which of a clip's frames the loop ending shows, when the file has nothing before the opening's start: the clip
+    run backwards into its first frame, so the Short's last frame is its first and nothing ever stands still (PR 18;
+    before, the ending held that first frame for 1.5 s). A clip shorter than the ending plays forwards first and
+    turns round at its last frame, as often as it takes."""
+    period = 2 * (clip_frames - 1)
+    back = lambda d: d % period if d % period < clip_frames else period - d % period
+    return [back(frames - 1 - j) for j in range(frames)]
+
+
 def plan_videos(slots):
     """Each video slot's start time and fill. The loop ending runs up to the point the opening starts from, so the
-    join back to the start is a continuous shot and the Short's last frame runs into its first. A file with less than
-    that before the opening's start (a clip used from 0) first holds its first frame for the rest (lead_hold frames):
-    an opening from 0 ends the Short on its own first frame."""
+    join back to the start is a continuous shot and the Short's last frame runs into its first. With less than that
+    in the file before the opening's start (a clip used from 0), the ending plays the opening backwards into its
+    first frame instead (bounce_order). That goes for a video behind a text card or in a compare's top card too."""
     for slot in slots:
         visual = slot["visual"]
-        if visual["kind"] != "video":
+        video = moving_picture(visual)
+        if video is None:
             continue
-        slot["start_s"], playing = visual["start"], slot["frames"]
+        slot["start_s"] = video["start"]
         if slot.get("loop_tail"):
-            playing = min(slot["frames"], round(visual["start"] * FPS))
-            slot["start_s"] = visual["start"] - playing / FPS
-            slot["lead_hold"] = slot["frames"] - playing
-        slot["fill"] = fill_mode(visual, slot["start_s"], playing)
+            clip_frames = min(int((video["length"] - video["start"]) * FPS + 0.5), slot["frames"])
+            if round(video["start"] * FPS) >= slot["frames"]:
+                slot["start_s"] = video["start"] - slot["frames"] / FPS
+            elif clip_frames >= 2:
+                slot["bounce"] = bounce_order(clip_frames, slot["frames"])
+                if visual["kind"] == "video":
+                    slot["fill"] = "bounce"
+                continue
+        if visual["kind"] == "video":
+            slot["fill"] = fill_mode(visual, slot["start_s"], slot["frames"])
+
+
+def source_graph(slot, source="[0:v]"):
+    """The start of a filter graph for a shot's video: nothing, and the input itself, for a shot that just plays. For
+    a loop ending that bounces: the clip's frames in bounce_order, as runs played forwards or backwards and joined,
+    named [src]. Returns the graph's text and the name to read from."""
+    order = slot.get("bounce")
+    if not order:
+        return "", source
+    runs = [[order[0]]]
+    for frame in order[1:]:
+        run = runs[-1]
+        if abs(frame - run[-1]) == 1 and (len(run) == 1 or frame - run[-1] == run[-1] - run[-2]):
+            run.append(frame)
+        else:
+            runs.append([frame])
+    graph = f"{source}fps={FPS},format=yuv420p,split={len(runs)}" + "".join(f"[s{i}]" for i in range(len(runs))) + ";"
+    for i, run in enumerate(runs):
+        back = ",reverse" if run[0] > run[-1] else ""
+        graph += f"[s{i}]trim=start_frame={min(run)}:end_frame={max(run) + 1}{back},setpts=N/{FPS}/TB[r{i}];"
+    if len(runs) == 1:
+        return graph + "[r0]null[src];", "[src]"
+    return graph + "".join(f"[r{i}]" for i in range(len(runs))) + f"concat=n={len(runs)}:v=1:a=0[src];", "[src]"
 
 
 def slot_warnings(slots, lines, last_line_frames):
@@ -1843,7 +2609,8 @@ def slot_warnings(slots, lines, last_line_frames):
     for slot in slots:
         seconds, visual = slot["frames"] / FPS, slot["visual"]
         panning = bool(visual.get("pan")) and not slot.get("loop_tail")
-        if seconds > (LONG_PAN_S if panning else LONG_SLOT_S) and not slot.get("loop_tail"):
+        busy = visual.get("beat") in ("lockon", "compare", "snippet")   # something arrives inside these: see the pacing
+        if seconds > (LONG_PAN_S if panning else LONG_SLOT_S) and not slot.get("loop_tail") and not busy:
             warnings.append(f"line {slot['line'] + 1}: {visual['source']} stays up {seconds:.1f} s; the target is a new "
                             "picture every 1.5-2 s, so give this line another shot")
         if panning and pan_speed(slot) > FAST_PAN:
@@ -1881,6 +2648,10 @@ def image_filter(visual, motion, frames, tail=FINISH):
         return reveal_filter(visual, motion, frames, tail)
     x, y, crop_w, crop_h, _, _ = crop_box(visual)
     ow, oh = picture_size(visual)
+    if motion.get("expr"):   # a lock-on: zoompan's zoom, x and y are written out in full (lock_motion)
+        zoom, across, down = motion["expr"]
+        return (f"crop={crop_w}:{crop_h}:{x}:{y},scale={ow * CANVAS_SCALE}:{oh * CANVAS_SCALE}:flags=lanczos:{COLOUR_OUT},"
+                f"format=yuv444p,zoompan=z='{zoom}':x='{across}':y='{down}':d={frames}:s={ow}x{oh}:fps={FPS}{tail}")
     p = f"on/{max(frames - 1, 1)}"
     (z0, z1), (c0, c1), middle = motion["zoom"], motion["centre"], motion.get("middle", 0.5)
     return (f"crop={crop_w}:{crop_h}:{x}:{y},scale={ow * CANVAS_SCALE}:{oh * CANVAS_SCALE}:flags=lanczos:{COLOUR_OUT},"
@@ -1908,18 +2679,28 @@ def reveal_filter(visual, motion, frames, tail=FINISH):
             f"crop={window}:{tall}:x='{x}':y=0,scale={ow}:{oh}:flags=lanczos{blur}{tail}")
 
 
-def lead_hold(slot):
-    """The tpad that holds a video's first frame for the loop ending's lead_hold frames, or nothing."""
-    frames = slot.get("lead_hold", 0)
-    return f"tpad=start={frames}:start_mode=clone," if frames else ""
-
-
-def video_filter(focus=0.5, focus_y=0.5, grade=False, lead=""):
-    """Fill the frame, cropping around the focus. tpad holds the last frame if the file runs out; lead holds the first
-    one first (lead_hold)."""
-    return (f"fps={FPS},{lead}scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
+def video_filter(focus=0.5, focus_y=0.5, grade=False):
+    """Fill the frame, cropping around the focus. tpad holds the last frame if the file runs out."""
+    return (f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos:{COLOUR_OUT},"
             f"crop={W}:{H}:x='clip({focus:.4f}*iw-{W // 2},0,iw-{W})':y='clip({focus_y:.4f}*ih-{H // 2},0,ih-{H})',"
             f"setsar=1{graded(grade)},format=yuv420p,tpad=stop=-1:stop_mode=clone")
+
+
+def lock_video_filter(visual, motion, grade=False):
+    """A lock-on over a video: the 9:16 part around the region at twice the screen's size, then the lock-on's zoom a
+    frame at a time (zoompan makes one frame from each)."""
+    x, y, crop_w, crop_h = crop_box(visual)[:4]
+    zoom, across, down = motion["expr"]
+    return (f"fps={FPS},crop={crop_w}:{crop_h}:{x}:{y},scale={W * 2}:{H * 2}:flags=bicubic:{COLOUR_OUT},"
+            f"zoompan=z='{zoom}':x='{across}':y='{down}':d=1:s={W}x{H}:fps={FPS},"
+            f"setsar=1{graded(grade)},format=yuv420p,tpad=stop=-1:stop_mode=clone")
+
+
+def source_args(path):
+    """What goes before a video's -i: clip.py's fix for PS5 captures (VP9 whose header says full range while the
+    container, rightly, says limited), or nothing."""
+    video = stream_of(probe(path), "video") or {}
+    return RANGE_FIX_ARGS if needs_range_fix(video.get("codec_name"), video.get("color_range")) else []
 
 
 def background_small(visual):
@@ -1939,7 +2720,7 @@ def background_gain(visual_key):
     path, start, focus, focus_y, size = visual_key
     visual = {"path": path, "focus": focus, "focus_y": focus_y, "size": size}
     seek = ["-ss", f"{start:.3f}"] if start else []
-    r = subprocess.run([FFMPEG, "-v", "error", *seek, "-i", str(path), "-frames:v", "1", "-vf",
+    r = subprocess.run([FFMPEG, "-v", "error", *source_args(path), *seek, "-i", str(path), "-frames:v", "1", "-vf",
                         background_small(visual) + ",scale=in_color_matrix=bt709:in_range=tv,format=rgb24",
                         "-f", "rawvideo", "-"], capture_output=True)
     sw, sh = BG_SMALL
@@ -2048,7 +2829,10 @@ def picture_input(visual, slot, start=None):
         rate = ["-framerate", FPS] if slot.get("motion", {}).get("wide") else []
         return ["-f", "image2", "-pattern_type", "none", *rate, "-i", visual["path"]]
     loop = ["-stream_loop", "-1"] if slot.get("fill") == "loop" else []
-    return [*loop, "-ss", f"{visual['start'] if start is None else start:.3f}", "-i", visual["path"]]
+    # A bouncing loop ending reads only the frames it turns round on, not the rest of a long file.
+    span = ["-t", f"{(max(slot['bounce']) + 3) / FPS:.3f}"] if slot.get("bounce") else []
+    return [*loop, *source_args(visual["path"]), "-ss", f"{visual['start'] if start is None else start:.3f}", *span,
+            "-i", visual["path"]]
 
 
 def framed_graph(slot):
@@ -2062,7 +2846,8 @@ def framed_graph(slot):
     if visual["kind"] == "image":
         source, picture = "[0:v]", image_filter(visual, slot["motion"], frames, tail="")
     else:
-        source = f"[0:v]fps={FPS},{lead_hold(slot)}"
+        before, name = source_graph(slot)
+        source = f"{before}{name}fps={FPS},"
         x, y, w, h = crop_box(visual)[:4]
         picture = (f"crop={w}:{h}:{x}:{y},scale={cw}:{ch}:flags=lanczos:{COLOUR_OUT},setsar=1,"
                    "tpad=stop=-1:stop_mode=clone")
@@ -2082,17 +2867,74 @@ def framed_graph(slot):
             f"scale={COLOUR_OUT}{FINISH}")
 
 
+def compare_graph(slot):
+    """A compare beat: the top picture's blurred background; each picture, graded, through the rounded mask onto a
+    card layer; the top card growing in as a framed card does; and the bottom card sliding up from below the screen,
+    COMPARE_SECOND_S after the first, easing to a stop. The loop ending has the top card alone, as the first frame
+    does. Inputs: the top picture, the bottom picture, the card layer, the mask."""
+    visual, frames = slot["visual"], slot["frames"]
+    top, bottom = visual["top"], visual["bottom"]
+    ox, oy, ow, oh = top["frame"]["outer"]
+    cw, ch = top["frame"]["content"][2:]
+    lw, lh = ow + 2 * CARD_MARGIN, oh + 2 * CARD_MARGIN
+    grade = slot.get("grade", False)
+    motions = slot.get("motions") or [None, None]
+
+    def art(side, motion):
+        if side["kind"] == "image":
+            chain = image_filter(side, motion, frames, tail="")
+        else:
+            x, y, w, h = crop_box(side)[:4]
+            chain = (f"fps={FPS},crop={w}:{h}:{x}:{y},scale={cw}:{ch}:flags=lanczos:{COLOUR_OUT},setsar=1,"
+                     "tpad=stop=-1:stop_mode=clone")
+        return chain + (f",{GRADE}" if grade else "") + ",format=rgba"
+    grow = ""
+    if slot.get("card_in"):
+        s = f"({CARD_IN_FROM}+{1 - CARD_IN_FROM:.2f}*(1-pow(1-min(t/{CARD_IN_S}\\,1)\\,2)))"
+        grow = f",scale=w='trunc({lw}*{s}/2)*2':h='trunc({lh}*{s}/2)*2':eval=frame"
+    rest = bottom["frame"]["outer"][1] - CARD_MARGIN             # where the bottom card's layer comes to rest
+    slide = str(H)
+    if not slot.get("loop_tail"):
+        eased = f"(1-pow(1-clip((t-{COMPARE_SECOND_S})/{COMPARE_SLIDE_S}\\,0\\,1)\\,3))"
+        slide = f"{rest}+{H - rest}*(1-{eased})"
+    before, name = source_graph(slot) if top["kind"] == "video" else ("", "[0:v]")
+    background = background_chain(top, frames, slot.get("bg_zoom", (1.0, 1.0)), top.get("start", 0.0))
+    inset = CARD_MARGIN + CARD_BORDER
+    vignette = f",{VIGNETTE}" if grade else ""
+    return (f"{before}{name}split=2[a][b];[a]{background}[bg];[b]{art(top, motions[0])}[p0];"
+            f"[1:v]{art(bottom, motions[1])}[p1];"
+            f"[2:v]format=rgba,split=2[f0][f1];[3:v]format=gray,split=2[m0][m1];"
+            f"[p0][m0]alphamerge[a0];[p1][m1]alphamerge[a1];"
+            f"[f0][a0]overlay={inset}:{inset}:format=auto{grow}[c0];[f1][a1]overlay={inset}:{inset}:format=auto[c1];"
+            f"[bg][c0]overlay=x='{ox + ow / 2:.0f}-w/2':y='{oy + oh / 2:.0f}-h/2':eval=frame:format=auto[one];"
+            f"[one][c1]overlay=x={ox - CARD_MARGIN}:y='{slide}':eval=frame:format=auto{vignette},"
+            f"scale={COLOUR_OUT}{FINISH}")
+
+
 def render_segment(slot, out, encode):
     """One visual as its exact number of frames. -an: a source's own audio never comes along. A slot's grade is off
     unless render() turns it on, so the pieces render as they did before PR 17 when called on their own."""
     visual, frames = slot["visual"], slot["frames"]
     grade = slot.get("grade", False)
-    if visual["kind"] == "card":
+    still = ["-loop", "1", "-framerate", FPS]
+    if visual["kind"] in ("card", "snippet"):
         behind = visual["bg"]
-        inputs = picture_input(behind, {})
+        inputs = picture_input(behind, slot if behind["kind"] == "video" else {}, slot.get("start_s"))
+        before, name = source_graph(slot) if behind["kind"] == "video" else ("", "")
         picture = (background_chain(behind, frames, slot.get("bg_zoom", (1.0, 1.0)), behind.get("start", 0.0))
                    + (f",{VIGNETTE}" if grade else "") + f",scale={COLOUR_OUT}{FINISH}")
-        ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
+        how = ["-filter_complex", f"{before}{name}{picture}"] if before else ["-vf", picture]
+        ffmpeg([*inputs, "-an", "-sn", "-dn", *how, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
+        return
+    if visual["kind"] == "compare":
+        top, bottom = visual["top"], visual["bottom"]
+        layer, mask = card_layer(Path(out).parent, top["frame"])
+        motions = slot.get("motions") or [None, None]
+        inputs = [*picture_input(top, {**slot, "motion": motions[0]} if top["kind"] == "video" else {"motion": motions[0]},
+                                 slot.get("start_s")),
+                  *picture_input(bottom, {"motion": motions[1]}), *still, "-i", layer, *still, "-i", mask]
+        ffmpeg([*inputs, "-an", "-sn", "-dn", "-filter_complex", compare_graph(slot), "-frames:v", frames, *encode,
+                *COLOUR_TAGS, out])
         return
     if visual.get("layout") == "framed":
         layer, mask = card_layer(Path(out).parent, visual["frame"])
@@ -2104,10 +2946,14 @@ def render_segment(slot, out, encode):
     if visual["kind"] == "image":
         inputs = picture_input(visual, slot)
         picture = image_filter(visual, slot["motion"], frames, graded(grade) + FINISH)
+        how = ["-vf", picture]
     else:
         inputs = picture_input(visual, slot, slot["start_s"])
-        picture = video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5), grade, lead_hold(slot))
-    ffmpeg([*inputs, "-an", "-sn", "-dn", "-vf", picture, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
+        picture = (lock_video_filter(visual, slot["motion"], grade) if visual.get("lock")
+                   else video_filter(visual.get("focus", 0.5), visual.get("focus_y", 0.5), grade))
+        before, name = source_graph(slot)
+        how = ["-filter_complex", f"{before}{name}{picture}"] if before else ["-vf", picture]
+    ffmpeg([*inputs, "-an", "-sn", "-dn", *how, "-frames:v", frames, *encode, *COLOUR_TAGS, out])
 
 
 def font_warning(work):
@@ -2160,10 +3006,19 @@ def render(script_path, root, out_root):
         warnings += slot_warnings(slots, script["lines"], last_line)
         warnings += runtime_warnings(voice_s)
 
-        hidden = card_spans(slots)
-        captions = (word_events(words, total_s, hidden) if script["caption_style"] == "word"
+        hidden = card_spans(slots, script["caption_style"])
+        captions = (word_events(words, total_s, hidden, caption_places(slots)) if script["caption_style"] == "word"
                     else caption_events(words, total_s, hidden))
         events = card_events(slots, script["open_card"]) + captions + overlay_events(slots, script["open_card"])
+        pill, pill_click = script.get("end_pill"), None
+        if pill:
+            covered = place_end_pill(pill, slots, total_frames)
+            if covered:
+                warnings.append(covered)
+            events += end_pill_events(pill, total_frames)
+            pill_click = pill_frames(total_frames)[1] / FPS
+        pacing = pacing_report(visual_changes(slots, total_frames if pill else None), total_s, len(words))
+        warnings += pacing["warnings"]
         (run_dir / "captions.ass").write_text(ass_document(events), encoding="utf-8")
         for font in FONT_FILES:
             shutil.copy(font, work)
@@ -2175,7 +3030,7 @@ def render(script_path, root, out_root):
         music, music_note = pick_music(script["music"], root, voice_s, script["slug"])
         if script["music"] == "auto" and music is None:
             warnings.append(f'music is "auto" but {root / MUSIC_DIR} has no audio files, so this Short has no music')
-        sfx = plan_sfx(slots) if script["sfx"] else []
+        sfx = plan_sfx(slots, pill_click) if script["sfx"] else []
         mix, sound = mix_audio(run_dir / "voice.wav", music, script["music_volume"], sfx, work)
         timing["sound"] = round(time.perf_counter() - t, 1)
 
@@ -2239,15 +3094,32 @@ def render(script_path, root, out_root):
                         "motion_speed": s["motion"]["speed"] if "motion" in s else None,
                         "pan_widths_per_s": round(pan_speed(s), 2) if s.get("motion", {}).get("wide") else None,
                         "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail")),
-                        "lead_hold_s": round(s["lead_hold"] / FPS, 3) if s.get("lead_hold") else None,
-                        "layout": s["visual"].get("layout", "card"),
+                        "beat": s["visual"].get("beat"),
+                        "layout": s["visual"].get("layout") or s["visual"]["kind"],
                         "card_aspect": s["visual"].get("card_aspect") if s["visual"].get("layout") == "framed" else None,
                         "card": list(s["visual"]["frame"]["outer"]) if "frame" in s["visual"] else None,
                         "label": ({k: s["visual"]["label"][k] for k in ("text", "style", "pos", "y")}
                                   if s["visual"].get("label") else None),
                         "marks": len(s["visual"].get("marks", [])),
-                        "behind": s["visual"]["bg"]["source"] if s["visual"]["kind"] == "card" else None}
+                        "behind": s["visual"]["bg"]["source"] if "bg" in s["visual"] else None,
+                        "lock": ({"zoom": round(s["visual"]["lock"]["zoom"], 2),
+                                  "box_at_end": [round(n) for n in lock_rect(s["visual"]["lock"],
+                                                                             lock_zoom(s["visual"]["lock"], s["frames"] - 1, s["frames"]))]}
+                                 if s["visual"].get("lock") else None),
+                        "compare": ({"top": list(s["visual"]["top"]["frame"]["outer"]),
+                                     "bottom": list(s["visual"]["bottom"]["frame"]["outer"]),
+                                     "seam_y": s["visual"]["seam_y"],
+                                     "label_ys": [side["label"]["y"] if side.get("label") else None
+                                                  for side in (s["visual"]["top"], s["visual"]["bottom"])]}
+                                    if s["visual"]["kind"] == "compare" else None),
+                        "snippet": ({"card": list(s["visual"]["snippet"]["card"]), "size": s["visual"]["snippet"]["size"],
+                                     "lines": len(s["visual"]["snippet"]["lines"])}
+                                    if s["visual"]["kind"] == "snippet" else None),
+                        "banner": s["visual"]["banner"]["text"] if s["visual"].get("banner") else None}
                        for s in slots],
+           "pacing": pacing,
+           "end_pill": {"text": pill["text"], "pos": pill["pos"], "y": pill["y"], "from_s": round(pill_frames(total_frames)[0] / FPS, 3),
+                        "click_s": round(pill_click, 3)} if pill else None,
            "per_second": [{"second": sec, "visual": at_second(sec)} for sec in range(math.ceil(total_s))],
            "warnings": warnings, "render_s": timing}
     (run_dir / "log.json").write_text(json.dumps(log, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -2262,11 +3134,21 @@ def render(script_path, root, out_root):
     else:
         print("  Music: none")
     kinds = [e["kind"] for e in sfx]
-    print(f"  Sound effects: {kinds.count('whoosh')} whooshes, {kinds.count('hit')} hits" if script["sfx"] else
+    clicks = "".join(f", {kinds.count(kind)} {name}" for kind, name in (("lock", "lock-on clicks"), ("click", "pill clicks"))
+                     if kind in kinds)
+    print(f"  Sound effects: {kinds.count('whoosh')} whooshes, {kinds.count('hit')} hits{clicks}" if script["sfx"] else
           "  Sound effects: off")
-    framed = sum(1 for s in slots if s["visual"].get("layout") == "framed" and not s.get("loop_tail"))
-    print(f"  Look: {framed} framed, {shots['own'] - framed - len(hidden)} full screen, {len(hidden)} text cards; "
+    own = [s["visual"] for s in slots if not s.get("loop_tail")]
+    framed = sum(1 for v in own if v.get("layout") == "framed")
+    cards = sum(1 for v in own if v["kind"] == "card")
+    print(f"  Look: {framed} framed, {sum(1 for v in own if v.get('layout') == 'full')} full screen, {cards} text cards; "
           f"{script['caption_style']} captions; grade {'on' if script['grade'] else 'off'}")
+    beats = [v["beat"] for v in own if v.get("beat")]
+    if beats:
+        print("  Beats: " + ", ".join(f"{beats.count(b)} {b}" for b in BEATS if b in beats)
+              + (f"; subscribe pill at the {pill['pos']}" if pill else ""))
+    for line in pacing_lines(pacing):
+        print(line)
     print(f"  Loudness: {final_lufs:.1f} LUFS, true peak {final_peak:.1f} dB")
     print(f"  Voice {script['voice']} at speed {script['speed']:g}, made in {timing['total']:.0f} s with {encoder}")
     for warning in warnings:
@@ -2286,27 +3168,135 @@ def runtime_note(seconds):
     if seconds > MAX_TOTAL_S:
         return f"over the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target by {seconds - MAX_TOTAL_S:.1f} s"
     if seconds < MIN_TOTAL_S:
-        return f"target {MIN_TOTAL_S}-{MAX_TOTAL_S} s: {MIN_TOTAL_S - seconds:.1f} s under, which is fine"
+        return f"target {MIN_TOTAL_S}-{MAX_TOTAL_S} s: {MIN_TOTAL_S - seconds:.1f} s under"
     return f"inside the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target"
 
 
 def runtime_warnings(seconds):
-    """Over the target warns: a long Short loses people. Under it doesn't."""
+    """Outside the target warns (PR 18: 34-39 s, and both ways). A long Short loses people before the loop."""
     if seconds > MAX_TOTAL_S:
         return [f"the Short is {seconds:.1f} s, over the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target: cut words rather than "
                 f"speed the voice past {MAX_SPEED:g}"]
+    if seconds < MIN_TOTAL_S:
+        return [f"the Short is {seconds:.1f} s, under the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target: about "
+                f"{TARGET_WORDS[0]}-{TARGET_WORDS[1]} spoken words fill it"]
     return []
+
+
+# --- The pacing checker (PR 18) ---
+
+def visual_changes(slots, pill_frames_total=None):
+    """Every moment the picture changes in a way the eye catches, as (seconds, what): each cut, and what arrives inside
+    a shot (a lock-on box, a compare's second card, a snippet's marker, marks), and the subscribe pill when
+    pill_frames_total (the Short's length in frames) is given. Small follow-ups don't count again: a snippet's second
+    sweep, the cursor's click, a label popping in after its cut. Changes closer than CHANGE_MERGE_S to the one before
+    count as part of it, so a lock-on box or a marker that follows its cut at once is that cut. A slow zoom or pan is
+    movement, not a change."""
+    found = []
+    for i, slot in enumerate(slots):
+        visual, at, end = slot["visual"], slot["start"] / FPS, slot["end"] / FPS
+        if i:
+            found.append((at, "the loop ending: back to the first shot" if slot.get("loop_tail")
+                          else f"cut to {visual['source']}"))
+        if slot.get("loop_tail"):
+            continue
+        inside = [(m["at"], f"a mark ({m['icon']})") for m in visual.get("marks", [])]
+        if visual.get("lock"):
+            inside.append((LOCK_SNAP_S, "the lock-on box lands and the zoom starts"))
+        if visual["kind"] == "compare":
+            inside.append((COMPARE_SECOND_S, "the second card slides in"))
+        if visual["kind"] == "snippet":
+            inside += [(t, "the marker sweeps the highlight") for t in visual["snippet"]["sweeps"][:1]]
+        found += [(at + t, what) for t, what in inside if at + t < end - 0.1]
+    if pill_frames_total:
+        found.append((pill_frames(pill_frames_total)[0] / FPS, "the subscribe pill pops in"))
+    counted = []
+    for at, what in sorted(found):
+        if not counted or at - counted[-1][0] >= CHANGE_MERGE_S - 1e-6:   # exactly that far apart is two moments
+            counted.append((at, what))
+    return [(round(at, 3), what) for at, what in counted]
+
+
+def pacing_report(changes, total_s, words=None):
+    """The pacing of a finished timeline: its length, how many visual changes it has, how many that is every 10 s,
+    and the longest stretch without one (from the first frame, between changes, and to the last frame). warnings
+    lists what misses the targets: 34-39 s is checked by runtime_warnings(), so here it is the rate and the gaps."""
+    times = [0.0] + [at for at, _ in changes] + [total_s]
+    gaps = sorted(((round(b - a, 2), round(a, 2), round(b, 2)) for a, b in zip(times, times[1:])), reverse=True)
+    rate = len(changes) / total_s * 10 if total_s else 0.0
+    warnings = []
+    if rate < MIN_CHANGES_PER_10_S:
+        warnings.append(f"pacing: {rate:.1f} visual changes every 10 s, under the target of {MIN_CHANGES_PER_10_S:g}-"
+                        f"{MAX_CHANGES_PER_10_S:g}: add shots or beats")
+    if rate > MAX_CHANGES_PER_10_S:
+        warnings.append(f"pacing: {rate:.1f} visual changes every 10 s, over the target of {MIN_CHANGES_PER_10_S:g}-"
+                        f"{MAX_CHANGES_PER_10_S:g}: it may feel frantic")
+    warnings += [f"pacing: nothing changes for {gap:.1f} s, from {a:.1f} s to {b:.1f} s; the limit is {MAX_GAP_S:g} s"
+                 for gap, a, b in sorted(g for g in gaps if g[0] > MAX_GAP_S + 1e-9)[::-1]]
+    return {"length_s": round(total_s, 2), "length_ok": MIN_TOTAL_S <= total_s <= MAX_TOTAL_S,
+            "target_s": [MIN_TOTAL_S, MAX_TOTAL_S], "changes": len(changes), "per_10_s": round(rate, 2),
+            "target_per_10_s": [MIN_CHANGES_PER_10_S, MAX_CHANGES_PER_10_S],
+            "longest_gap_s": gaps[0][0], "longest_gap_at_s": list(gaps[0][1:]), "max_gap_s": MAX_GAP_S,
+            "words": words, "warnings": warnings,
+            "events": [{"at_s": at, "what": what} for at, what in changes]}
+
+
+def pacing_lines(report):
+    """The pacing report as the lines the console prints after a render."""
+    ok = lambda good: "ok" if good else "WARN"
+    low, high = report["target_per_10_s"]
+    a, b = report["longest_gap_at_s"]
+    lines = ["  Pacing check:",
+             f"    Length        {report['length_s']:.1f} s   (target {report['target_s'][0]}-{report['target_s'][1]} s)  "
+             f"{ok(report['length_ok'])}",
+             f"    Changes       {report['changes']} visual changes",
+             f"    Rate          {report['per_10_s']:.1f} per 10 s   (target {low:g}-{high:g})  "
+             f"{ok(low <= report['per_10_s'] <= high)}",
+             f"    Longest gap   {report['longest_gap_s']:.1f} s, from {a:.1f} s to {b:.1f} s   (limit {report['max_gap_s']:g} s)  "
+             f"{ok(report['longest_gap_s'] <= report['max_gap_s'] + 1e-9)}"]
+    if report.get("words"):
+        lines.append(f"    Words         {report['words']} spoken   (about {TARGET_WORDS[0]}-{TARGET_WORDS[1]} fills the target)")
+    return lines
+
+
+def print_pacing(run):
+    """The pacing check of a run that is already rendered, read from its log.json, with every change it counted."""
+    path = Path(run)
+    path = path / "log.json" if path.is_dir() else path
+    try:
+        log = json.loads(path.read_text(encoding="utf-8"))
+        report = log.get("pacing")
+        if report is None:   # a run from before PR 18: its log has the cuts, which is most of it
+            cuts = [(v["start_s"], "the loop ending: back to the first shot" if v.get("loop_tail") else f"cut to {v['source']}")
+                    for v in log["visuals"][1:]]
+            report = pacing_report(cuts, log["durations"]["video_s"], log.get("words"))
+            report["warnings"] = runtime_warnings(log["durations"]["video_s"]) + report["warnings"]
+            print("An older run: its log has only the cuts, so marks inside a shot aren't counted.")
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ScriptError(f"{path} isn't the log.json of an explainer run") from None
+    print(f"Run: {path.parent}")
+    for line in pacing_lines(report):
+        print(line)
+    for event in report["events"]:
+        print(f"      {event['at_s']:6.2f} s  {event['what']}")
+    for warning in report["warnings"]:
+        print(f"  WARNING: {warning}")
 
 
 def main():
     sys.stdout.reconfigure(errors="replace")
     sys.stderr.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description="Turn a script file into a finished explainer Short.")
-    parser.add_argument("script")
+    parser.add_argument("script", help="the script to render; with --pacing, a finished run's folder or its log.json")
     parser.add_argument("--root", type=Path, default=ROOT, help="the folder visuals and music are relative to")
     parser.add_argument("--out", type=Path, default=ROOT / "explainers", help="where the run folders go")
+    parser.add_argument("--pacing", action="store_true",
+                        help="print the pacing check of a finished run again, without rendering anything")
     args = parser.parse_args()
     try:
+        if args.pacing:
+            print_pacing(args.script)
+            return
         render(args.script, args.root, args.out)
     except ScriptError as e:
         print(f"ERROR: {e}", file=sys.stderr)
