@@ -1,0 +1,23 @@
+{
+  "about": "The six regions of Leonida, for region labels on pictures. A label that names a region is allowed on a picture from that region's folder, unless the picture's main subject or first three subjects hold one of the region's 'not_here' words (a clear contradiction, such as a city scene in Mount Kalaga). 'aliases' are the ways a label may name the region.",
+  "regions": [
+    {"name": "Vice City",
+     "aliases": ["vice city"],
+     "not_here": ["swamp", "alligator", "airboat", "mountain", "deer", "farmland"]},
+    {"name": "Leonida Keys",
+     "aliases": ["leonida keys", "the keys"],
+     "not_here": ["skyscraper", "mountain", "farmland"]},
+    {"name": "Grassrivers",
+     "aliases": ["grassrivers"],
+     "not_here": ["skyscraper", "city", "cityscape", "mountain", "beach"]},
+    {"name": "Port Gellhorn",
+     "aliases": ["port gellhorn", "gellhorn"],
+     "not_here": ["skyscraper", "mountain"]},
+    {"name": "Ambrosia",
+     "aliases": ["ambrosia"],
+     "not_here": ["skyscraper", "mountain", "beach", "ocean"]},
+    {"name": "Mount Kalaga National Park",
+     "aliases": ["mount kalaga national park", "mount kalaga", "kalaga"],
+     "not_here": ["skyscraper", "skyline", "city", "cityscape", "beach", "ocean", "yacht", "neon"]}
+  ]
+}
