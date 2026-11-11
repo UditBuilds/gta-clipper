@@ -12,7 +12,7 @@ is also the proof that old fields mean what they did. The PR 17 look has its own
 the PR 18 beats (at the end of this file).
 
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error). The last line is
-RESULT: PASS or FAIL; exit code 0 or 1. Needs .venv-tts, the Kokoro model files and ffmpeg/ffprobe on PATH; about 1 minute.
+RESULT: PASS or FAIL; exit code 0 or 1. Needs .venv-tts, the Kokoro model files and ffmpeg/ffprobe on PATH; about 3 minutes.
 
 Usage:  .venv-tts\\Scripts\\python.exe explainertest.py
 """
