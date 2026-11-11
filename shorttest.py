@@ -1,4 +1,5 @@
-"""Checks for the topic-to-Short tools (PR 19): the picture tagger (tag_media.py) on made-up model answers.
+"""Checks for the topic-to-Short tools (PR 19): the picture tagger (tag_media.py) on made-up model answers, and the
+picture picker (picker.py) on made-up tags.
 
 No Ollama and no Rockstar files are used. ffmpeg makes two tiny pictures and a one-second video in a temporary folder,
 and a stand-in answers for the vision model.
@@ -16,6 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import picker
 import tag_media
 
 CHECKS = []
@@ -70,9 +72,17 @@ def make_media(root):
                     "-pix_fmt", "yuv420p", str(root / VIDEO)], check=True)
 
 
-def tag_run(root, calls, answers=None, **flags):
-    """One run of the tagger on root with a stand-in model. calls collects the frames it was asked about."""
-    def ask(model, jpeg, capabilities):
+NO_TEXT = {"words_seen": [], "big_text": False, "logo": False, "rating_card": False}
+
+
+def tag_run(root, calls, answers=None, text=NO_TEXT, text_calls=None, **flags):
+    """One run of the tagger on root with a stand-in model. calls collects the frames it was asked to tag, and
+    text_calls the frames it was asked about text and logos on. text is its answer to every one of those."""
+    def ask(model, jpeg, capabilities, what="tags"):
+        if what == "text":
+            if text_calls is not None:
+                text_calls.append(Path(jpeg).name)
+            return tag_media.parse_text(json.dumps(text)), 0.1
         calls.append(Path(jpeg).name)
         answer = (answers or {}).get(len(calls), ANSWER)
         return tag_media.parse_answer(json.dumps(answer)), 0.1
@@ -114,6 +124,98 @@ def region_and_names_come_from_the_folder():
             and tag_media.names_for("jason and lucia", ["man"]) == ["Jason"]
             and tag_media.names_for("jason and lucia", ["man", "woman"]) == ["Jason", "Lucia"]
             and tag_media.names_for("lucia caminos", ["man"]) == [] and tag_media.names_for(None, ["man"]) == [])
+
+
+@check
+def type_shape_and_group_come_from_the_file():
+    """a file's type is its top folder (cover art is key art wherever it is), its shape is its size (2160x4800 is
+    phone, 2160x3840 portrait, 3840x2160 landscape), and the six cuts of one wallpaper share a group, with or
+    without logos, while every screenshot is its own"""
+    wall = "GTAVI_Artwork_Wallpapers/"
+    kind, group = tag_media.media_type, tag_media.group_of
+    return (kind(PLACE) == "screenshot" and kind(VIDEO) == "video loop"
+            and kind(wall + "Boobie_Ike/Boobie_Ike_phone.jpg") == "wallpaper"
+            and kind(wall + "Official_Cover_Art/Official_Cover_Art_square.jpg") == "key art"
+            and kind("GTAVI_Videos/GTAVI_Official_Cover_Art_Landscape.mp4") == "key art"
+            and kind("GTAVI_Ultimate_Edition_Benefits/ULTIMATE_EDITION_01.jpg") == "edition"
+            and kind("GTAVI_Vintage_Vice_City_Pack/VINTAGE_VICE_CITY_PACK_01.jpg") == "edition"
+            and [tag_media.shape_of(*s) for s in ((2160, 4800), (2160, 3840), (2160, 2160), (3840, 3840), (3840, 2160),
+                                                  (5120, 2160))]
+            == ["phone", "portrait", "square", "square", "landscape", "ultrawide"]
+            and group(wall + "Jason_and_Lucia_01/Jason_and_Lucia_01_phone.jpg")
+            == group(wall + "Jason_and_Lucia_01_With_Logos/Jason_and_Lucia_01_With_Logos_square.jpg")
+            == wall + "Jason_and_Lucia_01"
+            and group(PLACE) == PLACE
+            and tag_media.folder_facts(wall + "Postcards/Mount_Kalaga_National_Park/x_phone.jpg")["region"]
+            == "Mount Kalaga National Park"
+            and tag_media.folder_facts(wall + "Jason_Lucia_Motel/Jason_and_Lucia_Motel_phone.jpg")["character"]
+            == "jason lucia")
+
+
+@check
+def text_and_logos_are_saved_for_every_file():
+    """every file is also asked what is printed on it: the answer (big text, logo, rating card) is saved with the
+    words read, and a picture from a "With_Logos" folder is marked logo even when the model saw none"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root, calls = Path(tmp), []
+        make_media(root)
+        logos = "GTAVI_Artwork_Wallpapers/Jason_and_Lucia_01_With_Logos/Jason_and_Lucia_01_With_Logos_square.jpg"
+        (root / logos).parent.mkdir(parents=True)
+        (root / logos).write_bytes((root / PLACE).read_bytes())
+        tag_run(root, calls, only=["Jason_and_Lucia"])
+        tag_run(root, calls, text={"words_seen": ["GRASSRIVERS", "Visit Leonida"], "big_text": True, "logo": False,
+                                   "rating_card": True})
+        tags = tag_media.load_tags(root)
+        return (tags[PLACE]["overlay"] == ["big text", "rating card"]
+                and tags[PLACE]["overlay_seen"] == ["grassrivers", "visit leonida"]
+                and tags[PERSON]["overlay"] == [] and tags[logos]["overlay"] == ["logo"]
+                and tags[logos]["type"] == "wallpaper" and tags[PLACE]["type"] == "screenshot"
+                and tags[PLACE]["shape"] == "landscape" and tags[VIDEO]["shape"] == "square"
+                and tags[VIDEO]["overlay"] == ["big text", "rating card"] and tags[VIDEO]["start_s"] == 0.0)
+
+
+@check
+def tags_made_before_the_text_check_are_kept():
+    """a file tagged before the text check existed is asked only the new question: its tags, which the owner has
+    already checked, stay exactly as they were"""
+    with tempfile.TemporaryDirectory() as tmp:
+        root, calls, text_calls = Path(tmp), [], []
+        make_media(root)
+        tag_run(root, calls)
+        path = root / "_tags.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for entry in data["files"].values():        # as Step 1 left them
+            for key in ("type", "shape", "group", "overlay", "overlay_seen", "text_version"):
+                entry.pop(key)
+            entry["subjects"] = ["checked", "by", "the owner"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        before = len(calls)
+        _, lines = tag_run(root, calls, text={**NO_TEXT, "logo": True}, text_calls=text_calls)
+        files = json.loads(path.read_text(encoding="utf-8"))["files"]
+        return (len(calls) == before and len(text_calls) == 4
+                and all(f["subjects"] == ["checked", "by", "the owner"] and f["overlay"] == ["logo"]
+                        and f["type"] and f["shape"] for f in files.values())
+                and any("3 of them only need the check for text and logos" in line for line in lines))
+
+
+@check
+def a_long_video_starts_after_its_rating_card():
+    """a video longer than 4 s is searched for where its own picture starts: frames with a rating card are passed
+    over, black frames are passed over without asking the model, and the first frame after them is the start"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "cover.mp4"
+        parts = "color=white:s=64x36:r=10:d=2[a];color=black:s=64x36:r=10:d=1.5[b];color=red:s=64x36:r=10:d=3[c];[a][b][c]concat=n=3"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", parts, "-pix_fmt", "yuv420p", str(video)],
+                       check=True)
+        asked = []
+
+        def look(at):
+            asked.append(at)
+            return {"overlay": ["rating card"] if at < 2 else [], "seen": []}
+        start = tag_media.picture_start(video, 6.5, look)
+        never = []
+        short = tag_media.picture_start(video, 1.5, never.append)
+        return start == 3.5 and asked == [0.0, 0.5, 1.0, 1.5, 3.5] and short == 0.0 and not never
 
 
 @check
@@ -229,6 +331,246 @@ def check_sheet_has_every_file_and_its_thumbnails():
                 and data["override"] == {PLACE: {"main_subject": "helicopter"}}
                 and data["media_root"] == str(root) and "/*DATA*/" not in page
                 and any("Check sheet:" in line for line in lines))
+
+
+# --- The picker ---
+
+SHOTS, WALLS = "GTAVI_Screenshots/Places/", "GTAVI_Artwork_Wallpapers/"
+AIRBOAT, GATOR = SHOTS + "Grassrivers/Grassrivers_01.jpg", SHOTS + "Grassrivers/Grassrivers_02.jpg"
+HELI, DEER = SHOTS + "Mount Kalaga National Park/Kalaga_01.jpg", SHOTS + "Mount Kalaga National Park/Kalaga_02.jpg"
+CITY_IN_KALAGA = SHOTS + "Mount Kalaga National Park/Kalaga_03.jpg"
+SKYLINE = SHOTS + "Vice City/Vice_City_01.jpg"
+JASON = "GTAVI_Screenshots/People/Jason Duval/Jason_Duval_01.jpg"
+JL = {shape: f"{WALLS}Jason_and_Lucia_01/Jason_and_Lucia_01_{shape}.jpg" for shape in ("phone", "landscape", "square")}
+JL_LOGO = WALLS + "Jason_and_Lucia_01_With_Logos/Jason_and_Lucia_01_With_Logos_landscape.jpg"
+EDITION = "GTAVI_Ultimate_Edition_Benefits/ULTIMATE_EDITION_01.jpg"
+RATED = "GTAVI_Ultimate_Edition_Benefits/ULTIMATE_EDITION_02.jpg"
+COVER, LOOP = "GTAVI_Videos/GTAVI_Official_Cover_Art_Landscape.mp4", "GTAVI_Videos/Jason_Duval_Video_Clip.mp4"
+
+
+def tagged(rel, main, subjects, setting=(), overlay=(), names=(), shape="landscape", **more):
+    """One made-up entry of the tags file, with what the tagger would save for that path."""
+    facts = tag_media.folder_facts(rel)
+    return {"kind": "video" if rel.endswith(".mp4") else "image", "folder": str(Path(rel).parent.as_posix()),
+            "region": facts["region"], "description": f"A picture of {main}.", "main_subject": main,
+            "subjects": list(subjects), "setting": list(setting), "time": "day", "people": [], "names": list(names),
+            "focus": [0.3, 0.6], "type": tag_media.media_type(rel), "shape": shape, "group": tag_media.group_of(rel),
+            "overlay": list(overlay), **more}
+
+
+def fake_tags():
+    tags = {AIRBOAT: tagged(AIRBOAT, "airboat", ["airboat", "man", "reeds"], ["swamp"]),
+            GATOR: tagged(GATOR, "alligator", ["alligator", "water", "trees"], ["swamp"]),
+            HELI: tagged(HELI, "helicopter", ["helicopter", "mountain", "clouds"], ["mountain", "forest"]),
+            DEER: tagged(DEER, "deer", ["deer", "trees", "water"], ["forest"]),
+            CITY_IN_KALAGA: tagged(CITY_IN_KALAGA, "city skyline", ["skyscrapers", "bridge", "cars"], ["city"]),
+            SKYLINE: tagged(SKYLINE, "city skyline", ["skyscrapers", "bridge", "river"], ["city"], time="night"),
+            JASON: tagged(JASON, "man with gun", ["man", "gun", "fence"], ["city"], names=["Jason"]),
+            JL_LOGO: tagged(JL_LOGO, "man and woman", ["man", "woman", "car"], ["city"], ["logo"], ["Jason", "Lucia"]),
+            EDITION: tagged(EDITION, "sports car", ["car", "garage"], ["interior"], ["big text"]),
+            RATED: tagged(RATED, "sports car", ["car", "label"], ["interior"], ["rating card"]),
+            COVER: tagged(COVER, "game logo", ["logo", "man", "woman"], [], ["logo"], start_s=7.0, length_s=32.7),
+            LOOP: tagged(LOOP, "man with bandana", ["man", "bandana", "store"], ["interior"], names=["Jason"],
+                         start_s=0.0, length_s=1.0)}
+    for shape, rel in JL.items():
+        tags[rel] = tagged(rel, "man and woman", ["man", "woman", "car"], ["city"], names=["Jason", "Lucia"], shape=shape)
+    return tags
+
+
+def shot_script(*shots, **top):
+    return {"title": "A test Short", "lines": [{"say": "One line.", "beats": list(shots)}], **top}
+
+
+def resolved(*shots, allow_weak=False, recent=None, **top):
+    """(the shots as explainer.py would get them, picks, problems, warnings)."""
+    out, picks, problems, warnings = picker.resolve_script(shot_script(*shots, **top), fake_tags(), recent,
+                                                          allow_weak=allow_weak)
+    return out["lines"][0]["beats"], picks, problems, warnings
+
+
+@check
+def picker_finds_a_picture_by_what_it_shows():
+    """a query finds the picture whose tags hold its words: "swamp airboat" in Grassrivers is the airboat, "gators"
+    (a plural and a nickname) is the alligator, and "boat" finds the airboat because it ends in boat"""
+    p = picker.Picker(fake_tags(), seed="x")
+    first = p.pick("swamp airboat", "Grassrivers")
+    second = p.pick("gators")
+    third = picker.Picker(fake_tags(), seed="x").pick("a boat in the swamp")
+    return (first["file"] == AIRBOAT and first["ok"] and second["file"] == GATOR and second["ok"]
+            and third["file"] == AIRBOAT and third["matched"] == ["boat", "swamp"])
+
+
+@check
+def a_query_becomes_a_file_explainer_can_render():
+    """in a script a shot with "query" comes back with the picked "file" under rockstar/, the tags' focus point, and
+    none of the picker's own settings, while a shot that names a file is left exactly as it was"""
+    named = {"beat": "card", "file": "rockstar/" + DEER, "label": "Look here"}
+    shots, picks, problems, warnings = resolved({"beat": "full", "query": "swamp airboat", "region": "Grassrivers"},
+                                                dict(named))
+    return (not problems and not warnings
+            and shots[0] == {"beat": "full", "file": "rockstar/" + AIRBOAT, "focus": [0.3, 0.6]}
+            and shots[1] == named and [p["picked"] for p in picks] == [True, False]
+            and picks[0]["query"] == "swamp airboat" and picks[1]["file"] == DEER)
+
+
+@check
+def picker_never_repeats_a_picture_in_one_short():
+    """two shots that ask for the same thing get two different pictures; a third finds none left and is refused; a
+    picture the script names by path is never picked again by a query; and the cuts of one wallpaper are one picture"""
+    shots, _, problems, _ = resolved({"beat": "full", "query": "swamp"}, {"beat": "full", "query": "swamp"},
+                                     {"beat": "full", "query": "swamp"})
+    files = [s.get("file") for s in shots]
+    named, _, named_problems, _ = resolved({"beat": "card", "file": "rockstar/" + AIRBOAT},
+                                           {"beat": "full", "query": "airboat"})
+    walls, _, wall_problems, _ = resolved({"beat": "full", "query": "Jason Lucia"}, {"beat": "card", "query": "Jason Lucia"})
+    return (set(files[:2]) == {"rockstar/" + AIRBOAT, "rockstar/" + GATOR} and "file" not in shots[2]
+            and len(problems) == 1 and "line 1, shot 3" in problems[0]
+            and len(named_problems) == 1 and "airboat" in named_problems[0] and "file" not in named[1]
+            and walls[0]["file"] == "rockstar/" + JL["phone"] and len(wall_problems) == 1 and "file" not in walls[1])
+
+
+@check
+def a_poor_match_is_refused_and_names_the_closest():
+    """when nothing shows what the query asks for, the Short stops with a problem that says what is missing and names
+    the closest picture; with allow_weak that picture is used, and a WEAK MATCH warning says so; never silently"""
+    shots, _, problems, warnings = resolved({"beat": "full", "query": "airboat spaceship"})
+    used, picks, no_problems, warned = resolved({"beat": "full", "query": "airboat spaceship"}, allow_weak=True)
+    half = picker.Picker(fake_tags()).pick("picture deer")    # "picture" is only in the description
+    return ("file" not in shots[0] and not warnings and len(problems) == 1
+            and "nothing shows spaceship" in problems[0] and "Grassrivers_01.jpg" in problems[0]
+            and used[0]["file"] == "rockstar/" + AIRBOAT and not no_problems
+            and len(warned) == 1 and "WEAK MATCH" in warned[0] and picks[0]["weak"] is True
+            and half["ok"] is False and "only in its description" in half["why"])
+
+
+@check
+def pictures_of_the_last_five_shorts_are_avoided():
+    """a picture used in one of the last 5 Shorts is passed over while another good match exists; when every good
+    match was used lately, one is still picked and a warning says how long ago it was used"""
+    fresh, _, _, quiet = resolved({"beat": "full", "query": "swamp"}, recent={AIRBOAT: 1})
+    both, _, problems, noted = resolved({"beat": "full", "query": "swamp"}, recent={AIRBOAT: 2, GATOR: 4})
+    cut, _, _, cut_notes = resolved({"beat": "full", "query": "Jason Lucia"}, recent={JL["square"]: 3})
+    return (fresh[0]["file"] == "rockstar/" + GATOR and not quiet
+            and both[0]["file"] in ("rockstar/" + AIRBOAT, "rockstar/" + GATOR) and not problems
+            and len(noted) == 1 and "Short(s) ago" in noted[0]
+            and cut[0]["file"] == "rockstar/" + JL["phone"] and "3 Short(s) ago" in cut_notes[0])
+
+
+@check
+def used_media_log_keeps_each_short_once():
+    """the used-media log records each Short's pictures; making a Short again replaces its entry; only the last 5
+    other Shorts count as recent, and the Short being made now is left out"""
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Path(tmp) / "shorts" / "_used_media.json"
+        empty = picker.load_used(log)
+        for n in range(1, 8):
+            picker.save_used(f"short-{n}", [f"pic_{n}.jpg", "always.jpg"], log)
+        picker.save_used("short-7", ["pic_7b.jpg"], log)
+        used = picker.load_used(log)
+        recent = picker.recent_files(used)
+        mine = picker.recent_files(used, name="short-7")
+        return (empty == [] and [s["name"] for s in used] == [f"short-{n}" for n in range(1, 8)]
+                and used[-1]["files"] == ["pic_7b.jpg"]
+                and recent == {"pic_7b.jpg": 1, "pic_6.jpg": 2, "always.jpg": 2, "pic_5.jpg": 3, "pic_4.jpg": 4,
+                               "pic_3.jpg": 5}
+                and "pic_7b.jpg" not in mine and mine["pic_6.jpg"] == 1 and mine["pic_2.jpg"] == 5
+                and "pic_1.jpg" not in mine)
+
+
+@check
+def text_logos_and_rating_cards_stay_out():
+    """a picture with big text or a logo is never picked unless the shot says "text_ok": true; with it the edition
+    picture can be picked; a picture with an age-rating card is never picked, even then"""
+    plain, _, problems, _ = resolved({"beat": "card", "query": "sports car"})
+    asked, _, asked_problems, _ = resolved({"beat": "card", "query": "sports car", "text_ok": True},
+                                           {"beat": "card", "query": "sports car", "text_ok": True})
+    logo, _, _, _ = resolved({"beat": "compare", "top": {"query": "Jason Lucia", "label": "Then"},
+                              "bottom": {"file": "rockstar/" + DEER, "label": "Now"}})
+    return ("file" not in plain[0] and len(problems) == 1
+            and asked[0]["file"] == "rockstar/" + EDITION and "text_ok" not in asked[0]
+            and "file" not in asked[1] and len(asked_problems) == 1
+            and logo[0]["top"]["file"] == "rockstar/" + JL["landscape"])
+
+
+@check
+def a_full_screen_shot_prefers_a_phone_shaped_picture():
+    """among equal matches a full-screen shot takes the phone-shaped cut, a square card the square cut and a
+    compare's 16:9 card the landscape cut; shape never beats a better match"""
+    full, _, _, _ = resolved({"beat": "full", "query": "Jason Lucia"})
+    banner, _, _, _ = resolved({"beat": "banner", "text": "The catch", "query": "Jason Lucia"})
+    card, _, _, _ = resolved({"beat": "card", "query": "Jason Lucia"})
+    wide, _, _, _ = resolved({"beat": "compare", "top": {"query": "Jason Lucia"}, "bottom": {"file": "rockstar/" + DEER}})
+    better, _, _, _ = resolved({"beat": "full", "query": "Jason gun"})
+    return (full[0]["file"] == banner[0]["file"] == "rockstar/" + JL["phone"]
+            and card[0]["file"] == "rockstar/" + JL["square"] and wide[0]["top"]["file"] == "rockstar/" + JL["landscape"]
+            and better[0]["file"] == "rockstar/" + JASON)
+
+
+@check
+def a_video_is_picked_only_when_asked_and_starts_after_its_rating_card():
+    """a query picks pictures only, unless the shot says "media": "video"; the cover art video then starts at the
+    second its own picture begins (after the age-rating card), and a short loop starts at 0 with no "at\""""
+    still, _, _, _ = resolved({"beat": "full", "query": "man bandana store"}, allow_weak=True)
+    loop, _, problems, _ = resolved({"beat": "full", "query": "man bandana store", "media": "video"})
+    cover, _, cover_problems, _ = resolved({"beat": "full", "query": "game logo", "media": "video", "text_ok": True})
+    bad, _, bad_problems, _ = resolved({"beat": "full", "query": "man", "media": "film"})
+    return (not still[0]["file"].endswith(".mp4")
+            and loop[0] == {"beat": "full", "file": "rockstar/" + LOOP, "focus": [0.3, 0.6]} and not problems
+            and cover[0]["file"] == "rockstar/" + COVER and cover[0]["at"] == "7.0" and not cover_problems
+            and len(bad_problems) == 1 and "media is image, video or any" in bad_problems[0])
+
+
+@check
+def a_region_label_needs_a_picture_from_that_region():
+    """a label that names a region is allowed on a picture from that region's folder (the folder is trusted, so the
+    helicopter over the mountain passes), and refused on a picture from another region, on one from no region folder,
+    and on one whose subjects clearly contradict it (a city skyline in the Mount Kalaga folder); other labels are free"""
+    def problems_for(rel, label, beat="card"):
+        shot = {"beat": beat, "file": "rockstar/" + rel, "label": label}
+        if beat == "banner":
+            shot = {"beat": beat, "file": "rockstar/" + rel, "text": label}
+        return resolved(shot)[2]
+    wrong = problems_for(SKYLINE, "MOUNT KALAGA")
+    city = problems_for(CITY_IN_KALAGA, {"text": "Mount Kalaga | hunting", "style": "info"})
+    person = problems_for(JASON, "Vice City", beat="banner")
+    untagged = problems_for("GTAVI_Screenshots/Places/Vice City/Not_Tagged.jpg", "Vice City")
+    return (problems_for(HELI, "MOUNT KALAGA") == [] and problems_for(DEER, "Mount Kalaga National Park") == []
+            and problems_for(SKYLINE, "Vice City") == [] and problems_for(SKYLINE, "Look here") == []
+            and len(wrong) == 1 and "is from Vice City" in wrong[0]
+            and len(city) == 1 and "mainly shows city skyline" in city[0]
+            and len(person) == 1 and "not from a region folder" in person[0]
+            and len(untagged) == 1 and "has no tags" in untagged[0])
+
+
+@check
+def a_region_label_steers_the_pick_and_an_override_can_move_a_picture():
+    """a query under a region label is answered only from that region's folder, in a compare too; and a "region"
+    fix in the override file lets the owner put a picture in a region, or take it out"""
+    shots, _, problems, _ = resolved({"beat": "card", "query": "trees", "label": "Mount Kalaga"},
+                                     {"beat": "compare", "top": {"query": "swamp", "label": "Grassrivers"},
+                                      "bottom": {"query": "skyscrapers", "label": "Vice City"}})
+    nothing = resolved({"beat": "card", "query": "airboat", "label": "Vice City"})[2]
+    tags = fake_tags()
+    moved = picker.region_label_problem("Vice City", JASON, {**tags[JASON], "region": "Vice City"}, picker.load_regions())
+    taken_out = picker.region_label_problem("MOUNT KALAGA", HELI, {**tags[HELI], "region": None}, picker.load_regions())
+    return (not problems and shots[0]["file"] == "rockstar/" + DEER
+            and shots[1]["top"]["file"] in ("rockstar/" + AIRBOAT, "rockstar/" + GATOR)
+            and shots[1]["bottom"]["file"] == "rockstar/" + SKYLINE
+            and len(nothing) == 1 and "in Vice City" in nothing[0]
+            and moved is None and taken_out and "not from a region folder" in taken_out)
+
+
+@check
+def picker_refuses_what_it_cant_do():
+    """a lock-on with a query (its box needs a known picture), a shot with both a file and a query, and a region that
+    doesn't exist are each a problem that says what to change; a text card's "bg" can be a query"""
+    lock = resolved({"beat": "lockon", "query": "helicopter", "box": [1, 2, 30, 40]})[2]
+    both = resolved({"beat": "full", "file": "rockstar/" + DEER, "query": "deer"})[2]
+    region = resolved({"beat": "full", "query": "deer", "region": "Los Santos"})[2]
+    shots, picks, problems, _ = resolved({"beat": "count", "card": "6 REGIONS", "bg": {"query": "city skyline"}})
+    return (len(lock) == 1 and "needs a file" in lock[0] and len(both) == 1 and "one of the two" in both[0]
+            and len(region) == 1 and "Los Santos" in region[0] and "Grassrivers" in region[0]
+            and not problems and shots[0]["bg"] == "rockstar/" + SKYLINE and picks[0]["side"] == "behind")
 
 
 def main():

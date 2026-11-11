@@ -43,7 +43,15 @@ import vlm
 
 HERE = Path(__file__).resolve().parent
 MEDIA_ROOT = Path(r"C:\AI\gta\rockstar")
-FOLDERS = ("GTAVI_Screenshots", "GTAVI_Videos")     # what gets tagged, inside MEDIA_ROOT
+FOLDERS = ("GTAVI_Screenshots", "GTAVI_Videos", "GTAVI_Artwork_Wallpapers", "GTAVI_Ultimate_Edition_Benefits",
+           "GTAVI_Vintage_Vice_City_Pack")           # what gets tagged, inside MEDIA_ROOT
+# A file's type comes from its top folder. Cover art (the box art and the album's) is "key art" wherever it is.
+TYPES = ("screenshot", "wallpaper", "edition", "key art", "video loop")
+TOP_FOLDER_TYPES = {"GTAVI_Screenshots": "screenshot", "GTAVI_Videos": "video loop",
+                    "GTAVI_Artwork_Wallpapers": "wallpaper", "GTAVI_Ultimate_Edition_Benefits": "edition",
+                    "GTAVI_Vintage_Vice_City_Pack": "edition"}
+SHAPES = ("phone", "portrait", "square", "landscape", "ultrawide")
+OVERLAYS = ("big text", "logo", "rating card")       # what can be printed on top of a picture
 TAGS_NAME, OVERRIDE_NAME, CHECK_DIR_NAME = "_tags.json", "_tags_override.json", "_tag_check"
 PAGE_TEMPLATE = HERE / "tag_check_page.html"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -56,6 +64,9 @@ VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
 # 8b takes about 7 s a frame against 4.5 s, and a little of it runs on the CPU with 8 GB of video memory.
 MODEL = "qwen3-vl:8b-instruct"
 PROMPT_VERSION = 1        # saved with every tag; raise it when PROMPT or SCHEMA changes
+TEXT_VERSION = 1          # the same for TEXT_PROMPT, the second question (is anything printed on top of the picture?)
+SCAN_MIN_S, SCAN_STEP_S, SCAN_LIMIT_S = 4.0, 0.5, 20.0   # a video longer than this is searched for where its picture starts
+BLACK_FILTER = "blackframe=amount=97:threshold=40"       # a frame this dark is a gap between cards, not a picture
 SEND_LONG_SIDE = 1280     # the picture is shrunk to this before the model sees it (a 3840x2160 shot becomes 1280x720)
 THUMB_WIDTH = 480         # the check sheet's thumbnails
 OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 400}
@@ -92,17 +103,33 @@ SCHEMA = {"type": "object",
                          "focus_y": {"type": "integer"}},
           "required": ["description", "main_subject", "subjects", "setting", "time", "people", "focus_x", "focus_y"]}
 
+TEXT_PROMPT = """Look at this picture from the video game GTA 6. I need to know if words or logos were added on top of it.
+
+Answer in JSON with these fields:
+- words_seen: the large words or logos you can read, 5 at most. An empty list if there are none.
+- big_text: true if large words are printed over the picture, such as a title, a place name, a date, a slogan, a price or a caption. Signs, shop names, number plates and clothing that are part of the scene do not count.
+- logo: true if there is a game or company logo on it, such as "Grand Theft Auto", a large "VI", the Rockstar Games "R" badge, PlayStation or Xbox.
+- rating_card: true if there is an age-rating label, such as ESRB, PEGI, "Rating Pending", "Mature 17+" or "May contain content inappropriate for children"."""
+
+TEXT_SCHEMA = {"type": "object",
+               "properties": {"words_seen": {"type": "array", "items": {"type": "string"}},
+                              "big_text": {"type": "boolean"}, "logo": {"type": "boolean"},
+                              "rating_card": {"type": "boolean"}},
+               "required": ["words_seen", "big_text", "logo", "rating_card"]}
+
 # Who each character folder (and video file name) is about, and which kind of person the model must see to keep the name.
 CHARACTERS = {"jason duval": [("Jason", "man")],
               "lucia caminos": [("Lucia", "woman")],
               "jason and lucia": [("Jason", "man"), ("Lucia", "woman")],
+              "jason lucia": [("Jason", "man"), ("Lucia", "woman")],
               "boobie ike": [("Boobie Ike", "man")],
               "brian heder": [("Brian Heder", "man")],
               "cal hampton": [("Cal Hampton", "man")],
               "drequan priest": [("DreQuan Priest", "man")],
               "raul bautista": [("Raul Bautista", "man")],
               "real dimez": [("Real Dimez", "woman")]}
-FIELDS = ("description", "main_subject", "subjects", "setting", "time", "people", "names", "focus", "region")
+FIELDS = ("description", "main_subject", "subjects", "setting", "time", "people", "names", "focus", "region",
+          "type", "overlay", "start_s")
 
 
 class TagError(Exception):
@@ -127,15 +154,45 @@ def media_files(root=MEDIA_ROOT, folders=FOLDERS):
 def folder_facts(rel):
     """What the path alone says: {"region": "Grassrivers" or None, "character": "jason duval" or None}."""
     parts = Path(rel).parts
-    region = character = None
-    if "Places" in parts[:-2]:                      # .../Places/<region>/<file>
-        region = parts[parts.index("Places") + 1]
-    if "People" in parts[:-2]:                      # .../People/<character>/<file>
-        character = parts[parts.index("People") + 1].lower()
-    if character is None:
-        stem = Path(rel).stem.lower().replace("_", " ")
-        character = next((name for name in sorted(CHARACTERS, key=len, reverse=True) if stem.startswith(name)), None)
-    return {"region": region, "character": character if character in CHARACTERS else None}
+    region = None
+    for marker in ("Places", "Postcards"):          # .../Places/<region>/<file>, .../Postcards/<region>/<file>
+        if marker in parts[:-2]:
+            region = parts[parts.index(marker) + 1].replace("_", " ")
+    # The character is in the folder's name ("People/Jason Duval", "Boobie_Ike") or the file's ("Jason_Duval_Video_Clip").
+    plain = [name.lower().replace("_", " ") for name in (*parts[:-1][::-1], Path(rel).stem)]
+    known = sorted(CHARACTERS, key=len, reverse=True)
+    character = next((who for name in plain for who in known if name.startswith(who)), None)
+    return {"region": region, "character": character}
+
+
+def media_type(rel):
+    """screenshot, wallpaper, edition, key art or video loop, from where the file is."""
+    kind = TOP_FOLDER_TYPES.get(Path(rel).parts[0], "screenshot")
+    return "key art" if "cover_art" in rel.lower() else kind
+
+
+def shape_of(width, height):
+    """phone (taller than 9:16), portrait, square, landscape or ultrawide."""
+    ratio = width / height
+    if ratio >= 2.2:
+        return "ultrawide"
+    if ratio > 1.15:
+        return "landscape"
+    if ratio >= 0.87:
+        return "square"
+    return "portrait" if ratio > 0.5 else "phone"
+
+
+def group_of(rel):
+    """Files that are the same picture cut to different shapes share a group: a wallpaper's folder, with or without
+    logos. Every other file is its own group."""
+    if Path(rel).parts[0] != "GTAVI_Artwork_Wallpapers":
+        return rel
+    folder = Path(rel).parent.as_posix()
+    for ending in ("_With_Logos", "_With_Logo"):
+        if folder.endswith(ending):
+            folder = folder[:-len(ending)]
+    return folder
 
 
 def names_for(character, people):
@@ -169,14 +226,6 @@ def grab_frame(path, out, long_side, at=None):
 
 # --- The model ---
 
-def build_request(model, image_b64, capabilities):
-    body = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE, "format": SCHEMA,
-            "messages": [{"role": "user", "content": PROMPT, "images": [image_b64]}], "options": dict(OPTIONS)}
-    if "thinking" in capabilities:
-        body["think"] = False
-    return body
-
-
 def clean_words(values, limit=None):
     """A list of short lowercase tags, in order, without repeats or empty ones."""
     seen, out = set(), []
@@ -188,14 +237,19 @@ def clean_words(values, limit=None):
     return out[:limit] if limit else out
 
 
-def parse_answer(content):
-    """The model's reply as clean tags; ValueError if it can't be used."""
+def read_reply(content):
     try:
         a = json.loads(content)
     except json.JSONDecodeError as e:
         raise ValueError(f"reply is not JSON ({e})") from None
     if not isinstance(a, dict):
         raise ValueError("reply is not a JSON object")
+    return a
+
+
+def parse_answer(content):
+    """The model's reply to PROMPT as clean tags; ValueError if it can't be used."""
+    a = read_reply(content)
     description = " ".join(str(a.get("description", "")).split())
     subjects = clean_words(a.get("subjects"), MAX_SUBJECTS)
     if not description or not subjects:
@@ -213,16 +267,42 @@ def parse_answer(content):
             "time": time_of_day, "people": [p for p in clean_words(a.get("people")) if p in PEOPLE], "focus": focus}
 
 
-def ask_model(model, jpeg, capabilities, http=vlm.http_json):
-    """The tags of one frame. One more try with another seed if the reply can't be used. (tags, seconds)."""
+def parse_text(content):
+    """The model's reply to TEXT_PROMPT: {"overlay": the kinds of thing printed on the picture, "seen": its words}."""
+    a = read_reply(content)
+    keys = {"big_text": "big text", "logo": "logo", "rating_card": "rating card"}
+    if not all(isinstance(a.get(key), bool) for key in keys):
+        raise ValueError("big_text, logo and rating_card must each be true or false")
+    seen = [" ".join(str(w).split()) for w in a.get("words_seen", []) if str(w).strip()][:5] \
+        if isinstance(a.get("words_seen"), list) else []
+    return {"overlay": [name for key, name in keys.items() if a[key]], "seen": seen}
+
+
+# The two questions asked about a frame: its prompt, the answer's shape, how the answer is read, and its longest length.
+QUESTIONS = {"tags": (PROMPT, SCHEMA, parse_answer, 400), "text": (TEXT_PROMPT, TEXT_SCHEMA, parse_text, 150)}
+
+
+def build_request(model, image_b64, capabilities, what="tags"):
+    prompt, schema, _, longest = QUESTIONS[what]
+    body = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE, "format": schema,
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "options": {**OPTIONS, "num_predict": longest}}
+    if "thinking" in capabilities:
+        body["think"] = False
+    return body
+
+
+def ask_model(model, jpeg, capabilities, what="tags", http=vlm.http_json):
+    """One question about one frame: "tags" (what it shows) or "text" (what is printed on it). One more try with
+    another seed if the reply can't be used. (answer, seconds)."""
     image = base64.b64encode(Path(jpeg).read_bytes()).decode("ascii")
-    body = build_request(model, image, capabilities)
+    body = build_request(model, image, capabilities, what)
     started, problem = time.perf_counter(), None
     for attempt in range(2):
         body["options"]["seed"] = OPTIONS["seed"] + attempt
         try:
             reply = http(vlm.OLLAMA_URL + "/api/chat", body, timeout=CALL_TIMEOUT)
-            return parse_answer(reply.get("message", {}).get("content", "")), time.perf_counter() - started
+            return QUESTIONS[what][2](reply.get("message", {}).get("content", "")), time.perf_counter() - started
         except ValueError as e:
             problem = str(e)
         except (urllib.error.URLError, OSError) as e:
@@ -230,34 +310,90 @@ def ask_model(model, jpeg, capabilities, http=vlm.http_json):
     raise ValueError(problem)
 
 
-def tag_file(rel, root, model, capabilities, work, long_side=SEND_LONG_SIDE, ask=ask_model):
-    """The whole entry for one file. A video gets the tags of its first and middle frame, joined."""
+def black_times(path, limit=SCAN_LIMIT_S, step=SCAN_STEP_S):
+    """The moments, step apart in the first limit seconds of a video, whose frame is almost all black."""
+    done = subprocess.run(["ffmpeg", "-v", "info", "-t", f"{limit:g}", "-i", str(path), "-vf",
+                           f"fps={1 / step:g},{BLACK_FILTER}", "-an", "-f", "null", "-"],
+                          capture_output=True, text=True, errors="replace")
+    times = set()
+    for line in done.stderr.splitlines():
+        if "blackframe" in line and " t:" in line:
+            try:
+                times.add(round(float(line.split(" t:")[1].split()[0]), 1))
+            except (ValueError, IndexError):
+                pass
+    return times
+
+
+def picture_start(path, seconds, look):
+    """Where a long video's own picture starts: after an age-rating card, and after the black frames around it.
+    look(at) answers the "text" question about the frame at that moment. 0 for a short loop, which has no such card."""
+    if seconds <= SCAN_MIN_S:
+        return 0.0
+    black = black_times(path)
+    limit = min(SCAN_LIMIT_S, seconds - SCAN_STEP_S)
+    at = 0.0
+    while at <= limit:
+        if round(at, 1) not in black and "rating card" not in look(at)["overlay"]:
+            return round(at, 2)
+        at += SCAN_STEP_S
+    return 0.0
+
+
+def tag_file(rel, root, model, capabilities, work, long_side=SEND_LONG_SIDE, ask=ask_model, old=None):
+    """The whole entry for one file. A video gets the tags of the first frame of its own picture and of the frame
+    half way from there to its end, joined. old is the entry the file has when only what is printed on it is still
+    to be asked: its tags are kept as they are."""
     path = Path(root) / rel
     width, height, seconds = probe_media(path)
     facts = folder_facts(rel)
     is_video = path.suffix.lower() in VIDEO_EXTS
-    moments = [0.0, round(seconds / 2, 2)] if is_video else [None]
-    frames, spent = [], 0.0
-    for n, at in enumerate(moments):
-        jpeg = Path(work) / f"frame_{n}.jpg"
-        grab_frame(path, jpeg, long_side, at)
-        tags, took = ask(model, jpeg, capabilities)
-        spent += took
-        frames.append({**({"at_s": at} if is_video else {}), **tags})
-    first = frames[0]
-    entry = {"kind": "video" if is_video else "image", "size": [width, height],
-             "folder": Path(rel).parent.as_posix(), "region": facts["region"],
-             "description": first["description"], "main_subject": first["main_subject"],
-             "subjects": clean_words([s for f in frames for s in f["subjects"]], MAX_SUBJECTS + 4 if is_video else MAX_SUBJECTS),
-             "setting": clean_words([s for f in frames for s in f["setting"]]),
-             "time": first["time"], "people": clean_words([p for f in frames for p in f["people"]]),
-             "focus": first["focus"]}
-    entry["names"] = names_for(facts["character"], entry["people"])
+    spent, grabbed = [0.0], {}
+
+    def look(at, what):
+        if at not in grabbed:
+            grabbed[at] = Path(work) / f"frame_{len(grabbed)}.jpg"
+            grab_frame(path, grabbed[at], long_side, at)
+        answer, took = ask(model, grabbed[at], capabilities, what)
+        spent[0] += took
+        return answer
+
+    if old is not None:
+        entry = dict(old)
+        frames = [dict(f) for f in old.get("frames", [])] or [None]
+    else:
+        start = picture_start(path, seconds, lambda at: look(at, "text")) if is_video else 0.0
+        moments = [start, round(start + (seconds - start) / 2, 2)] if is_video else [None]
+        frames = [{**({"at_s": at} if is_video else {}), **look(at, "tags")} for at in moments]
+        first = frames[0]
+        entry = {"kind": "video" if is_video else "image", "size": [width, height],
+                 "folder": Path(rel).parent.as_posix(), "region": facts["region"],
+                 "description": first["description"], "main_subject": first["main_subject"],
+                 "subjects": clean_words([s for f in frames for s in f["subjects"]],
+                                         MAX_SUBJECTS + 4 if is_video else MAX_SUBJECTS),
+                 "setting": clean_words([s for f in frames for s in f["setting"]]),
+                 "time": first["time"], "people": clean_words([p for f in frames for p in f["people"]]),
+                 "focus": first["focus"]}
+        entry["names"] = names_for(facts["character"], entry["people"])
+        if is_video:
+            entry.update(length_s=round(seconds, 2), start_s=start)
+        entry.update(model=model, prompt_version=PROMPT_VERSION, tagged=date.today().isoformat(),
+                     file_bytes=path.stat().st_size)
+    overlay, seen = [], []
+    for frame in frames:
+        text = look(frame.get("at_s") if frame else None, "text")
+        overlay += text["overlay"]
+        seen += text["seen"]
+        if frame:
+            frame["overlay"] = text["overlay"]
+    if "_with_logo" in rel.lower():
+        overlay.append("logo")                       # the folder says so, whatever the model saw
     if is_video:
-        entry["length_s"] = round(seconds, 2)
         entry["frames"] = frames
-    entry.update(model=model, prompt_version=PROMPT_VERSION, tagged=date.today().isoformat(),
-                 file_bytes=path.stat().st_size, seconds=round(spent, 1))
+        entry.setdefault("start_s", 0.0)
+    entry.update(type=media_type(rel), shape=shape_of(width, height), group=group_of(rel),
+                 overlay=[o for o in OVERLAYS if o in overlay], overlay_seen=clean_words(seen, 6),
+                 text_version=TEXT_VERSION, seconds=round(entry.get("seconds", 0.0) * (old is not None) + spent[0], 1))
     return entry
 
 
@@ -306,6 +442,19 @@ def clean_override(rel, fix):
             if value is not None and not isinstance(value, str):
                 raise TagError(f"override for {rel}: region is a name such as Grassrivers, or null")
             out[key] = value
+        elif key == "overlay":
+            if not isinstance(value, list) or not all(v in OVERLAYS for v in value):
+                raise TagError(f"override for {rel}: overlay lists what is printed on the picture, any of "
+                               f"{', '.join(OVERLAYS)}; an empty list for nothing")
+            out[key] = [o for o in OVERLAYS if o in value]
+        elif key == "type":
+            if value not in TYPES:
+                raise TagError(f"override for {rel}: type is one of {', '.join(TYPES)}")
+            out[key] = value
+        elif key == "start_s":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+                raise TagError(f"override for {rel}: start_s is the second a video's own picture starts at")
+            out[key] = round(float(value), 2)
         else:
             if not isinstance(value, str) or not value.strip():
                 raise TagError(f"override for {rel}: {key} is text")
@@ -331,16 +480,22 @@ def load_tags(root=MEDIA_ROOT, tags_path=None):
 
 
 def needs_tagging(rel, files, root, force):
+    """What a file still needs: "all" (both questions), "text" (only what is printed on it; its tags are kept), or
+    None. A file that was replaced by another starts again."""
     entry = files.get(rel)
-    if force or entry is None:
-        return True
-    return entry.get("file_bytes") != (Path(root) / rel).stat().st_size      # the file was replaced
+    if force or entry is None or entry.get("file_bytes") != (Path(root) / rel).stat().st_size:
+        return "all"
+    if entry.get("text_version") != TEXT_VERSION:
+        # A long video is also searched for where its picture starts, so it is tagged again from that frame.
+        return "all" if entry["kind"] == "video" and entry.get("length_s", 0) > SCAN_MIN_S else "text"
+    return None
 
 
 # --- The check sheet ---
 
-def thumb_name(rel, n=0):
-    return hashlib.sha1(rel.encode("utf-8")).hexdigest()[:12] + (f"_{n}" if n else "") + ".jpg"
+def thumb_name(rel, at=None):
+    """A thumbnail's file name. A video frame's name holds its moment, so a frame from another moment is made anew."""
+    return hashlib.sha1(rel.encode("utf-8")).hexdigest()[:12] + (f"_{round(at * 100):05d}" if at is not None else "") + ".jpg"
 
 
 def build_sheet(root=MEDIA_ROOT, tags_path=None, log=print):
@@ -358,8 +513,8 @@ def build_sheet(root=MEDIA_ROOT, tags_path=None, log=print):
         entry = tags[rel]
         moments = [f.get("at_s", 0.0) for f in entry.get("frames", [{}])] if entry["kind"] == "video" else [None]
         names = []
-        for n, at in enumerate(moments):
-            name = thumb_name(rel, n)
+        for at in moments:
+            name = thumb_name(rel, at)
             if not (thumbs / name).is_file() and (root / rel).is_file():
                 grab_frame(root / rel, thumbs / name, THUMB_WIDTH, at)
                 made += 1
@@ -367,10 +522,16 @@ def build_sheet(root=MEDIA_ROOT, tags_path=None, log=print):
         # The page shows the model's tags with the owner's fixes on top, and can tell the two apart.
         items.append({"path": rel, "thumbs": names, "model": {k: entry.get(k) for k in FIELDS},
                       "kind": entry["kind"], "folder": entry["folder"], "size": entry["size"],
+                      "shape": entry.get("shape"), "seen": entry.get("overlay_seen", []),
                       "frames": [{"at_s": f.get("at_s")} for f in entry.get("frames", [])]})
+    used = {name.split("/")[-1] for item in items for name in item["thumbs"]}
+    for old in thumbs.glob("*.jpg"):
+        if old.name not in used:
+            old.unlink()                             # a thumbnail of a frame or file that is no longer on the sheet
     page = PAGE_TEMPLATE.read_text(encoding="utf-8")
     payload = {"items": items, "override": override_file.get("files", {}), "model": data.get("model"),
                "made": date.today().isoformat(), "settings": list(SETTINGS), "times": list(TIMES),
+               "types": list(TYPES), "overlays": list(OVERLAYS),
                "media_root": str(root), "override_name": OVERRIDE_NAME}
     page = page.replace("/*DATA*/null", json.dumps(payload, ensure_ascii=False).replace("</", "<\\/"))
     out = check_dir / "index.html"
@@ -396,8 +557,11 @@ def run(args, log=print, ask=ask_model, ollama=vlm):
                        + (f" matching {args.only}" if args.only else ""))
     data = read_json(tags_path, "the tags file")
     files = data.setdefault("files", {})
-    todo = [rel for rel in wanted if needs_tagging(rel, files, root, args.force)]
-    log(f"{len(wanted)} files, {len(wanted) - len(todo)} already tagged, {len(todo)} to tag with {args.model}")
+    needs = {rel: needs_tagging(rel, files, root, args.force) for rel in wanted}
+    todo = [rel for rel in wanted if needs[rel]]
+    only_text = sum(1 for rel in todo if needs[rel] == "text")
+    log(f"{len(wanted)} files, {len(wanted) - len(todo)} already tagged, {len(todo)} to tag with {args.model}"
+        + (f" ({only_text} of them only need the check for text and logos)" if only_text else ""))
     failed = []
     if todo:
         try:
@@ -408,7 +572,8 @@ def run(args, log=print, ask=ask_model, ollama=vlm):
         with tempfile.TemporaryDirectory(prefix="tag_") as work:
             for n, rel in enumerate(todo, 1):
                 try:
-                    entry = tag_file(rel, root, args.model, info["capabilities"], work, args.long_side, ask)
+                    entry = tag_file(rel, root, args.model, info["capabilities"], work, args.long_side, ask,
+                                     files[rel] if needs[rel] == "text" else None)
                 except ValueError as e:
                     failed.append(rel)
                     log(f"[{n:3}/{len(todo)}] {rel}: NOT TAGGED, the model's answer couldn't be used ({e})")
@@ -416,7 +581,8 @@ def run(args, log=print, ask=ask_model, ollama=vlm):
                 files[rel] = entry
                 data.update(model=args.model, prompt_version=PROMPT_VERSION)
                 write_json(tags_path, data)
-                log(f"[{n:3}/{len(todo)}] {rel}  {entry['seconds']:.1f} s  {entry['main_subject']}: "
+                log(f"[{n:3}/{len(todo)}] {rel}  {entry['seconds']:.1f} s  {entry['type']}, {entry['shape']}, "
+                    f"on it: {', '.join(entry['overlay']) or 'nothing'}  |  {entry['main_subject']}: "
                     f"{', '.join(entry['subjects'])}")
         memory = ollama.model_memory(args.model)
         if memory and memory.get("size_bytes"):
@@ -439,7 +605,7 @@ def run(args, log=print, ask=ask_model, ollama=vlm):
 
 
 def main():
-    sys.stdout.reconfigure(errors="replace")
+    sys.stdout.reconfigure(errors="replace", line_buffering=True)    # each file's line shows as soon as it is tagged
     parser = argparse.ArgumentParser(description="Tag the GTA 6 pictures and video loops by what they show.")
     parser.add_argument("--root", type=Path, default=MEDIA_ROOT, help="the media folder (default C:\\AI\\gta\\rockstar)")
     parser.add_argument("--model", default=MODEL, help=f"the Ollama vision model (default {MODEL})")

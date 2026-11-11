@@ -49,6 +49,9 @@
   .row b { color: var(--soft); font-weight: 600; margin-right: 4px; }
   .chip { display: inline-block; background: var(--chip); border-radius: 20px; padding: 1px 9px; margin: 2px 3px 2px 0; }
   .chip.top { outline: 2px solid var(--accent); }
+  .chip.warn { background: var(--fixed-line); color: #201800; font-weight: 600; }
+  form label.tick { display: inline; margin-right: 10px; }
+  form label.tick input { width: auto; }
   .tools { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
   .tools span { color: var(--soft); font-size: 13px; }
   form { display: none; margin-top: 8px; }
@@ -66,7 +69,8 @@
     <b>What this is.</b> The computer looked at every picture and wrote down what it saw. A Short will pick its pictures
     from these words, so they need to match the picture.
     <ol>
-      <li>Look at a picture and read its tags. The <b>first tag</b> (outlined) is the main subject. The <b>red dot</b> is where the camera will aim.</li>
+      <li>Look at a picture and read its tags. The <b>first tag</b> (outlined) is the main subject. The <b>red dot</b> is where the camera will aim.
+        <b>Printed on it</b> says if the picture has big text, a logo or an age-rating card: such a picture is kept out of a Short unless a beat asks for it.</li>
       <li>If the tags or the dot are wrong, press <b>Fix this</b>, correct the words, and click on the picture to move the dot. Press <b>Keep fix</b>.</li>
       <li>When you are done, press <b>Save my fixes</b> at the top. A file named <code id="oname"></code> downloads.</li>
       <li>Move that file into <code id="oroot"></code> (say yes if Windows asks to replace the old one).</li>
@@ -112,7 +116,9 @@ function cardHtml(item) {
   const main = [t.main_subject, ...(t.subjects || []).filter((s) => s !== t.main_subject)];
   return `<div class="pics">${pics}</div><div class="body">
     <div class="name">${esc(item.path.split("/").pop())}</div>
-    <div class="where">${esc(item.folder)}${t.region ? " · region: " + esc(t.region) : ""}${item.kind === "video" ? " · video loop" : ""}</div>
+    <div class="where">${esc(item.folder)}${t.region ? " · region: " + esc(t.region) : ""}</div>
+    <div class="row"><b>Type</b><span class="chip">${esc(t.type || "?")}</span><span class="chip">${esc(item.shape || "?")}</span>${item.kind === "video" ? `<span class="chip">video, starts at ${t.start_s || 0} s</span>` : ""}
+      <b>&nbsp;Printed on it</b>${(t.overlay || []).map((w) => `<span class="chip warn">${esc(w)}</span>`).join("") || "<span class='hint'>nothing</span>"}${item.seen.length ? ` <span class="hint">(read: ${esc(item.seen.join(", "))})</span>` : ""}</div>
     <div class="desc">${esc(t.description)}</div>
     <div class="row"><b>Shows</b>${chips(main, true)}</div>
     <div class="row"><b>Where</b>${chips(t.setting)} <b>&nbsp;When</b><span class="chip">${esc(t.time)}</span></div>
@@ -126,6 +132,10 @@ function cardHtml(item) {
       <label>When<select name="time">${DATA.times.map((x) => `<option${x === t.time ? " selected" : ""}>${x}</option>`).join("")}</select></label>
       <label>Character names, with commas between<input type="text" name="names" value="${esc((t.names || []).join(", "))}"></label>
       <label>One-line description<textarea name="description" rows="2">${esc(t.description)}</textarea></label>
+      <label>Type<select name="type">${DATA.types.map((x) => `<option${x === t.type ? " selected" : ""}>${x}</option>`).join("")}</select></label>
+      <div class="hint">Printed on top of the picture (signs inside the scene don't count):
+        ${DATA.overlays.map((x) => `<label class="tick"><input type="checkbox" name="overlay" value="${x}"${(t.overlay || []).includes(x) ? " checked" : ""}> ${x}</label>`).join(" ")}</div>
+      ${item.kind === "video" ? `<label>Second the video's own picture starts at<input type="text" name="start_s" value="${t.start_s || 0}"></label>` : ""}
       <div class="hint">To move the red dot, click on the picture where the main subject is.</div>
       <div class="tools"><button type="submit" class="main">Keep fix</button><button type="button" data-act="cancel">Cancel</button></div>
     </form></div>`;
@@ -138,7 +148,8 @@ function draw() {
   let shown = 0, last = null;
   for (const item of DATA.items) {
     const t = now(item), fixed = fixes[item.path] && Object.keys(fixes[item.path]).length;
-    const text = [item.path, t.description, t.main_subject, ...(t.subjects || []), ...(t.setting || []), t.time, ...(t.names || [])].join(" ").toLowerCase();
+    const text = [item.path, t.description, t.main_subject, ...(t.subjects || []), ...(t.setting || []), t.time, ...(t.names || []),
+      t.type, item.shape, ...(t.overlay || [])].join(" ").toLowerCase();
     if ((folder && item.folder !== folder) || (find && !text.includes(find)) || (only && !fixed)) continue;
     if (item.folder !== last) {
       last = item.folder;
@@ -188,9 +199,12 @@ $("grid").addEventListener("click", (e) => {
 $("grid").addEventListener("submit", (e) => {
   e.preventDefault();
   const card = e.target.closest(".card"), f = e.target;
-  setFix(card.dataset.path, {main_subject: f.main_subject.value.trim().toLowerCase(), subjects: words(f.subjects.value),
+  const fields = {main_subject: f.main_subject.value.trim().toLowerCase(), subjects: words(f.subjects.value),
     setting: words(f.setting.value), time: f.time.value, description: f.description.value.trim().replace(/\s+/g, " "),
-    names: f.names.value.split(",").map((w) => w.trim()).filter(Boolean)});
+    names: f.names.value.split(",").map((w) => w.trim()).filter(Boolean), type: f.type.value,
+    overlay: DATA.overlays.filter((x) => f.querySelector(`input[name=overlay][value="${x}"]`).checked)};
+  if (f.start_s && !isNaN(parseFloat(f.start_s.value))) fields.start_s = Math.max(0, parseFloat(f.start_s.value));
+  setFix(card.dataset.path, fields);
   draw();
 });
 
