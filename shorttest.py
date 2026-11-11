@@ -17,6 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import facts
 import picker
 import tag_media
 
@@ -571,6 +572,113 @@ def picker_refuses_what_it_cant_do():
     return (len(lock) == 1 and "needs a file" in lock[0] and len(both) == 1 and "one of the two" in both[0]
             and len(region) == 1 and "Los Santos" in region[0] and "Grassrivers" in region[0]
             and not problems and shots[0]["bg"] == "rockstar/" + SKYLINE and picks[0]["side"] == "behind")
+
+
+# --- The facts file ---
+
+FACTS = {"date": {"id": "date", "claim": "The game launches 19 Nov 2026.", "safe_wording": "launches on November 19, 2026",
+                  "status": "confirmed", "source": "https://example.com/date", "checked": "2026-11-11"},
+         "size": {"id": "size", "claim": "The download is reportedly about 210 GB.", "safe_wording": "over 200 GB",
+                  "also_ok": ["more than 200 GB"], "status": "reported", "source": "https://example.com/size",
+                  "checked": "2026-11-11"},
+         "regions": {"id": "regions", "claim": "Six confirmed regions.", "safe_wording": "six regions",
+                     "status": "confirmed", "source": None, "checked": "2026-11-11"},
+         "rumour": {"id": "rumour", "claim": "The map is twice the size.", "safe_wording": "twice the size",
+                    "status": "unverified", "source": None, "checked": None}}
+
+
+def fact_problems(say, ids="missing", shots=(), **top):
+    line = {"say": say, "beats": list(shots)}
+    if ids != "missing":
+        line["facts"] = ids
+    return facts.check_script({"title": "A test Short", "lines": [line], **top}, FACTS)[0]
+
+
+@check
+def a_line_must_list_real_checked_facts():
+    """a line with no "facts" list, with an ID that isn't in facts.json, or with an unverified fact is refused, and
+    the problem names the line and the fact; a line that lists a confirmed fact, or [] for no claim, passes"""
+    missing = fact_problems("The game launches on November 19.")
+    unknown = fact_problems("The game launches soon.", ["launch-day"])
+    unverified = fact_problems("The map is twice the size.", ["rumour"])
+    return (len(missing) == 2 and "needs \"facts\"" in missing[0] and "number 19" in missing[1]
+            and len(unknown) == 1 and "no fact 'launch-day'" in unknown[0]
+            and len(unverified) == 1 and "'rumour' is unverified" in unverified[0] and "line 1" in unverified[0]
+            and fact_problems("The game launches on November 19.", ["date"]) == []
+            and fact_problems("Let me explain.", []) == [])
+
+
+@check
+def a_reported_fact_must_use_its_safe_wording():
+    """a reported fact passes only when its safe wording is in the line: said ("over 200 gigabytes" counts as "over
+    200 GB"), shown on a card, or in a listed other wording; "212 gigabytes" and a plain "it is huge" are refused"""
+    exact = fact_problems("You need 212 gigabytes free.", ["size"])
+    vague = fact_problems("The download is huge.", ["size"])
+    card_exact = fact_problems("The download is over 200 gigabytes.", ["size"], [{"beat": "count", "card": "212 GB"}])
+    return (fact_problems("The download is over 200 gigabytes.", ["size"]) == []
+            and fact_problems("It is big.", ["size"], [{"beat": "card", "card": "OVER|*200 GB*"}]) == []
+            and fact_problems("It needs more than 200 gigs, so clear space.", ["size"]) == []
+            and len(exact) == 2 and "safe wording" in exact[0] and "\"over 200 GB\"" in exact[0]
+            and "number 212" in exact[1]
+            and len(vague) == 1 and "safe wording" in vague[0]
+            and len(card_exact) == 1 and "shows the number 212" in card_exact[0])
+
+
+@check
+def every_number_must_come_from_a_listed_fact():
+    """a number said or shown (as digits or as a word, on a card, a label or a banner) must be in the wording of a
+    fact that line lists; names such as GTA 6 and PS5 are not numbers; the title and description are checked too"""
+    wrong_day = fact_problems("The game launches on November 20.", ["date"])
+    word = fact_problems("There are seven regions.", ["regions"])
+    label = fact_problems("Look at this.", ["regions"],
+                          [{"beat": "card", "file": "x.jpg", "label": {"text": "8 regions", "style": "info"}}])
+    title = facts.check_script({"title": "GTA 6 lands NOV 21...", "description": "Out on November 19, 2026.",
+                                "lines": [{"say": "GTA 6 launches on November 19.", "facts": ["date"]}]}, FACTS)[0]
+    return (len(wrong_day) == 1 and "number 20" in wrong_day[0]
+            and len(word) == 1 and "number 7" in word[0]
+            and len(label) == 1 and "shows the number 8" in label[0]
+            and fact_problems("GTA 6 has six regions on PS5, and GTA 5 had fewer.", ["regions"],
+                              [{"beat": "count", "card": "6 REGIONS"}]) == []
+            and title == ["title: the number 21 is not in any fact the script lists"])
+
+
+@check
+def claims_sheet_lists_each_fact_with_its_source():
+    """claims.txt puts each line next to its facts: the ID, the status in capitals, the claim, the source link (or
+    "none given") and the date checked, with the safe wording for a reported fact"""
+    script = {"title": "A test Short", "lines": [
+        {"say": "The game launches on November 19.", "facts": ["date"], "beats": [{"beat": "card", "card": "NOV 19"}]},
+        {"say": "It is over 200 gigabytes, across six regions.", "facts": ["size", "regions"]},
+        {"say": "Let me explain.", "facts": []}]}
+    problems, _, claims = facts.check_script(script, FACTS)
+    text = facts.claims_text(script, claims, FACTS)
+    return (problems == [] and "Line 1: The game launches on November 19." in text and "on screen: NOV 19" in text
+            and "[date]  CONFIRMED" in text and "source: https://example.com/date" in text
+            and "[size]  REPORTED" in text and "safe wording, which the line must use:  over 200 GB" in text
+            and "source: none given" in text and "checked: 2026-11-11" in text
+            and "facts: none" in text and "Facts used: 3" in text)
+
+
+@check
+def the_real_facts_file_reads_and_keeps_the_owners_statuses():
+    """facts.json in the repo loads, the seven facts the owner gave keep the statuses the owner gave them (five
+    confirmed, two reported with their safe wording), and every fact that may be used has the date it was checked"""
+    real = facts.load_facts()
+    confirmed = ("release-date", "preload-date", "six-regions", "thirteen-year-wait", "preload-no-early-play")
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "facts.json"
+        bad.write_text(json.dumps({"facts": [{"id": "a", "claim": "x", "safe_wording": "x", "status": "true"},
+                                             {"id": "a", "claim": "x", "safe_wording": "", "status": "confirmed"}]}),
+                       encoding="utf-8")
+        broken = raises(facts.FactsError, facts.load_facts, bad)
+    return (all(real[name]["status"] == "confirmed" for name in confirmed)
+            and real["unlock-time"]["status"] == "reported"
+            and real["unlock-time"]["safe_wording"] == "expected to unlock at midnight local time"
+            and real["ps5-download-size"]["status"] == "reported"
+            and real["ps5-download-size"]["safe_wording"] == "over 200 GB"
+            and all(f.get("checked") for f in real.values() if f["status"] != "unverified")
+            and sum(1 for f in real.values() if f["status"] == "unverified") >= 15
+            and broken and "status is" in broken and "two facts have this id" in broken and "needs safe_wording" in broken)
 
 
 def main():
