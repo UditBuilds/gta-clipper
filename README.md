@@ -360,7 +360,9 @@ by hand, in Windows PowerShell:
 .\.venv\Scripts\python.exe tag_media.py                                  # once, and after adding pictures (needs Ollama)
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --check   # checks only, renders nothing
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
-.\.venv\Scripts\python.exe shorttest.py                                  # 38 checks, about 20 s, no Ollama needed
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --allow-stale              # render even with a fact checked over 3 days ago
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --folder-date 2026-11-11   # render that day's folder again
+.\.venv\Scripts\python.exe shorttest.py                                  # 41 checks, about 20 s, no Ollama needed
 ```
 
 Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
@@ -379,8 +381,8 @@ The last line `make_short.py` prints is `READY` (34-39 s long and no pacing warn
 ### The facts file
 
 `facts.json` is the only source of claims. Each fact has an id, the plain claim, a safe wording, a status, a source
-link (and `more_sources` for other links that say the same) and the date it was checked. Only I change a status;
-Claude adds new facts as `unverified`.
+link (and `more_sources` for other links that say the same), the day it was checked (`checked_on`) and whether it
+can change from day to day (`time_sensitive`). Only I change a status; Claude adds new facts as `unverified`.
 
 | Status | In a script |
 |---|---|
@@ -392,6 +394,20 @@ Every line of a script lists its facts (`"facts": ["release-date"]`, or `[]` for
 check refuses a missing list, an unknown or unverified fact, a reported fact without its safe wording in that line, and
 any number said or shown that is not in the wording of a fact that line lists. It can't read meaning, so a wrong claim
 with no number in it still passes under a real fact ID: that is what `claims.txt` is for.
+
+**Stale facts.** Launch-week facts change: Rockstar moved digital pre-load from November 12 to November 10 on
+November 3, and a Short made from the old date had to be thrown away. So a script that uses a `time_sensitive` fact
+whose `checked_on` is more than 3 days old is refused, by `--check` too, with a list of those facts:
+
+```
+ERROR: the script needs fixing before it can be made:
+  2 facts in this script can change from day to day and were last checked more than 3 days ago, so nothing was rendered (today is 2026-11-16):
+    - "GTA 6 launches 19 Nov 2026 on PS5 and Xbox Series X|S."  (release-date, lines 2, 7): last checked on 2026-11-12, 4 days ago
+    - "Pre-loading does not let you play early."  (preload-no-early-play, line 6): last checked on 2026-11-12, 4 days ago
+  Read each one again against its source link. If it still holds, set its "checked_on" in facts.json to today's date; if it changed, fix the fact first. To render anyway, add --allow-stale.
+```
+
+`--allow-stale` renders anyway and turns the list into a warning. It is for me; Claude never passes it.
 
 ### Pictures by what they show
 

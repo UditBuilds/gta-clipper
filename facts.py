@@ -16,16 +16,23 @@ The title and the description are checked for numbers too, against every fact th
 It can't read meaning: a wrong claim made without a number, under a real fact ID, still passes. That is what
 claims.txt is for: it puts each line next to its facts, their status and their sources, for the owner to read.
 
+Launch-week facts change from day to day (a pre-load date moved once already). Every fact says whether it is one of
+those ("time_sensitive": true) and the day it was last checked ("checked_on": "2026-11-12"). stale_facts() finds the
+time-sensitive facts a script uses that were checked more than STALE_DAYS days ago; make_short.py refuses to render
+with one, unless the owner passes --allow-stale.
+
 Standard library only.
 """
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FACTS_FILE = HERE / "facts.json"
 STATUSES = ("confirmed", "reported", "unverified")
+STALE_DAYS = 3                           # a time-sensitive fact checked longer ago than this is stale
 
 # Numbers written as words count as numbers. "one" is left out: "day one" and "no one" are not claims.
 NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -69,11 +76,19 @@ def load_facts(path=FACTS_FILE):
         also = fact.get("also_ok", [])
         if not isinstance(also, list) or not all(isinstance(a, str) and a.strip() for a in also):
             problems.append(f"{name}: also_ok is a list of wordings")
-        if fact.get("status") in ("confirmed", "reported") and not fact.get("checked"):
-            problems.append(f"{name}: a {fact['status']} fact needs the date it was checked")
-        for key in ("source", "checked"):
-            if fact.get(key) is not None and not isinstance(fact[key], str):
-                problems.append(f"{name}: {key} is text or null")
+        if "checked" in fact:
+            problems.append(f"{name}: \"checked\" is now called \"checked_on\"")
+        if not isinstance(fact.get("time_sensitive"), bool):
+            problems.append(f"{name}: needs \"time_sensitive\": true (it can change from day to day) or false")
+        checked_on = fact.get("checked_on")
+        if "checked_on" not in fact:
+            problems.append(f"{name}: needs \"checked_on\": the day it was last checked, as YYYY-MM-DD (or null)")
+        elif checked_on is not None and day_of(checked_on) is None:
+            problems.append(f"{name}: checked_on must be a real day written as YYYY-MM-DD, not {checked_on!r}")
+        elif checked_on is None and fact.get("status") in ("confirmed", "reported"):
+            problems.append(f"{name}: a {fact['status']} fact needs the day it was checked, in checked_on")
+        if fact.get("source") is not None and not isinstance(fact["source"], str):
+            problems.append(f"{name}: source is text or null")
         more = fact.get("more_sources", [])
         if not isinstance(more, list) or not all(isinstance(m, str) and m.strip() for m in more):
             problems.append(f"{name}: more_sources is a list of links")
@@ -81,6 +96,18 @@ def load_facts(path=FACTS_FILE):
     if problems:
         raise FactsError(f"{path} needs fixing:\n  " + "\n  ".join(problems))
     return facts
+
+
+def day_of(text):
+    """A YYYY-MM-DD day as a date, or None if it isn't one."""
+    if isinstance(text, date):
+        return text
+    if not isinstance(text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 # --- Reading text ---
@@ -186,6 +213,46 @@ def check_script(script, facts):
     return problems, warnings, claims
 
 
+# --- Facts that have gone stale ---
+
+def stale_facts(claims, today=None, max_days=STALE_DAYS):
+    """The time-sensitive facts a script uses that were last checked more than max_days days before today, or on a
+    day after today: [{"fact", "days", "lines"}], in the order the script uses them. claims is what check_script
+    returns. A fact checked exactly max_days days ago is still fresh."""
+    today = day_of(today) or date.today()
+    found = {}
+    for claim in claims:
+        for fact in claim["facts"]:
+            if not fact.get("time_sensitive"):
+                continue
+            checked = day_of(fact.get("checked_on"))
+            days = (today - checked).days if checked else None
+            if days is None or days > max_days or days < 0:
+                found.setdefault(fact["id"], {"fact": fact, "days": days, "lines": []})["lines"].append(claim["line"])
+    return list(found.values())
+
+
+def stale_text(stale, today=None, max_days=STALE_DAYS):
+    """The refusal, in plain English: which facts are stale, where the script uses them and what to do about it."""
+    today = day_of(today) or date.today()
+    out = [f"{len(stale)} fact{'s' if len(stale) != 1 else ''} in this script can change from day to day and "
+           f"{'were' if len(stale) != 1 else 'was'} last checked more than {max_days} days ago, so nothing was rendered "
+           f"(today is {today.isoformat()}):"]
+    for item in stale:
+        fact, days, lines = item["fact"], item["days"], item["lines"]
+        where = ("line " if len(lines) == 1 else "lines ") + ", ".join(str(n) for n in lines)
+        if days is None:
+            when = "it has no day in checked_on"
+        elif days < 0:
+            when = f"its checked_on, {fact['checked_on']}, is after today"
+        else:
+            when = f"last checked on {fact['checked_on']}, {days} days ago"
+        out.append(f"    - \"{fact['claim']}\"  ({fact['id']}, {where}): {when}")
+    out.append("  Read each one again against its source link. If it still holds, set its \"checked_on\" in facts.json "
+               "to today's date; if it changed, fix the fact first. To render anyway, add --allow-stale.")
+    return "\n".join(out)
+
+
 def claims_text(script, claims, facts):
     """claims.txt: every line next to the facts it uses, their status, their source and when they were checked."""
     out = [f"Claims in: {script.get('title', '')}", "",
@@ -203,8 +270,10 @@ def claims_text(script, claims, facts):
                 out.append(f"        safe wording, which the line must use:  {fact['safe_wording']}")
             out.append(f"        source: {fact.get('source') or 'none given'}")
             out.extend(f"        also:   {link}" for link in fact.get("more_sources", []))
-            out.append(f"        checked: {fact.get('checked') or 'never'}"
-                       + (f" by {fact['checked_by']}" if fact.get("checked_by") else ""))
+            out.append(f"        checked: {fact.get('checked_on') or 'never'}"
+                       + (f" by {fact['checked_by']}" if fact.get("checked_by") else "")
+                       + (f"  (can change from day to day: check again after {STALE_DAYS} days)"
+                          if fact.get("time_sensitive") else ""))
         out.append("")
     used = {f["id"]: f for claim in claims for f in claim["facts"]}
     out.append(f"Facts used: {len(used)}")

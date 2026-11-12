@@ -27,6 +27,12 @@ Read `facts.json`. **Every claim in the Short must come from a fact in it whose 
   "over 200 GB", never the exact figure.
 - Every number said or shown on a line must be in the wording of a fact that line lists.
 - Never change a fact's status, and never add a fact as anything but `unverified`.
+- **Stale facts.** A fact with `"time_sensitive": true` can change from day to day (launch-week dates, times and
+  sizes). If the script would use one whose `checked_on` is more than 3 days before today, **do not render.**
+  `make_short.py` refuses and lists those facts. Stop and show the owner that list in plain English. Never pass
+  `--allow-stale` yourself: that flag is the owner's. If the owner asks you to check the facts again, open each
+  fact's source links; if the fact still holds, set its `checked_on` to today; if it changed, do not edit the claim:
+  tell the owner what the source says now.
 - If the checked facts can't carry the topic for 34-39 s, **stop and tell the owner which facts are missing.** Offer
   to add them to `facts.json` as `unverified` for the owner to check. Do not pad with unchecked claims.
 
@@ -86,7 +92,8 @@ Write numbers as digits. Write "70 dollars", not "$70". Every line has `"facts"`
 ```
 
 Fix every problem it lists and run it again until it passes. A refused picture names the closest match: change the
-query, or the beat, rather than passing `--allow-weak`. Then render:
+query, or the beat, rather than passing `--allow-weak`. If it lists facts that were "last checked more than 3 days
+ago", stop there and tell the owner (see "Stale facts" in step 2). Then render:
 
 ```powershell
 .\.venv-tts\Scripts\python.exe make_short.py C:\AI\gta\shorts\_drafts\<slug>.json
@@ -109,3 +116,4 @@ In plain, simple English:
 2. The paths: `short.mp4`, `picks.jpg`, `upload.txt`, `claims.txt`.
 3. The title, and the pacing check (the lines `make_short.py` printed).
 4. Anything you were not sure about, and any fact you wanted but could not use.
+5. Any line that uses a `reported` fact, so the owner can hear that the voice says it is only reported.

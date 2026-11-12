@@ -602,14 +602,15 @@ def picker_refuses_what_it_cant_do():
 # --- The facts file ---
 
 FACTS = {"date": {"id": "date", "claim": "The game launches 19 Nov 2026.", "safe_wording": "launches on November 19, 2026",
-                  "status": "confirmed", "source": "https://example.com/date", "checked": "2026-11-11"},
+                  "status": "confirmed", "time_sensitive": True, "source": "https://example.com/date",
+                  "checked_on": "2026-11-11"},
          "size": {"id": "size", "claim": "The download is reportedly about 210 GB.", "safe_wording": "over 200 GB",
-                  "also_ok": ["more than 200 GB"], "status": "reported", "source": "https://example.com/size",
-                  "checked": "2026-11-11"},
+                  "also_ok": ["more than 200 GB"], "status": "reported", "time_sensitive": True,
+                  "source": "https://example.com/size", "checked_on": "2026-11-11"},
          "regions": {"id": "regions", "claim": "Six confirmed regions.", "safe_wording": "six regions",
-                     "status": "confirmed", "source": None, "checked": "2026-11-11"},
+                     "status": "confirmed", "time_sensitive": False, "source": None, "checked_on": "2026-11-11"},
          "rumour": {"id": "rumour", "claim": "The map is twice the size.", "safe_wording": "twice the size",
-                    "status": "unverified", "source": None, "checked": None}}
+                    "status": "unverified", "time_sensitive": False, "source": None, "checked_on": None}}
 
 
 def fact_problems(say, ids="missing", shots=(), **top):
@@ -711,9 +712,66 @@ def the_real_facts_file_reads_and_keeps_the_owners_statuses():
             and "212" in facts.numbers_in(real["storage-212-gb"]["safe_wording"])
             and "ps5-download-size" not in real and "longest gap" not in real["thirteen-year-wait"]["claim"]
             and real["longest-gta-gap"]["status"] == "unverified"
-            and all(f.get("checked") and f.get("source") for f in usable.values())
+            and all(f.get("checked_on") and f.get("source") for f in usable.values())
             and len(real) - len(usable) == 12
             and broken and "status is" in broken and "two facts have this id" in broken and "needs safe_wording" in broken)
+
+
+@check
+def every_fact_says_if_it_changes_and_when_it_was_checked():
+    """a facts file is refused when a fact has no "time_sensitive" true/false, no "checked_on", a checked_on that is
+    not a real YYYY-MM-DD day, the old "checked" key, or is confirmed with no day; in the real facts.json every fact
+    has both, and the launch dates, times and sizes are all marked as changing from day to day"""
+    def broken(**changes):
+        fact = {"id": "a", "claim": "x", "safe_wording": "x", "status": "confirmed", "time_sensitive": True,
+                "source": None, "checked_on": "2026-11-12", **changes}
+        fact = {k: v for k, v in fact.items() if v != "(left out)"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "facts.json"
+            path.write_text(json.dumps({"facts": [fact]}), encoding="utf-8")
+            return raises(facts.FactsError, facts.load_facts, path) or ""
+    real = facts.load_facts()
+    daily = {"release-date", "preload-date", "preload-xbox-global", "preload-moved-to-nov-10", "boxed-copies-nov-12",
+             "storage-212-gb", "unlock-time", "preload-no-early-play"}
+    return (broken() == ""
+            and "needs \"time_sensitive\"" in broken(time_sensitive="(left out)")
+            and "needs \"time_sensitive\"" in broken(time_sensitive="yes")
+            and "needs \"checked_on\"" in broken(checked_on="(left out)")
+            and "YYYY-MM-DD" in broken(checked_on="12 Nov 2026") and "YYYY-MM-DD" in broken(checked_on="2026-02-30")
+            and "needs the day it was checked" in broken(checked_on=None)
+            and broken(status="unverified", checked_on=None) == ""
+            and "now called \"checked_on\"" in broken(checked="2026-11-12")
+            and all(isinstance(f["time_sensitive"], bool) and "checked_on" in f and "checked" not in f
+                    for f in real.values())
+            and all(real[name]["time_sensitive"] for name in daily)
+            and not real["six-regions"]["time_sensitive"] and not real["thirteen-year-wait"]["time_sensitive"]
+            and all(facts.day_of(f["checked_on"]) for f in real.values() if f["status"] != "unverified"))
+
+
+@check
+def a_stale_fact_is_one_that_changes_and_was_checked_over_three_days_ago():
+    """stale_facts lists only the time-sensitive facts a script really uses that were checked more than 3 days before
+    today: 3 days ago is still fresh, 4 is stale; a fact that doesn't change is never stale however old; a fact no
+    line lists is ignored; a checked_on after today is stale too; and the refusal names each claim in plain English,
+    its lines, the day it was checked and how long ago, and says what to do"""
+    script = {"title": "A test Short", "lines": [
+        {"say": "The game launches on November 19.", "facts": ["date"]},
+        {"say": "There are six regions.", "facts": ["regions"]},
+        {"say": "So it launches on November 19.", "facts": ["date"]}]}
+    old = {name: dict(fact, checked_on="2026-10-01") for name, fact in FACTS.items()}
+    claims = facts.check_script(script, old)[2]
+    ids = lambda today, c=claims: [(s["fact"]["id"], s["days"], s["lines"]) for s in facts.stale_facts(c, today)]
+    fresh = facts.check_script(script, FACTS)[2]                       # checked on 2026-11-11
+    text = facts.stale_text(facts.stale_facts(fresh, "2026-11-15"), "2026-11-15")
+    return (ids("2026-11-14", fresh) == [] and ids("2026-11-15", fresh) == [("date", 4, [1, 3])]
+            and ids("2026-11-12") == [("date", 42, [1, 3])]            # "regions" is just as old but doesn't change
+            and ids("2026-11-10", fresh) == [("date", -1, [1, 3])]
+            and facts.STALE_DAYS == 3
+            and text.startswith("1 fact in this script can change from day to day and was last checked more than 3 "
+                                "days ago, so nothing was rendered (today is 2026-11-15):")
+            and "- \"The game launches 19 Nov 2026.\"  (date, lines 1, 3): last checked on 2026-11-11, 4 days ago"
+            in text
+            and "set its \"checked_on\" in facts.json" in text and "--allow-stale" in text and "regions" not in text)
 
 
 # --- make_short.py ---
@@ -739,7 +797,7 @@ def short_script(**changes):
     return script
 
 
-def short_run(tmp, script, pacing=None, visuals=None, **more):
+def short_run(tmp, script, pacing=None, visuals=None, today="2026-11-11", facts_used=None, **more):
     """make_short on a script, with made-up facts and tags, tiny real pictures and a stand-in for the render."""
     tmp = Path(tmp)
     tags = fake_tags()
@@ -763,8 +821,9 @@ def short_run(tmp, script, pacing=None, visuals=None, **more):
     path.write_text(json.dumps(script), encoding="utf-8")
     lines = []
     try:
-        out, ready = make_short.make_short(path, shorts_dir=tmp / "shorts", root=tmp / "gta", today="2026-11-11",
-                                           facts=FACTS, tags=tags, render=render, log=lines.append, **more)
+        out, ready = make_short.make_short(path, shorts_dir=tmp / "shorts", root=tmp / "gta", today=today,
+                                           facts=facts_used or FACTS, tags=tags, render=render, log=lines.append,
+                                           **more)
         error = None
     except make_short.ShortError as e:
         out, ready, error = None, False, str(e)
@@ -872,6 +931,43 @@ def a_bad_fact_or_picture_stops_before_the_render():
                 and "nothing shows spaceship" in error and "is from Grassrivers" in error
                 and run["rendered"] == [] and not run["shorts"].exists()
                 and dry["error"] is None and dry["rendered"] == [] and dry["out"] is None and not dry["shorts"].exists())
+
+
+@check
+def a_stale_fact_stops_the_render_unless_the_owner_allows_it():
+    """a script that uses a time-sensitive fact checked more than 3 days ago is refused before anything is rendered,
+    in --check too, and the refusal lists every such fact with its claim (both of them here: the date and the size,
+    not the regions); 3 days ago still renders; with allow_stale it renders, READY, with a warning that names the
+    facts; a script that doesn't use the stale fact is not stopped; --allow-stale is a flag of make_short.py"""
+    with tempfile.TemporaryDirectory() as tmp:
+        on_time = short_run(tmp, short_script(), today="2026-11-14")
+    with tempfile.TemporaryDirectory() as tmp:
+        late = short_run(tmp, short_script(), today="2026-11-15")
+        dry = short_run(tmp, short_script(), today="2026-11-15", check_only=True)
+        made_nothing = late["rendered"] == [] and dry["rendered"] == [] and not late["shorts"].exists()
+        allowed = short_run(tmp, short_script(), today="2026-11-15", allow_stale=True)
+        warned = [line for line in allowed["lines"] if "WARNING" in line and "--allow-stale" in line]
+        only_size_old = dict(FACTS, date=dict(FACTS["date"], checked_on="2026-11-14"))
+        one = short_run(tmp, short_script(title="GTA 6 launch day is CLOSER than you think"), today="2026-11-15",
+                        facts_used=only_size_old)
+        no_size = short_script(title="GTA 6 has six regions and they are HUGE")
+        no_size["lines"][1] = {"say": "The map is split across six regions, and each one is different.",
+                               "facts": ["regions"], "beats": [{"beat": "card", "query": "deer", "label": "Mount Kalaga"}]}
+        unused = short_run(tmp, no_size, today="2026-11-15", facts_used=only_size_old)
+    error = late["error"] or ""
+    usage = subprocess.run([sys.executable, str(Path(make_short.__file__)), "--help"], capture_output=True, text=True)
+    return (on_time["error"] is None and on_time["ready"] and len(on_time["rendered"]) == 1
+            and "2 facts in this script can change from day to day and were last checked more than 3 days ago" in error
+            and "\"The game launches 19 Nov 2026.\"  (date, lines 1, 7): last checked on 2026-11-11, 4 days ago" in error
+            and "\"The download is reportedly about 210 GB.\"  (size, line 2): last checked on 2026-11-11" in error
+            and "regions" not in error.split("day to day")[1] and "--allow-stale" in error
+            and dry["error"] and "last checked more than 3 days ago" in dry["error"] and made_nothing
+            and allowed["error"] is None and allowed["ready"] and len(allowed["rendered"]) == 1
+            and len(warned) == 1 and "date (checked 2026-11-11)" in warned[0] and "size (checked 2026-11-11)" in warned[0]
+            and one["error"] and "1 fact in this script" in one["error"] and "(size, line 2)" in one["error"]
+            and "(date," not in one["error"]
+            and unused["error"] is None and unused["ready"]
+            and usage.returncode == 0 and "--allow-stale" in usage.stdout)
 
 
 @check

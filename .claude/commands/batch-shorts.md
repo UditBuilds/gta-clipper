@@ -20,7 +20,9 @@ Rules for a batch:
 - Don't let two Shorts open with the same hook or use the same title.
 - If a topic can't be made from the checked facts, don't force it: skip it, say which facts are missing, and go on to
   the next topic.
-- Never upload anything. Never change a fact's status.
+- Never upload anything. Never change a fact's status. Never pass `--allow-stale`.
+- If `make_short.py` refuses a topic because a fact was last checked more than 3 days ago, skip that topic, list the
+  stale facts for the owner, and go on to the next topic.
 
 When all are done, report in plain, simple English, one block per topic:
 

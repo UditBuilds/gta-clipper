@@ -2,6 +2,7 @@
 
   .venv-tts\\Scripts\\python.exe make_short.py script.json            check, pick pictures, render, write the files
   .venv-tts\\Scripts\\python.exe make_short.py script.json --check    only check and show the picks; render nothing
+  .venv-tts\\Scripts\\python.exe make_short.py script.json --allow-stale    render even with a fact that needs re-checking
 
 The script is an explainer.py script with a few more settings:
 
@@ -14,6 +15,8 @@ The script is an explainer.py script with a few more settings:
 
 What it does, in order, stopping at the first step that finds a problem:
   1. checks the title, description, hashtags and word count, and every line's facts against facts.json (facts.py);
+     a fact that can change from day to day ("time_sensitive") and was checked more than 3 days ago stops it here,
+     with a list of those facts, unless --allow-stale is given (the owner's choice, never Claude's);
   2. picks a picture for every shot that asks for one (picker.py);
   3. renders with explainer.py and runs its pacing check;
   4. writes to C:\\AI\\gta\\shorts\\<date>-<slug>\\:
@@ -114,9 +117,10 @@ def spoken_words(script):
                for token in line["say"].split() if any(c.isalnum() for c in token))
 
 
-def check_script(script, facts, tags, recent=None, allow_weak=False):
+def check_script(script, facts, tags, recent=None, allow_weak=False, today=None, allow_stale=False):
     """Every check that needs no render. Returns a dict: problems, warnings, claims, picks, resolved (the script
-    explainer.py gets: its own settings and nothing else, every query now a file)."""
+    explainer.py gets: its own settings and nothing else, every query now a file), stale (the time-sensitive facts it
+    uses that were checked more than 3 days before today: a problem, or only a warning with allow_stale)."""
     problems = title_problems(script.get("title")) + upload_problems(script)
     warnings = []
     words = spoken_words(script)
@@ -130,6 +134,13 @@ def check_script(script, facts, tags, recent=None, allow_weak=False):
         warnings.append(f"topic score {score['score']} of 5: this topic doesn't matter to most players on day one "
                         f"({score.get('why', '')})")
     fact_problems, fact_warnings, claims = facts_file.check_script(script, facts)
+    stale = facts_file.stale_facts(claims, today)
+    if stale and allow_stale:
+        fact_warnings.append("--allow-stale: rendering with " + ", ".join(
+            f"{s['fact']['id']} (checked {s['fact'].get('checked_on') or 'never'})" for s in stale)
+            + ", which should have been checked again first")
+    elif stale:
+        fact_problems.append(facts_file.stale_text(stale, today))
     resolved, picks, pick_problems, pick_warnings = picker.resolve_script(script, tags, recent, allow_weak=allow_weak)
     for key in OWN_KEYS:
         resolved.pop(key, None)
@@ -137,7 +148,7 @@ def check_script(script, facts, tags, recent=None, allow_weak=False):
         if isinstance(line, dict):
             line.pop("facts", None)
     return {"problems": problems + fact_problems + pick_problems, "warnings": warnings + fact_warnings + pick_warnings,
-            "claims": claims, "picks": picks, "resolved": resolved, "words": words}
+            "claims": claims, "picks": picks, "resolved": resolved, "words": words, "stale": stale}
 
 
 def upload_text(script):
@@ -280,16 +291,20 @@ def explainer_problems(resolved, root, log=print):
 
 
 def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORTS_DIR, root=GTA_ROOT, today=None,
-               facts=None, tags=None, render=None, log=print):
+               facts=None, tags=None, render=None, log=print, allow_stale=False, folder_date=None):
     """Check a script and make its Short. Returns (folder or None, ready). ShortError lists what stops it.
-    facts, tags and render are swapped for stand-ins by the tests."""
+    today is the day facts are judged stale against, and the date in the folder's name unless folder_date gives
+    another (to render an existing Short's folder again). facts, tags and render are swapped for stand-ins by the
+    tests."""
     script = read_script(script_path)
     try:
         facts = facts if facts is not None else facts_file.load_facts()
         tags = tags if tags is not None else tag_media.load_tags()
         used_log = Path(shorts_dir) / picker.USED_LOG.name
-        name = f"{today or date.today().isoformat()}-{slug_of(str(script.get('title', '')))}"
-        result = check_script(script, facts, tags, picker.recent_files(picker.load_used(used_log), name), allow_weak)
+        today = today or date.today().isoformat()
+        name = f"{folder_date or today}-{slug_of(str(script.get('title', '')))}"
+        result = check_script(script, facts, tags, picker.recent_files(picker.load_used(used_log), name), allow_weak,
+                              today, allow_stale)
     except (facts_file.FactsError, tag_media.TagError, picker.PickError) as e:
         raise ShortError(str(e)) from None
     if not tags:
@@ -367,12 +382,21 @@ def main():
     parser.add_argument("--check", action="store_true", help="only check the script and show its picks; render nothing")
     parser.add_argument("--allow-weak", action="store_true",
                         help="when nothing matches a query well, use the closest picture (it is marked on picks.jpg)")
+    parser.add_argument("--allow-stale", action="store_true",
+                        help="render even if the script uses a fact that changes from day to day and was checked "
+                             "more than 3 days ago (for the owner; the facts are listed as a warning)")
+    parser.add_argument("--folder-date", metavar="YYYY-MM-DD",
+                        help="the date in the Short's folder name, to render an existing Short's folder again "
+                             "(default: today); facts are still judged stale against today")
     args = parser.parse_args()
+    if args.folder_date and facts_file.day_of(args.folder_date) is None:
+        parser.error("--folder-date must be a day written as YYYY-MM-DD")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         print("ERROR: ffmpeg and ffprobe must be on PATH", file=sys.stderr)
         sys.exit(2)
     try:
-        _, ready = make_short(args.script, args.check, args.allow_weak)
+        _, ready = make_short(args.script, args.check, args.allow_weak, allow_stale=args.allow_stale,
+                              folder_date=args.folder_date)
     except ShortError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
