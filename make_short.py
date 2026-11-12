@@ -24,10 +24,11 @@ What it does, in order, stopping at the first step that finds a problem:
        script.json  the script as you gave it (script_resolved.json is what was rendered, every query now a file)
        upload.txt   the title and the description with its hashtags
        claims.txt   every line with its fact IDs, their status and their sources
-       picks.jpg    each shot's words next to the picture chosen for it
+       picks.jpg    each shot's words next to the picture chosen for it, and how long it is on screen
        pacing.txt   the pacing check
-The Short is READY when its length is 34-39 s and the pacing check has no warning. Otherwise the files are still
-written, the last line says NOT READY and why, and the exit code is 1. Nothing is ever uploaded.
+The Short is READY when its length is 34-39 s, the pacing check has no warning and every picture on picks.jpg gets
+on screen. Otherwise the files are still written, the last line says NOT READY and why, and the exit code is 1.
+Nothing is ever uploaded.
 
 Needs .venv-tts (it renders with explainer.py); the checks themselves are standard library only.
 """
@@ -199,7 +200,8 @@ def pick_row_text(pick, entry):
     where = f"Line {pick['line']}, shot {pick['shot']}" + (f" ({pick['side']})" if pick.get("side") else "")
     how = (f"PICKED for \"{pick['query']}\"" if pick["picked"] else "NAMED in the script")
     lines = [f"{where}   |   {pick.get('beat') or 'shot'}   |   {how}" + ("   |   WEAK MATCH" if pick.get("weak") else "")
-             + ("   |   NOT SHOWN: the loop ending covers it" if pick.get("shown") is False else "")]
+             + ("   |   NOT SHOWN: it never gets on screen" if pick.get("shown") is False else
+                f"   |   {pick['seconds']:.1f} s on screen" if pick.get("seconds") is not None else "")]
     lines += textwrap.wrap("SAYS: " + pick["say"], 104)[:3]
     shown = [re.sub(r"[~*|]+", " ", t).strip() for t in pick.get("text", []) if t and t.strip()]
     lines.append("ON SCREEN: " + (" / ".join(shown) if shown else "(no words on this picture)"))
@@ -215,8 +217,8 @@ def pick_row_text(pick, entry):
 
 def build_picks_sheet(picks, tags, out, root=GTA_ROOT):
     """picks.jpg: one row per picture in the Short, the part of it the viewer sees on the left and the line's words on
-    the right. A green edge is a picked picture, blue one the script named, red a weak match, grey one that the
-    render left no time for."""
+    the right. A green edge is a picked picture, blue one the script named, red a weak match, grey one that never
+    gets on screen (which makes the Short NOT READY)."""
     rows = [p for p in picks if p.get("path") or p.get("file")]
     if not rows:
         return None
@@ -355,14 +357,22 @@ def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORT
         not_ready.append(f"it is {pacing['length_s']:.1f} s long; the target is {pacing['target_s'][0]}-"
                          f"{pacing['target_s'][1]} s (cut or add words, or change the speed, 1.1 at most)")
     not_ready += pacing["warnings"]
-    ready = not not_ready
-    # A picture of the last line can be left with no time of its own, because the loop ending shows the first shot
-    # again. The sheet says so, and such a picture doesn't count as used.
+    # Every picture on picks.jpg must get on screen. explainer.py gives each shot its time even when the loop ending
+    # squeezes the last line (plan_slots), so a picture with none is a fault: the sheet marks it, the Short is NOT
+    # READY, and the picture doesn't count as used. The loop ending's repeat of the first shot is not counted.
     if isinstance(run_log.get("visuals"), list):
-        on_screen = " ".join(str(v.get("source", "")) + " " + str(v.get("behind") or "") for v in run_log["visuals"])
+        own = [v for v in run_log["visuals"] if not v.get("loop_tail")]
         for pick in result["picks"]:
-            pick["shown"] = Path(pick.get("path") or pick.get("file") or "?").name in on_screen
+            file_name = Path(pick.get("path") or pick.get("file") or "?").name
+            mine = [v for v in own if file_name in f"{v.get('source', '')} {v.get('behind') or ''}"]
+            pick["shown"] = bool(mine)
+            if mine and all(isinstance(v.get("seconds"), (int, float)) for v in mine):
+                pick["seconds"] = round(sum(v["seconds"] for v in mine), 2)
+            if not mine:
+                not_ready.append(f"line {pick['line']}, shot {pick['shot']}: {file_name} never gets on screen (it is grey on "
+                                 "picks.jpg); take the shot out or give its line more time")
         build_picks_sheet(result["picks"], tags, out / "picks.jpg", root)
+    ready = not not_ready
     if ready:
         picker.save_used(name, [p["file"] for p in result["picks"] if p.get("file") and p.get("shown") is not False],
                          used_log)

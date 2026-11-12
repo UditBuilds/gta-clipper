@@ -560,14 +560,51 @@ def slots_cover_the_voice_exactly():
 
 
 @check
-def tiny_leftover_joins_the_loop_ending():
-    """a visual left with a sliver before the loop ending is dropped, and the ending starts where it did"""
-    lines = [{"visuals": [visual("a")]}, {"visuals": [visual("b")]}]
-    slots = ex.plan_slots(lines, [0.0, 3.0], 100)  # b would have 100-45-90 = -35 frames, a 55
-    lines2 = [{"visuals": [visual("a")]}, {"visuals": [visual("b")]}, {"visuals": [visual("c")]}]
-    slots2 = ex.plan_slots(lines2, [0.0, 2.0, 2.9], 112)  # b is cut to 60-67, 7 frames: dropped
-    return ([s["visual"]["source"] for s in slots] == ["a", "a"] and [s["visual"]["source"] for s in slots2] == ["a", "a"]
-            and slots2[-1]["start"] == 60 and slots2[-1]["frames"] == 52)
+def the_loop_ending_never_takes_a_pictures_whole_time():
+    """no visual is dropped for the loop ending (PR 19: before, a last line shorter than the 1.5 s ending lost its picture, and a shot left with under 0.4 s was dropped): a shot the ending would cover starts earlier and gets 1.0 s, taken from the shot before it; if that one is left under 1.0 s it moves up the same way; shots the ending doesn't reach keep their own cuts; the ending is still the first visual on the last 45 frames, with no gap or overlap"""
+    # The unlock-time Short of 2026-11-11: its last line, "Just remember one thing:", lasted 1.3 s of a 34.4 s Short.
+    lines = [{"visuals": [visual("a"), visual("b")]}, {"visuals": [visual("c"), visual("d")]}, {"visuals": [visual("last")]}]
+    slots = ex.plan_slots(lines, [0.0, 28.0, 33.1], 1032)
+    by = {s["visual"]["source"]: s for s in slots if not s.get("loop_tail")}
+    whole = lambda found, total: (all(a["end"] == b["start"] for a, b in zip(found, found[1:])) and found[0]["start"] == 0
+                                  and found[-1]["end"] == total and sum(s["frames"] for s in found) == total)
+    # Two pictures on a last line the ending covers completely, after a shot of only 1.2 s: all three move up.
+    lines2 = [{"visuals": [visual("a")]}, {"visuals": [visual("b")]}, {"visuals": [visual("c"), visual("d")]}]
+    slots2 = ex.plan_slots(lines2, [0.0, 6.0, 7.2], 270)        # c and d would start at 216 and 243; the ending at 225
+    spans2 = [(s["visual"]["source"], s["start"], s["end"]) for s in slots2]
+    # The two cases the old rule dropped a picture in.
+    old1 = ex.plan_slots([{"visuals": [visual("a")]}, {"visuals": [visual("b")]}], [0.0, 3.0], 100)
+    old2 = ex.plan_slots([{"visuals": [visual("a")]}, {"visuals": [visual("b")]}, {"visuals": [visual("c")]}], [0.0, 2.0, 2.9], 112)
+    sources = lambda found: [s["visual"]["source"] for s in found]
+    return (ex.MIN_SHOWN_FRAMES == 30 and sources(slots) == ["a", "b", "c", "d", "last", "a"]
+            and by["last"]["frames"] == 30 and (by["last"]["start"], by["last"]["end"]) == (957, 987)
+            and by["d"]["end"] == 957 and by["d"]["frames"] >= 30
+            and (by["a"]["start"], by["a"]["end"], by["b"]["end"], by["c"]["end"]) == (0, 420, 840, 916)
+            and slots[-1].get("loop_tail") and slots[-1]["frames"] == 45 and whole(slots, 1032)
+            and spans2 == [("a", 0, 135), ("b", 135, 165), ("c", 165, 195), ("d", 195, 225), ("a", 225, 270)]
+            and whole(slots2, 270)
+            and sources(old1) == ["a", "b", "a"] and sources(old2) == ["a", "b", "c", "a"]
+            and all(s["frames"] > 0 for s in old1 + old2) and whole(old1, 100) and whole(old2, 112)
+            and old1[-1]["frames"] == 45 and old2[-1]["frames"] == 45)
+
+
+@check
+def a_short_last_line_keeps_the_pacing_rules():
+    """with the unlock-time Short's own cuts (34.4 s, 17 shots, a 1.3 s last line), giving the last picture its 1.0 s adds one change and breaks no pacing rule: 4-6 changes every 10 s, no gap over 3 s, no shot over 2.5 s made longer, and the last line's pictures are on screen for 1.0 s or more, so its "shows for only" warning is gone"""
+    starts = [0.0, 6.6, 12.6, 20.4, 26.5, 29.4, 33.1]
+    shots = [3, 3, 4, 3, 1, 2, 1]
+    lines = [{"visuals": [visual(f"{n}.{i}") for i in range(count)]} for n, count in enumerate(shots)]
+    slots = ex.plan_slots(lines, starts, 1032)
+    report = ex.pacing_report(ex.visual_changes(slots, 1032), 1032 / FPS)
+    last = [s for s in slots if s["line"] == 6 and not s.get("loop_tail")]
+    last_frames = sum(s["frames"] for s in last)
+    own = [s for s in slots if not s.get("loop_tail")]
+    print(f"       {len(own)} shots, {report['changes']} changes, {report['per_10_s']} per 10 s, longest gap "
+          f"{report['longest_gap_s']} s; the last line's picture: {last_frames / FPS:.1f} s")
+    return (len(own) == 17 and [s["visual"]["source"] for s in last] == ["6.0"] and last_frames >= ex.MIN_SHOWN_FRAMES
+            and report["warnings"] == [] and 4.0 <= report["per_10_s"] <= 6.0 and report["longest_gap_s"] <= 3.0
+            and not any("shows for only" in w or "show for only" in w for w in ex.slot_warnings(slots, lines, last_frames))
+            and all(s["frames"] >= ex.MIN_SHOWN_FRAMES for s in own))
 
 
 @check
@@ -1175,9 +1212,11 @@ def ass_seconds(text):
 
 @check
 def spoken_word_is_highlighted():
-    """in the .ass every untagged word turns yellow at its own start (from the log's word times, to the ms) and back when the next starts, tagged words keep their colour; on screen the yellow moves from word to word inside one chunk"""
+    """in the .ass every untagged word turns yellow at its own start (from the log's word times, to the ms) and back when the next starts, tagged words keep their colour; the three words said while the last line's card is up (since PR 19 that card is shown, not dropped for the loop ending) come back the moment the card leaves, already lit; on screen the yellow moves from word to word inside one chunk"""
     folder, log, _ = main_run()
     words = log["word_times"]
+    hidden = log["look"]["captions_hidden_over_cards_s"]
+    came_back = []  # the words said under a card, whose chunk is shown again when the card leaves
     found = []  # (start of the event, the word's tags, the word)
     for line in (folder / "captions.ass").read_text(encoding="utf-8").splitlines():
         m = re.match(r"Dialogue: 2,([\d:.]+),", line)
@@ -1190,7 +1229,11 @@ def spoken_word_is_highlighted():
             continue
         untagged += 1
         on = 0 if tags.startswith(f"\\c{ex.HIGHLIGHT}") else int(re.match(r"\\t\((\d+),", tags).group(1))
-        if word != timed["text"] or abs(on - round((timed["start_s"] - start) * 1000)) > 1:
+        if any(a <= timed["start_s"] < b and abs(start - b) <= 0.011 for a, b in hidden):
+            came_back.append(word)
+            if word != timed["text"] or on != 0:
+                late.append((word, on))
+        elif word != timed["text"] or abs(on - round((timed["start_s"] - start) * 1000)) > 1:
             late.append((word, on))
     tagged_plain = all(ex.HIGHLIGHT not in t for _, t, w in found if w in ("212", "GIGABYTES", "DANGER"))
     # On screen: the first chunk with three untagged words, a moment into its second and third word.
@@ -1201,9 +1244,11 @@ def spoken_word_is_highlighted():
     masks = [np.abs(frame_at(short, words[chunk + k]["start_s"] + 0.06)[1100:1540] - np.array(YELLOW)).max(axis=2) <= 40
              for k in (1, 2)]
     overlap = int((masks[0] & masks[1]).sum())
-    print(f"       {untagged} untagged words, {len(late)} off their time {late[:5]}; on screen: yellow px {lit} for "
+    print(f"       {untagged} untagged words, {len(late)} off their time {late[:5]}; back when the card leaves ({hidden}): "
+          f"{came_back}; on screen: yellow px {lit} for "
           f"{words[chunk + 1]['text']} then {words[chunk + 2]['text']}, {overlap} px yellow in both")
     return (len(found) == len(words) and untagged >= 15 and not late and tagged_plain and min(lit) > 1500
+            and len(hidden) == 1 and came_back == ["STATE", "COMES", "LAST"]
             and overlap < min(lit) * 0.1)
 
 

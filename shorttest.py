@@ -984,15 +984,39 @@ def a_short_outside_the_length_or_pacing_is_not_ready():
 
 
 @check
-def a_picture_the_loop_ending_covers_is_not_counted_as_used():
-    """when the render's log shows that a picture never got on screen (the loop ending took the last line's time), it
-    is left out of the used-media log, so a later Short can still use it"""
+def every_picture_on_the_picks_sheet_must_get_on_screen():
+    """when the render's log shows that a picture never got on screen, the Short is NOT READY and the reason names
+    the line, the shot and the file; the loop ending's repeat of the first shot doesn't count as showing it; nothing
+    of a NOT READY Short is logged as used; and when every picture has its time the Short is READY, each picture's
+    seconds are known for picks.jpg, and all of them are logged as used"""
     with tempfile.TemporaryDirectory() as tmp:
-        shown = [{"source": f"rockstar/{AIRBOAT}@0.3,0.6", "behind": None},
-                 {"source": "card:19 NOV", "behind": f"rockstar/{DEER}"}]
-        run = short_run(tmp, short_script(), visuals=shown)
-        used = picker.load_used(run["shorts"] / "_used_media.json")
-        return (run["ready"] and set(used[0]["files"]) == {AIRBOAT, DEER} and (run["out"] / "picks.jpg").is_file())
+        missing = [{"source": f"rockstar/{AIRBOAT}@0.3,0.6", "behind": None, "seconds": 1.6},
+                   {"source": "card:19 NOV", "behind": f"rockstar/{DEER}", "seconds": 2.0}]
+        run = short_run(tmp, short_script(), visuals=missing)
+        why = [line for line in run["lines"] if line.startswith("NOT READY")]
+        only_in_the_ending = [{"source": "card:19 NOV", "behind": f"rockstar/{DEER}", "seconds": 2.0},
+                              {"source": f"rockstar/{GATOR}", "behind": None, "seconds": 1.0},
+                              {"source": f"rockstar/{AIRBOAT}@0.3,0.6", "behind": None, "seconds": 1.5, "loop_tail": True}]
+        ending = short_run(tmp, short_script(title="GTA 6 launch day is CLOSER than you think"),
+                           visuals=only_in_the_ending)
+        ending_why = [line for line in ending["lines"] if line.startswith("NOT READY")]
+        sheet_made = (run["out"] / "picks.jpg").is_file()
+        nothing_logged = picker.load_used(run["shorts"] / "_used_media.json") == []
+    with tempfile.TemporaryDirectory() as tmp:
+        every = missing + [{"source": f"rockstar/{GATOR}", "behind": None, "seconds": 1.0},
+                           {"source": f"rockstar/{AIRBOAT}@0.3,0.6", "behind": None, "seconds": 1.5, "loop_tail": True}]
+        good = short_run(tmp, short_script(), visuals=every)
+        used = picker.load_used(good["shorts"] / "_used_media.json")
+        text = make_short.pick_row_text({"line": 7, "shot": 1, "picked": False, "say": "So.", "file": GATOR,
+                                         "shown": True, "seconds": 1.0}, None)
+        hidden = make_short.pick_row_text({"line": 7, "shot": 1, "picked": False, "say": "So.", "file": GATOR,
+                                           "shown": False}, None)
+        return (run["ready"] is False and len(why) == 1 and "line 7, shot 1" in why[0] and Path(GATOR).name in why[0]
+                and "never gets on screen" in why[0] and sheet_made and nothing_logged
+                and ending["ready"] is False and len(ending_why) == 1 and Path(AIRBOAT).name in ending_why[0]
+                and good["ready"] and set(used[0]["files"]) == {AIRBOAT, DEER, GATOR}
+                and [s["name"] for s in used] == [good["out"].name]
+                and "1.0 s on screen" in text and "NOT SHOWN" in hidden and "on screen" in hidden)
 
 
 @check

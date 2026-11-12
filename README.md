@@ -285,7 +285,9 @@ media) and approved its second version, C2.
   off.
 - **Loop.** The last frame's picture is the first frame's again (the last spoken word's caption can still be up). When
   the Short opens on a clip used from its start, the ending plays that clip backwards into its first frame, so nothing
-  stands still (before PR 18 it held that frame for 1.5 s).
+  stands still (before PR 18 it held that frame for 1.5 s). The ending takes the last 1.5 s, and it never takes a
+  picture's whole time: a shot it would cover starts earlier and gets at least 1.0 s, taken from the shot before it
+  (before PR 19 a last line shorter than 1.5 s lost its picture).
 
 ```powershell
 .\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload_v2.json   # the Nov 10 Short in look C
@@ -372,7 +374,7 @@ Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
 | `short.mp4` | The Short. |
 | `upload.txt` | The title, and the description with its 3-5 hashtags. |
 | `claims.txt` | Every line next to the facts it uses, their status and their source links. |
-| `picks.jpg` | Each picture (the part the viewer sees) next to the words said and shown over it. |
+| `picks.jpg` | Each picture (the part the viewer sees) next to the words said and shown over it, and its seconds on screen. A picture that never gets on screen is grey, and the Short is NOT READY. |
 | `pacing.txt` | The pacing check. |
 | `script.json`, `script_resolved.json` | The script as written, and as rendered (every query now a file). |
 

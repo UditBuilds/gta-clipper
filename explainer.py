@@ -232,7 +232,10 @@ TARGET_WORDS = (95, 105)
 
 # Timeline.
 LOOP_FRAMES = 45                     # the last 1.5 s shows the first visual again
-MIN_SLOT_FRAMES = 12                 # a visual left with less than this before the loop ending is dropped
+# The loop ending never takes a picture's whole time: every shot it squeezes keeps at least this much, taken from the
+# shots before it. 1.0 s is twice CHANGE_MERGE_S, so the picture counts as a change of its own; it is the length under
+# which the last line's pictures already warned; and Rockstar's shortest loops last that long.
+MIN_SHOWN_FRAMES = 30
 LONG_SLOT_S, LONG_HOLD_S = 2.5, 1.0  # warn: the target is a new picture every 1.5-2 s, and a long freeze looks stuck
 LONG_PAN_S = 3.5                     # a pan keeps moving, so it may stay up longer
 FAST_PAN = 1.2                       # screen widths a second; faster than this a pan smears into a whip
@@ -2344,7 +2347,13 @@ def end_pill_events(pill, total_frames):
 def plan_slots(lines, line_starts, total_frames):
     """Every visual's frames, in order. A line's time is shared by its visuals' weights (1 each unless set). Cuts come
     from absolute times, so rounding never adds up to a drift. The loop ending takes the last frames of the voice's own
-    time: adding them after it would make the video longer than the voice."""
+    time: adding them after it would make the video longer than the voice.
+
+    No visual is dropped for it. A shot the loop ending would cover, or leave with under MIN_SHOWN_FRAMES, starts
+    earlier instead, so it gets that much; the shot before it ends there, and if that one is left too short it moves
+    up the same way. (Before PR 19's fix a short last line lost its pictures: "Just remember one thing:" lasted 1.3 s,
+    the loop ending took 1.5 s, and its picture never appeared.) In a Short too short to give every shot that much,
+    they share what there is."""
     slots = []
     for n, line in enumerate(lines):
         a = round(line_starts[n] * FPS)
@@ -2359,14 +2368,18 @@ def plan_slots(lines, line_starts, total_frames):
             if end > start:
                 slots.append({"line": n, "start": start, "end": end, "visual": visual})
     tail = total_frames - LOOP_FRAMES
-    kept = [s for s in slots if s["start"] < tail]
-    if kept:
-        kept[-1]["end"] = min(kept[-1]["end"], tail)
-        if kept[-1]["end"] - kept[-1]["start"] < MIN_SLOT_FRAMES and len(kept) > 1:
-            tail = kept.pop()["start"]
-        kept.append({"line": len(lines) - 1, "start": tail, "end": total_frames, "visual": slots[0]["visual"],
-                     "loop_tail": True})
-        slots = kept
+    if slots and tail > slots[0]["start"]:
+        first = slots[0]["visual"]
+        need = min(MIN_SHOWN_FRAMES, (tail - slots[0]["start"]) // len(slots))
+        limit = tail
+        for slot in reversed(slots):
+            if slot["end"] <= limit:
+                break                                   # this shot and every one before it keep their own time
+            slot["end"] = limit
+            slot["start"] = min(slot["start"], limit - need)
+            limit = slot["start"]
+        slots = [s for s in slots if s["end"] > s["start"]]
+        slots.append({"line": len(lines) - 1, "start": tail, "end": total_frames, "visual": first, "loop_tail": True})
     for slot in slots:
         slot["frames"] = slot["end"] - slot["start"]
     return slots
