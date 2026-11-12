@@ -62,7 +62,7 @@
        {"beat": "compare", "top": {"query": "alligator", "label": "Grassrivers"},
         "bottom": {"query": "city skyline", "label": "Vice City"}}],
      "green": ["SIX REGIONS"], "red": []},
-    {"say": "You waited about 13 years for this, the longest gap between main GTA games.",
+    {"say": "You waited about 13 years for this. GTA 5 came out back in 2013.",
      "facts": ["thirteen-year-wait"],
      "beats": [
        {"beat": "count", "card": "13 YEARS", "label": "The wait"},

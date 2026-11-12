@@ -74,6 +74,9 @@ def load_facts(path=FACTS_FILE):
         for key in ("source", "checked"):
             if fact.get(key) is not None and not isinstance(fact[key], str):
                 problems.append(f"{name}: {key} is text or null")
+        more = fact.get("more_sources", [])
+        if not isinstance(more, list) or not all(isinstance(m, str) and m.strip() for m in more):
+            problems.append(f"{name}: more_sources is a list of links")
         facts[name] = fact
     if problems:
         raise FactsError(f"{path} needs fixing:\n  " + "\n  ".join(problems))
@@ -199,6 +202,7 @@ def claims_text(script, claims, facts):
             if fact["status"] == "reported":
                 out.append(f"        safe wording, which the line must use:  {fact['safe_wording']}")
             out.append(f"        source: {fact.get('source') or 'none given'}")
+            out.extend(f"        also:   {link}" for link in fact.get("more_sources", []))
             out.append(f"        checked: {fact.get('checked') or 'never'}"
                        + (f" by {fact['checked_by']}" if fact.get("checked_by") else ""))
         out.append("")

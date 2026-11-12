@@ -686,23 +686,33 @@ def claims_sheet_lists_each_fact_with_its_source():
 
 @check
 def the_real_facts_file_reads_and_keeps_the_owners_statuses():
-    """facts.json in the repo loads, the seven facts the owner gave keep the statuses the owner gave them (five
-    confirmed, two reported with their safe wording), and every fact that may be used has the date it was checked"""
+    """facts.json in the repo loads and every fact has the status the owner gave it (2026-11-12: nine confirmed, the
+    Xbox pre-load time reported with a safe wording that says so, the rest unverified); digital pre-load is November
+    10 and no usable fact says November 12 except as the old date or the boxed-copy date; every fact that may be used
+    has a source link and the date it was checked"""
     real = facts.load_facts()
-    confirmed = ("release-date", "preload-date", "six-regions", "thirteen-year-wait", "preload-no-early-play")
+    confirmed = {"release-date", "preload-date", "preload-moved-to-nov-10", "boxed-copies-nov-12", "storage-212-gb",
+                 "unlock-time", "six-regions", "thirteen-year-wait", "preload-no-early-play"}
+    usable = {name: f for name, f in real.items() if f["status"] != "unverified"}
+    says_12 = {name for name, f in usable.items()
+               if any(day in facts.plain(w) for w in facts.wordings(f) for day in ("november 12", "12 nov"))}
     with tempfile.TemporaryDirectory() as tmp:
         bad = Path(tmp) / "facts.json"
         bad.write_text(json.dumps({"facts": [{"id": "a", "claim": "x", "safe_wording": "x", "status": "true"},
                                              {"id": "a", "claim": "x", "safe_wording": "", "status": "confirmed"}]}),
                        encoding="utf-8")
         broken = raises(facts.FactsError, facts.load_facts, bad)
-    return (all(real[name]["status"] == "confirmed" for name in confirmed)
-            and real["unlock-time"]["status"] == "reported"
-            and real["unlock-time"]["safe_wording"] == "expected to unlock at midnight local time"
-            and real["ps5-download-size"]["status"] == "reported"
-            and real["ps5-download-size"]["safe_wording"] == "over 200 GB"
-            and all(f.get("checked") for f in real.values() if f["status"] != "unverified")
-            and sum(1 for f in real.values() if f["status"] == "unverified") >= 15
+    return ({name for name, f in real.items() if f["status"] == "confirmed"} == confirmed
+            and {name for name, f in real.items() if f["status"] == "reported"} == {"preload-xbox-global"}
+            and "reportedly" in real["preload-xbox-global"]["safe_wording"]
+            and all("reportedly" in w for w in real["preload-xbox-global"]["also_ok"])
+            and real["preload-date"]["safe_wording"] == "digital pre-load on PS5 started at midnight local time on November 10"
+            and says_12 == {"preload-moved-to-nov-10", "boxed-copies-nov-12"}
+            and "212" in facts.numbers_in(real["storage-212-gb"]["safe_wording"])
+            and "ps5-download-size" not in real and "longest gap" not in real["thirteen-year-wait"]["claim"]
+            and real["longest-gta-gap"]["status"] == "unverified"
+            and all(f.get("checked") and f.get("source") for f in usable.values())
+            and len(real) - len(usable) == 12
             and broken and "status is" in broken and "two facts have this id" in broken and "needs safe_wording" in broken)
 
 
@@ -769,7 +779,7 @@ def title_rules():
           "What time does GTA 6 ACTUALLY unlock!?", "Your PS5 is NOT READY for GTA 6 day one")
     problems = make_short.title_problems
     return (all(problems(t) == [] for t in ok)
-            and any("31 characters" in p for p in problems("GTA 6 pre-load starts NOV 12..."))
+            and any("31 characters" in p for p in problems("GTA 6 pre-load starts NOV 10..."))
             and any("47 characters" in p for p in problems("GTA 6 pre-load starts SOONER than you think now"))
             and any("0 word(s) in ALL CAPS" in p for p in problems("GTA 6 on PS5 unlocks at midnight local time"))
             and any("3 word(s) in ALL CAPS" in p for p in problems("GTA 6 pre-load is LIVE and it is SO BIG"))

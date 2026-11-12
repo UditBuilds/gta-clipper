@@ -348,8 +348,8 @@ Apache-2.0. `phonemizer` and eSpeak NG, which it installs, are GPL-3.0.
 Since PR 19 a topic becomes a finished Short with its upload text, and my job is only to review it. In Claude Code:
 
 ```
-/new-short GTA 6 pre-load starts Nov 12
-/batch-shorts GTA 6 pre-load starts Nov 12; the 6 regions of Leonida; what time GTA 6 unlocks
+/new-short GTA 6 pre-load is live since Nov 10
+/batch-shorts GTA 6 pre-load is live since Nov 10; the 6 regions of Leonida; what time GTA 6 unlocks
 ```
 
 Claude scores the topic (1-5: does it matter to almost every player on day one?), writes the script from `facts.json`
@@ -379,12 +379,13 @@ The last line `make_short.py` prints is `READY` (34-39 s long and no pacing warn
 ### The facts file
 
 `facts.json` is the only source of claims. Each fact has an id, the plain claim, a safe wording, a status, a source
-link and the date it was checked. Only I change a status; Claude adds new facts as `unverified`.
+link (and `more_sources` for other links that say the same) and the date it was checked. Only I change a status;
+Claude adds new facts as `unverified`.
 
 | Status | In a script |
 |---|---|
 | `confirmed` | May be stated. |
-| `reported` | Only in its safe wording: "over 200 GB", never "212 GB". |
+| `reported` | Only in its safe wording, which says it is a report: "on Xbox, pre-load reportedly opened at midnight GMT". |
 | `unverified` | Refused. |
 
 Every line of a script lists its facts (`"facts": ["release-date"]`, or `[]` for a line like "Let me explain."). The
