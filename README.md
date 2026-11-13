@@ -456,3 +456,77 @@ misses were big signs inside the scene called "big text", which only keeps a pic
 it may end with `...` or `!?`. Like the hook, it must be literally true. The script rules (a true, surprising first
 line, then "let me explain", proof by second 3, a twist, a payoff, a last line that loops) are in
 `.claude/commands/new-short.md`.
+
+## Footage library
+
+Made for GTA 6 launch week (PR 21): the tool watches my own recordings and logs what happens in each part, so a Short
+about "police chases" can ask the library for chase footage instead of me scrubbing through hours of video. There is
+no GTA 6 footage yet, so everything here was built and measured on GTA V and takes a HUD profile (`--profile gta5`
+now, `gta6` once calibrated).
+
+```powershell
+.\.venv\Scripts\python.exe index.py C:\AI\gta\input\test1.webm --profile gta5   # index one recording
+.\.venv\Scripts\python.exe index.py --all C:\AI\gta\input                       # every recording in a folder
+.\.venv\Scripts\python.exe library.py find --activity chase --min-stars 2 --min-len 6
+.\.venv\Scripts\python.exe library.py shotlist                                  # shot-list coverage table
+.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only)
+.\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
+```
+
+`index.py` writes `C:\AI\gta\library\<video>\index.json` and `review.html` (one row per segment, never-use rows in
+red, click a time to play it), and adds the recording to `C:\AI\gta\library\library.json`.
+
+**How a recording is indexed.**
+
+1. One ffmpeg pass (GPU decode) reads the HUD twice a second and saves one "sheet" per 6 s of video: 4 frames, 1.5 s
+   apart, in a 2x2 grid.
+2. Code reads the HUD first, with `clip.py`'s own detectors and the profile: minimap there or not, phone call screen,
+   wanted stars. New: it also counts the stars (an earned star has a dark outline round a lighter middle; an empty
+   slot is a flat grey shape).
+3. A local vision model (`qwen3-vl:4b-instruct` in Ollama) looks at each sheet and answers in strict JSON: `activity`
+   (driving, on_foot, shootout, chase, flying, boat, swimming, cutscene, menu_map, phone, loading, other), `vehicle`,
+   `police_visible`, one `notable` line, `confidence`. It is told nothing about the HUD.
+4. Code merges both into segments. The HUD rules apply per half second and always win: call screen up = `phone`; no
+   minimap for 1.5 s = `cutscene` (or the model's `menu_map`/`loading`); in a vehicle with wanted stars = `chase` (one
+   frame can't show a chase, the stars can). `cutscene`, `menu_map`, `loading` and `phone` segments are `never_use`.
+
+Every model answer is cached, so a re-run takes seconds and a stopped run carries on. Held-out footage
+(`C:\AI\gta\heldout`) is refused. The answer keys are only read by `indexeval.py`, never by the indexer.
+
+**Speed probe** (first 3 min of test1, seconds per model call once loaded):
+
+| Model | s per call | Note |
+|---|---|---|
+| `qwen3-vl:4b` (plain) | 8.2 | unusable: it spends the answer thinking, 3 of 3 replies were cut off |
+| `qwen3-vl:4b-instruct` | 3.4 | fits the 8 GB GPU whole (3.6 GB) |
+| `qwen3-vl:8b-instruct` | 5.0 | 0.9 GB of it runs on the CPU |
+
+The picture size made no difference (320, 448, 640 and 960 px wide all took 3.3 s with the 4b): Ollama turns every
+picture into about 1,500 tokens. So a call costs the same for 4 frames as for 1, and the indexer sends a sheet of 4.
+With one sheet per 6 s a 20-minute video needs 200 calls, about 12.5 minutes with the 4b-instruct; the 8b-instruct
+would need about 18. On the sheets the 4b also caught test1's 2:10 shootout, which the 8b called on_foot.
+
+Ollama's memory grows with every picture (free memory fell from 12 to 4.4 GB over 60 calls), so `index.py` unloads the
+model when free memory drops under 5 GB; the next call loads it again (about 5 s).
+
+**The shot-list.** `shotlist.json` lists launch-week mechanic topics (wanted system, police chase, driving, combat,
+exploring, heist, stealing cars, crashes and stunts). Each topic is a list of shots written as library queries. It
+holds only shots, no claims about GTA 6, and every topic is marked `verify after launch`.
+
+**Measured on the dev videos** (`indexeval.py`; the prompt and rules were not changed after these numbers).
+
+- test1, my five confirmed moments: 5 of 5 found. Gun out + carjack 0:50-1:10 = shootout/on_foot with "gun drawn"
+  and "pushes car"; driving with stars 1:20-2:00 = chase, 1 star (the stars really end at 1:52); the 2:10 shootout =
+  shootout; the body on the road 2:50 = on_foot, "Body on ground after car crash"; driving with stars 3:10-4:10 =
+  chase, 2 stars.
+- never_use against the answer keys' never-pick ranges: test1 298 of 299 s (6 of 6 ranges), test2 518 of 558 s (9 of
+  12 ranges at 95 % or more). The three low ones show the minimap, so the HUD rule can't see them and the model called
+  them on_foot: walking while a call is on (10:38-11:02, 67 %), the clothes shop (17:15-18:35, 68 %) and the Lifeinvader
+  entrance (20:05-20:35, 88 %).
+- Wrong never_use: test1 12 s and test2 36 s outside the never-pick ranges, nearly all of it scripted cameras where the
+  game hides the HUD. The biggest is test2's house collapse (3:20-3:35), which my key calls action.
+- **A chase with no wanted stars is not found as a chase.** test1's yacht chase and test2's gang chase came out as
+  `driving` (91 % and 95 %). The chase label comes almost entirely from the HUD rule (vehicle + stars); the model said
+  chase on 2 of 364 sheets.
+- A stretch with no minimap is called `cutscene` unless the model says menu or loading, so a short pause map can be
+  listed as cutscene. It is never_use either way.
