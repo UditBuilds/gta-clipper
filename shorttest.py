@@ -687,10 +687,12 @@ def claims_sheet_lists_each_fact_with_its_source():
 
 @check
 def the_real_facts_file_reads_and_keeps_the_owners_statuses():
-    """facts.json in the repo loads and every fact has the status the owner gave it (2026-11-12: nine confirmed, the
-    Xbox pre-load time reported with a safe wording that says so, the rest unverified); digital pre-load is November
-    10 and no usable fact says November 12 except as the old date or the boxed-copy date; every fact that may be used
-    has a source link and the date it was checked"""
+    """facts.json in the repo loads and keeps the rules, whatever the number of facts: every fact has a valid status,
+    time_sensitive and checked_on (load_facts checks this); the nine facts the owner confirmed on 2026-11-12 are still
+    confirmed, the Xbox pre-load time is still reported and longest-gta-gap still unverified (more facts may be added,
+    these must not change); every reported fact's safe wording says "reportedly"; digital pre-load is November 10 and
+    no usable fact says November 12 except as the old date or the boxed-copy date; every fact that may be used has a
+    source link and the date it was checked"""
     real = facts.load_facts()
     confirmed = {"release-date", "preload-date", "preload-moved-to-nov-10", "boxed-copies-nov-12", "storage-212-gb",
                  "unlock-time", "six-regions", "thirteen-year-wait", "preload-no-early-play"}
@@ -703,17 +705,17 @@ def the_real_facts_file_reads_and_keeps_the_owners_statuses():
                                              {"id": "a", "claim": "x", "safe_wording": "", "status": "confirmed"}]}),
                        encoding="utf-8")
         broken = raises(facts.FactsError, facts.load_facts, bad)
-    return ({name for name, f in real.items() if f["status"] == "confirmed"} == confirmed
-            and {name for name, f in real.items() if f["status"] == "reported"} == {"preload-xbox-global"}
-            and "reportedly" in real["preload-xbox-global"]["safe_wording"]
-            and all("reportedly" in w for w in real["preload-xbox-global"]["also_ok"])
+    reported = {name: f for name, f in real.items() if f["status"] == "reported"}
+    return (all(real[name]["status"] == "confirmed" for name in confirmed)
+            and real["preload-xbox-global"]["status"] == "reported"
+            and all("reportedly" in w for f in reported.values() for w in [f["safe_wording"], *f.get("also_ok", [])])
             and real["preload-date"]["safe_wording"] == "digital pre-load on PS5 started at midnight local time on November 10"
             and says_12 == {"preload-moved-to-nov-10", "boxed-copies-nov-12"}
             and "212" in facts.numbers_in(real["storage-212-gb"]["safe_wording"])
             and "ps5-download-size" not in real and "longest gap" not in real["thirteen-year-wait"]["claim"]
             and real["longest-gta-gap"]["status"] == "unverified"
             and all(f.get("checked_on") and f.get("source") for f in usable.values())
-            and len(real) - len(usable) == 12
+            and all(f["status"] in facts.STATUSES and isinstance(f["time_sensitive"], bool) for f in real.values())
             and broken and "status is" in broken and "two facts have this id" in broken and "needs safe_wording" in broken)
 
 

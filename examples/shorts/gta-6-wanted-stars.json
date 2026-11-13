@@ -2,7 +2,7 @@
   "topic": "How GTA 6's wanted system works: 6 stars, hollow vs solid vs red stars, witnesses, what police know",
   "topic_score": {"score": 3, "why": "Almost every player meets the police in their first hour, but nobody needs this before launch day."},
   "title": "GTA 6 wanted stars: hollow, solid or RED?",
-  "description": "GTA 6 has six wanted stars, one more than GTA 5's five. Rockstar says police only hear about a crime from a witness or an alarm. What the hollow, solid white and red stars mean comes from press previews, so it is reported, not confirmed by Rockstar.",
+  "description": "GTA 6 has six wanted stars, one more than GTA 5's five. Rockstar says a crime needs a witness, or an alarm, before police hear about it. What the hollow, solid white and red stars mean comes from press previews, so it is reported, not confirmed by Rockstar.",
   "hashtags": ["#GTA6", "#GTAVI", "#GTA6Police", "#Shorts"],
   "voice": "am_puck", "speed": 1.0, "music": "auto", "sfx": true,
   "end_pill": "@NeonGetaway • Subscribe",
@@ -14,20 +14,19 @@
        {"beat": "card", "card": "~5 STARS~|*6 STARS*"}],
      "green": ["SIX"], "red": ["FIVE"]},
 
-    {"say": "But the stars aren't the clever part. Let me explain.",
+    {"say": "But stars aren't the clever part. Let me explain.",
      "facts": [],
      "beats": [
        {"beat": "banner", "text": "Let me explain", "query": "Jason Lucia"},
        {"beat": "full", "query": "helicopter city skyline"}],
      "green": [], "red": []},
 
-    {"say": "Rockstar says police only hear about a crime from a witness or an alarm.",
+    {"say": "Rockstar says a crime needs a witness, or an alarm, before police hear about it.",
      "facts": ["wanted-witness-or-alarm"],
      "beats": [
        {"beat": "full", "query": "police car crowd"},
        {"beat": "snippet", "text": "A crime needs a witness, or an alarm.", "highlight": ["witness", "alarm"],
-        "label": {"text": "Rockstar says", "style": "info"}},
-       {"beat": "full", "query": "crowd phone"}],
+        "label": {"text": "Rockstar says", "style": "info"}}],
      "green": ["WITNESS", "ALARM"], "red": []},
 
     {"say": "A hollow star reportedly means a crime was reported but police have no description of you.",
