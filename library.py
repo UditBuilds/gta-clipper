@@ -15,7 +15,8 @@ A query (the same keys on the command line, in find() and in shotlist.json):
   min_len / max_len       the segment's length in seconds
   vehicle    one or more words; matches if the segment's vehicle contains any of them ("car" matches "sports car")
   police     true: only segments where the model saw police
-  text       one or more words or phrases; matches if any is in the segment's notable lines (case ignored)
+  text       one or more words or phrases; matches if any is in a notable line of the segment (case ignored).
+             Every sheet inside the segment is read, and the row lists the lines that matched with their times
   after      one or more activities; the segment must directly follow a segment with one of them (same video)
   video      one or more recording names (without the extension)
   profile    HUD profile the recording was indexed with (gta5 now, gta6 after launch)
@@ -88,8 +89,19 @@ def check_query(query):
     return q
 
 
+def segment_lines(idx, seg):
+    """Every notable line of a segment, as {t, text}: one per sheet whose middle is inside it. A segment keeps only
+    a few lines of its own (index.MAX_NOTABLE_LINES), so a text search reads the sheets; an index without sheets,
+    or a segment shorter than a sheet, falls back to the segment's own lines."""
+    every = (idx.get("settings") or {}).get("every_s")
+    lines = [{"t": sh["t"], "text": sh["notable"]} for sh in idx.get("sheets", [])
+             if every and sh.get("notable") and seg["start_s"] <= sh["t"] + every / 2 < seg["end_s"]]
+    return lines or seg["notable"]
+
+
 def find(indexes, **query):
-    """The segments that match the query, as rows (dicts), in video then time order."""
+    """The segments that match the query, as rows (dicts), in video then time order. With a text query each row
+    also has text_hits: the matching lines with their times in the recording."""
     q = check_query(query)
     rows = []
     for idx in indexes:
@@ -99,7 +111,10 @@ def find(indexes, **query):
             continue
         segs = idx["segments"]
         for k, s in enumerate(segs):
-            notable = " | ".join(n["text"] for n in s["notable"])
+            lines = segment_lines(idx, s)
+            hits = [n for n in lines if any(t in n["text"].lower() for t in q["text"])]
+            # With a text query the row shows the lines that matched; otherwise the segment's own summary lines.
+            notable = " | ".join(n["text"] for n in (hits if q["text"] else s["notable"]))
             if ((q["exclude_never_use"] and s["never_use"])
                     or (q["activity"] and s["activity"] not in q["activity"])
                     or s["max_stars"] < q["min_stars"]
@@ -108,15 +123,17 @@ def find(indexes, **query):
                     or (q["max_len"] is not None and s["duration_s"] > q["max_len"])
                     or (q["vehicle"] and not any(v in s["vehicle"] for v in q["vehicle"]))
                     or (q["police"] is not None and s["police_visible"] != q["police"])
-                    or (q["text"] and not any(t in notable.lower() for t in q["text"]))
+                    or (q["text"] and not hits)
                     or (q["after"] and (k == 0 or segs[k - 1]["activity"] not in q["after"]))):
                 continue
+            # Deduplicated for display; text_hits keeps every matching line with its time, for cutting to the moment.
+            notable = " | ".join(dict.fromkeys(notable.split(" | ")))
             rows.append({"video": idx["video"]["stem"], "path": idx["video"]["path"],
                          "profile": idx["profile"]["name"], "segment": k + 1,
                          "start_s": s["start_s"], "end_s": s["end_s"], "duration_s": s["duration_s"],
                          "activity": s["activity"], "never_use": s["never_use"], "max_stars": s["max_stars"],
                          "stars_s": s["stars_s"], "vehicle": s["vehicle"], "police_visible": s["police_visible"],
-                         "notable": notable})
+                         "notable": notable, "text_hits": hits if q["text"] else []})
     return rows
 
 
@@ -126,9 +143,11 @@ def print_rows(rows, out=print):
         return
     wide = max(len(r["video"]) for r in rows)
     for r in rows:
+        # After a text search: the matching lines, each with its time in the recording.
+        note = (" | ".join(f"[{hms(n['t'])}] {n['text']}" for n in r["text_hits"]) if r["text_hits"]
+                else r["notable"])
         out(f"{r['video']:<{wide}}  {hms(r['start_s']):>6}-{hms(r['end_s']):<6} {r['duration_s']:>6.1f} s  "
-            f"{r['activity']:<9}{' NEVER_USE' if r['never_use'] else ''}  stars {r['max_stars']}  "
-            f"{r['notable'][:110]}")
+            f"{r['activity']:<9}{' NEVER_USE' if r['never_use'] else ''}  stars {r['max_stars']}  {note[:140]}")
     out(f"{len(rows)} segment(s), {sum(r['duration_s'] for r in rows):.0f} s in all.")
 
 

@@ -503,8 +503,10 @@ Every model answer is cached, so a re-run takes seconds and a stopped run carrie
 
 The picture size made no difference (320, 448, 640 and 960 px wide all took 3.3 s with the 4b): Ollama turns every
 picture into about 1,500 tokens. So a call costs the same for 4 frames as for 1, and the indexer sends a sheet of 4.
-With one sheet per 6 s a 20-minute video needs 200 calls, about 12.5 minutes with the 4b-instruct; the 8b-instruct
-would need about 18. On the sheets the 4b also caught test1's 2:10 shootout, which the 8b called on_foot.
+**The model therefore answers once per 6 s sheet, not once per frame**: 3.4 s per call, which is about 0.85 s per
+frame it looks at. Measured on whole videos (first run, nothing cached): test1 (15:24) took 590 s and test2 (20:49)
+took 766 s, 12.8 minutes, of which 58 s is the ffmpeg pass. That is 12.3 minutes per 20 minutes of video; the
+8b-instruct would need about 18. On the sheets the 4b also caught test1's 2:10 shootout, which the 8b called on_foot.
 
 Ollama's memory grows with every picture (free memory fell from 12 to 4.4 GB over 60 calls), so `index.py` unloads the
 model when free memory drops under 5 GB; the next call loads it again (about 5 s).
@@ -515,16 +517,25 @@ holds only shots, no claims about GTA 6, and every topic is marked `verify after
 
 **Measured on the dev videos** (`indexeval.py`; the prompt and rules were not changed after these numbers).
 
-- test1, my five confirmed moments: 5 of 5 found. Gun out + carjack 0:50-1:10 = shootout/on_foot with "gun drawn"
-  and "pushes car"; driving with stars 1:20-2:00 = chase, 1 star (the stars really end at 1:52); the 2:10 shootout =
-  shootout; the body on the road 2:50 = on_foot, "Body on ground after car crash"; driving with stars 3:10-4:10 =
-  chase, 2 stars.
+- test1, my five confirmed moments: 5 of 5 found. A moment counts as found when a usable segment there has the right
+  activity (a vehicle activity for at least half of a driving range; a shootout segment for a gun moment), the stars
+  were counted where I had stars, and a notable line names the thing where the moment is a thing (the body).
+  - 0:50-1:10 gun out + carjack: shootout and on_foot, "gun drawn". The carjack is only described ("Player pushes
+    car, then abandons it with a body on ground"), there is no carjack label.
+  - 1:20-2:00 driving with stars: chase, 1 star, until the stars end at 1:52, then driving.
+  - 2:10 shootout: shootout ("Player exits car, aims gun").
+  - 2:50 body on the road: on_foot, "Body on ground after car crash with blood on pavement".
+  - 3:10-4:10 driving with stars: chase, 2 stars, the whole range.
 - never_use against the answer keys' never-pick ranges: test1 298 of 299 s (6 of 6 ranges), test2 518 of 558 s (9 of
   12 ranges at 95 % or more). The three low ones show the minimap, so the HUD rule can't see them and the model called
   them on_foot: walking while a call is on (10:38-11:02, 67 %), the clothes shop (17:15-18:35, 68 %) and the Lifeinvader
   entrance (20:05-20:35, 88 %).
-- Wrong never_use: test1 12 s and test2 36 s outside the never-pick ranges, nearly all of it scripted cameras where the
-  game hides the HUD. The biggest is test2's house collapse (3:20-3:35), which my key calls action.
+- never_use outside the never-pick ranges: test1 12 s and test2 36 s, every one from the HUD rule (no minimap). The
+  three I looked at are scripted cameras where the game itself hides the HUD: test2's house collapse (3:20-3:35, which
+  my key calls action, so the best 15 s of that moment are never_use), the character-switch flash at 4:48, and a
+  cinematic cut inside test1's yacht chase (11:10-11:15). The rest are a few seconds at the edges of cutscenes.
+- A text search (`--text crash`) reads every sheet's line and gives the time of each match. The model sometimes
+  writes what is missing ("no crashes or police"), and that matches too.
 - **A chase with no wanted stars is not found as a chase.** test1's yacht chase and test2's gang chase came out as
   `driving` (91 % and 95 %). The chase label comes almost entirely from the HUD rule (vehicle + stars); the model said
   chase on 2 of 364 sheets.

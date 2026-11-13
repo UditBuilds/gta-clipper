@@ -429,15 +429,31 @@ def low_memory_unloads_the_model_then_stops_the_run():
 
 @check
 def held_out_footage_is_refused():
-    """a video inside C:\\AI\\gta\\heldout is refused before anything is read; a video elsewhere is not off limits"""
-    barred = Path(r"C:\AI\gta\heldout\heldout1.webm")
-    try:
-        index.index_video(barred) if barred.is_file() else None
-        refused = not barred.is_file()
-    except index.IndexError_ as e:
-        refused = "held-out" in str(e)
-    return (refused and index.off_limits(barred) is not None
-            and index.off_limits(Path(r"C:\AI\gta\input\test1.webm")) is None)
+    """C:\\AI\\gta\\heldout is off limits and the input folder is not; a video in an off-limits folder is refused
+    before ffmpeg, the model or the library is touched (tried on a stand-in folder, never on the real footage)"""
+    real_rule = (index.off_limits(Path(r"C:\AI\gta\heldout\heldout1.webm")) == Path(r"C:\AI\gta\heldout")
+                 and index.off_limits(Path(r"C:\AI\gta\heldout\sub\x.webm")) is not None
+                 and index.off_limits(Path(r"C:\AI\gta\input\test1.webm")) is None)
+    touched, saved = [], index.OFF_LIMITS
+
+    def never(*args, **kw):
+        touched.append(args)
+        raise AssertionError("an off-limits video got as far as the model")
+    with tempfile.TemporaryDirectory() as tmp:
+        barred = Path(tmp) / "heldout_stand_in"
+        barred.mkdir()
+        (barred / "secret.mp4").write_bytes(b"not a video")
+        index.OFF_LIMITS = (barred,)
+        try:
+            index.index_video(barred / "secret.mp4", library=Path(tmp) / "lib", ask=never,
+                              ollama=SimpleNamespace(check_ollama=never, unload=never), log=lambda m: None)
+            refused = False
+        except index.IndexError_ as e:
+            refused = "held-out" in str(e)
+        finally:
+            index.OFF_LIMITS = saved
+        nothing_written = not (Path(tmp) / "lib").exists()
+    return real_rule and refused and not touched and nothing_written
 
 
 @check
@@ -633,6 +649,25 @@ def find_filters_by_every_key():
             and [r["start_s"] for r in f(lib, after=["chase"])] == [20.0]
             and [r["activity"] for r in f(lib, video=["vidA"], after=["cutscene"], exclude_never_use=False)]
             == ["shootout"])
+
+
+@check
+def text_search_reads_every_sheet_of_a_segment():
+    """a segment keeps 6 notable lines at most, but a text search reads every sheet inside it: a word said in one
+    of 20 sheets is found, the row gives that line and its time, and a word in no sheet finds nothing"""
+    times = [k * 6.0 for k in range(20)]
+    recs = [record("driving", f"Player drives a car, part {k}.") for k in range(20)]
+    recs[13] = record("driving", "Car hits a lamp post and explodes.")
+    segs = index.build_segments(times, recs, 6.0, 120.0, hud(240))
+    idx = {"video": {"stem": "long", "path": "x", "duration_s": 120.0}, "profile": {"name": "gta5", "game": "GTA V"},
+           "settings": {"every_s": 6.0}, "segments": segs,
+           "sheets": [{"t": t, **r["answer"]} for t, r in zip(times, recs)]}
+    rows = library.find([idx], text=["lamp post"])
+    return (len(segs) == 1 and len(segs[0]["notable"]) == 6
+            and not any("lamp" in n["text"] for n in segs[0]["notable"])
+            and len(rows) == 1 and rows[0]["text_hits"] == [{"t": 78.0, "text": "Car hits a lamp post and explodes."}]
+            and rows[0]["notable"] == "Car hits a lamp post and explodes."
+            and library.find([idx], text=["helicopter"]) == [] and library.find([idx])[0]["text_hits"] == [])
 
 
 @check
