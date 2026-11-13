@@ -597,7 +597,7 @@ def update_library(library, index):
 
 
 def index_video(video, profile=clip.DEFAULT_PROFILE, model=MODEL, every=EVERY_S, width=FRAME_W, library=LIBRARY,
-                limit_s=None, ask=ask_model, ollama=vlm, log=print):
+                limit_s=None, ask=ask_model, ollama=vlm, log=print, ram=free_ram_gb):
     """Index one recording; returns the index (also written to <library>/<stem>/index.json)."""
     video = Path(video)
     if not video.is_file():
@@ -660,7 +660,7 @@ def index_video(video, profile=clip.DEFAULT_PROFILE, model=MODEL, every=EVERY_S,
     log(f"Asking {model} about {len(times)} sheets" + (f" ({free:.1f} GB of memory free)..." if free else "..."))
     try:
         records, stats = label_frames(video, times, frame_dir, model, model_info, prompt, library / "_cache", every,
-                                      width, ask=ask, log=log, unload=ollama.unload)
+                                      width, ask=ask, log=log, ram=ram, unload=ollama.unload)
     finally:
         ollama.unload(model)   # its memory goes back as soon as the sheets are done, or the run stops
 
