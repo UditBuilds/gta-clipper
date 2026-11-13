@@ -1,0 +1,84 @@
+{
+  "topic": "the 6 regions of Leonida",
+  "topic_score": {"score": 4, "why": "Every player will explore the map, but nobody has to know it before launch day."},
+  "title": "GTA 6 is SIX regions, not just Vice City...",
+  "description": "GTA 6 has six confirmed regions: Vice City, Leonida Keys, Port Gellhorn, Grassrivers, Ambrosia and Mount Kalaga National Park. The game launches on November 19, 2026.",
+  "hashtags": ["#GTA6", "#GTAVI", "#ViceCity", "#Shorts"],
+  "voice": "am_puck",
+  "speed": 1.0,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "GTA 6 is not one city. It is six regions. Here's why that matters.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "count", "card": "6 REGIONS", "label": "Confirmed"},
+       {"beat": "full", "query": "helicopter city skyline"}],
+     "green": ["SIX REGIONS"], "red": []},
+    {"say": "You already know the first one. Vice City.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "skyscrapers bridge", "label": "Vice City"},
+       {"beat": "full", "query": "gas station", "label": "Vice City"}],
+     "green": ["VICE CITY"], "red": []},
+    {"say": "But that city is only the start of the map.",
+     "facts": [],
+     "beats": [
+       {"beat": "banner", "text": "Only the start", "query": "yacht"}],
+     "green": [], "red": []},
+    {"say": "There are the Leonida Keys.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "bridge ocean", "label": "Leonida Keys"}],
+     "green": ["LEONIDA KEYS"], "red": []},
+    {"say": "There is Port Gellhorn.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "motel", "label": "Port Gellhorn"}],
+     "green": ["PORT GELLHORN"], "red": []},
+    {"say": "There is Grassrivers.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "airboat", "label": "Grassrivers"}],
+     "green": ["GRASSRIVERS"], "red": []},
+    {"say": "There is Ambrosia.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "motorcycle", "label": "Ambrosia"}],
+     "green": ["AMBROSIA"], "red": []},
+    {"say": "And the last one is Mount Kalaga National Park.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "card", "query": "road cliffs", "label": "Mount Kalaga"},
+       {"beat": "full", "query": "river trees", "label": "Mount Kalaga"}],
+     "green": ["MOUNT KALAGA"], "red": []},
+    {"say": "That is six regions, every one of them confirmed, in a single game.",
+     "facts": ["six-regions"],
+     "beats": [
+       {"beat": "snippet", "text": "Vice City. Leonida Keys. Port Gellhorn. Grassrivers. Ambrosia. Mount Kalaga National Park.",
+        "highlight": ["Mount Kalaga National Park"], "label": "6 regions"},
+       {"beat": "compare", "top": {"query": "alligator", "label": "Grassrivers"},
+        "bottom": {"query": "city skyline", "label": "Vice City"}}],
+     "green": ["SIX REGIONS"], "red": []},
+    {"say": "You waited about 13 years for this. GTA 5 came out back in 2013.",
+     "facts": ["thirteen-year-wait"],
+     "beats": [
+       {"beat": "count", "card": "13 YEARS", "label": "The wait"},
+       {"beat": "full", "query": "Lucia"}],
+     "green": ["13 YEARS"], "red": []},
+    {"say": "And it launches on November 19, on PS5 and Xbox Series X and S.",
+     "facts": ["release-date"],
+     "beats": [
+       {"beat": "count", "card": "19 NOV", "label": "Launch day"},
+       {"beat": "full", "query": "police car night"}],
+     "green": ["NOVEMBER 19"], "red": []},
+    {"say": "So start picking the region you will drive to first on day one, because",
+     "facts": [],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia car"}],
+     "green": [], "red": []}
+  ]
+}
+

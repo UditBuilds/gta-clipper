@@ -1,0 +1,68 @@
+{
+  "topic": "GTA 6 pre-load is live since Nov 10",
+  "topic_score": {"score": 5, "why": "Every digital buyer has to download the game before launch day, and it is a very big download."},
+  "title": "GTA 6 pre-load is LIVE, and it is HUGE...",
+  "description": "GTA 6 digital pre-load on PS5 started at midnight local time on November 10, after Rockstar moved it forward from November 12. It needs up to 212 GB of free space. Pre-loading does not let you play early: Rockstar says GTA 6 unlocks at midnight local time on November 19.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Preload", "#Shorts"],
+  "voice": "am_puck",
+  "speed": 1.1,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "GTA 6 pre-load is already live, and it started earlier than planned. Here's why.",
+     "facts": ["preload-date", "preload-moved-to-nov-10"],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "card", "card": "PRE-LOAD|*IS LIVE*"},
+       {"beat": "full", "query": "city skyline night", "region": "Vice City"}],
+     "green": ["ALREADY LIVE"], "red": []},
+    {"say": "Digital pre-load on PS5 started at midnight local time on November 10.",
+     "facts": ["preload-date"],
+     "beats": [
+       {"beat": "count", "card": "10 NOV", "label": "Pre-load on PS5"},
+       {"beat": "snippet", "text": "Digital pre-load on PS5 started at midnight local time on November 10.",
+        "highlight": ["November 10"], "label": "Confirmed", "weight": 1.4}],
+     "green": ["NOVEMBER 10"], "red": []},
+    {"say": "On Xbox, pre-load reportedly opened at midnight GMT on November 10.",
+     "facts": ["preload-xbox-global"],
+     "beats": [
+       {"beat": "card", "query": "pool palm trees", "label": "Xbox: reported"},
+       {"beat": "full", "query": "yacht city skyline"}],
+     "green": ["MIDNIGHT GMT"], "red": []},
+    {"say": "If you saw November 12, that date is old. Rockstar moved it forward to November 10.",
+     "facts": ["preload-moved-to-nov-10"],
+     "beats": [
+       {"beat": "full", "query": "helicopter"},
+       {"beat": "card", "card": "~NOV 12~|*NOV 10*", "weight": 1.3}],
+     "green": ["NOVEMBER 10"], "red": ["NOVEMBER 12"]},
+    {"say": "November 12 is now when boxed copies arrive in shops.",
+     "facts": ["boxed-copies-nov-12"],
+     "beats": [
+       {"beat": "full", "query": "motorcycle road", "label": "Boxed copies: Nov 12"}],
+     "green": ["BOXED COPIES"], "red": []},
+    {"say": "The download needs up to 212 gigabytes of free space.",
+     "facts": ["storage-212-gb"],
+     "beats": [
+       {"beat": "card", "card": "UP TO|*212 GB*", "label": "Free space", "weight": 1.4},
+       {"beat": "full", "query": "police car night"}],
+     "green": ["212 GIGABYTES"], "red": []},
+    {"say": "But here's the catch. Pre-loading does not let you play early.",
+     "facts": ["preload-no-early-play"],
+     "beats": [
+       {"beat": "banner", "text": "The catch", "query": "boat ocean"},
+       {"beat": "card", "query": "Jason gun", "label": {"text": "No early play", "style": "no"}, "weight": 1.3}],
+     "green": [], "red": ["PLAY EARLY"]},
+    {"say": "Rockstar says GTA 6 unlocks at midnight local time on November 19.",
+     "facts": ["unlock-time"],
+     "beats": [
+       {"beat": "count", "card": "19 NOV", "label": "Launch day"},
+       {"beat": "full", "query": "Lucia"}],
+     "green": ["NOVEMBER 19"], "red": []},
+    {"say": "So start your download tonight and be ready, because",
+     "facts": [],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia car"}],
+     "green": [], "red": []}
+  ]
+}

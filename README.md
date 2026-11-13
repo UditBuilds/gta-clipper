@@ -285,7 +285,9 @@ media) and approved its second version, C2.
   off.
 - **Loop.** The last frame's picture is the first frame's again (the last spoken word's caption can still be up). When
   the Short opens on a clip used from its start, the ending plays that clip backwards into its first frame, so nothing
-  stands still (before PR 18 it held that frame for 1.5 s).
+  stands still (before PR 18 it held that frame for 1.5 s). The ending takes the last 1.5 s, and it never takes a
+  picture's whole time: a shot it would cover starts earlier and gets at least 1.0 s, taken from the shot before it
+  (before PR 19 a last line shorter than 1.5 s lost its picture).
 
 ```powershell
 .\.venv-tts\Scripts\python.exe explainer.py examples\nov10_preload_v2.json   # the Nov 10 Short in look C
@@ -342,3 +344,115 @@ wider than "212"). Cards are now sized for all three.
 
 Fonts: [Anton](fonts/OFL.txt) and [Lilita One](fonts/LilitaOne-OFL.txt), both SIL Open Font License. Kokoro's weights are
 Apache-2.0. `phonemizer` and eSpeak NG, which it installs, are GPL-3.0.
+
+## Topic to Short
+
+Since PR 19 a topic becomes a finished Short with its upload text, and my job is only to review it. In Claude Code:
+
+```
+/new-short GTA 6 pre-load is live since Nov 10
+/batch-shorts GTA 6 pre-load is live since Nov 10; the 6 regions of Leonida; what time GTA 6 unlocks
+```
+
+Claude scores the topic (1-5: does it matter to almost every player on day one?), writes the script from `facts.json`
+only, picks the pictures, renders, looks at the picks, and reports the paths. Nothing is ever uploaded. The same thing
+by hand, in Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe tag_media.py                                  # once, and after adding pictures (needs Ollama)
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --check   # checks only, renders nothing
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --allow-stale              # render even with a fact checked over 3 days ago
+.\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --folder-date 2026-11-11   # render that day's folder again
+.\.venv\Scripts\python.exe shorttest.py                                  # 41 checks, about 20 s, no Ollama needed
+```
+
+Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
+
+| File | What it is for |
+|---|---|
+| `short.mp4` | The Short. |
+| `upload.txt` | The title, and the description with its 3-5 hashtags. |
+| `claims.txt` | Every line next to the facts it uses, their status and their source links. |
+| `picks.jpg` | Each picture (the part the viewer sees) next to the words said and shown over it, and its seconds on screen. A picture that never gets on screen is grey, and the Short is NOT READY. |
+| `pacing.txt` | The pacing check. |
+| `script.json`, `script_resolved.json` | The script as written, and as rendered (every query now a file). |
+
+The last line `make_short.py` prints is `READY` (34-39 s long and no pacing warning) or `NOT READY` and why.
+
+### The facts file
+
+`facts.json` is the only source of claims. Each fact has an id, the plain claim, a safe wording, a status, a source
+link (and `more_sources` for other links that say the same), the day it was checked (`checked_on`) and whether it
+can change from day to day (`time_sensitive`). Only I change a status; Claude adds new facts as `unverified`.
+
+| Status | In a script |
+|---|---|
+| `confirmed` | May be stated. |
+| `reported` | Only in its safe wording, which says it is a report: "on Xbox, pre-load reportedly opened at midnight GMT". |
+| `unverified` | Refused. |
+
+Every line of a script lists its facts (`"facts": ["release-date"]`, or `[]` for a line like "Let me explain."). The
+check refuses a missing list, an unknown or unverified fact, a reported fact without its safe wording in that line, and
+any number said or shown that is not in the wording of a fact that line lists. It can't read meaning, so a wrong claim
+with no number in it still passes under a real fact ID: that is what `claims.txt` is for.
+
+**Stale facts.** Launch-week facts change: Rockstar moved digital pre-load from November 12 to November 10 on
+November 3, and a Short made from the old date had to be thrown away. So a script that uses a `time_sensitive` fact
+whose `checked_on` is more than 3 days old is refused, by `--check` too, with a list of those facts:
+
+```
+ERROR: the script needs fixing before it can be made:
+  2 facts in this script can change from day to day and were last checked more than 3 days ago, so nothing was rendered (today is 2026-11-16):
+    - "GTA 6 launches 19 Nov 2026 on PS5 and Xbox Series X|S."  (release-date, lines 2, 7): last checked on 2026-11-12, 4 days ago
+    - "Pre-loading does not let you play early."  (preload-no-early-play, line 6): last checked on 2026-11-12, 4 days ago
+  Read each one again against its source link. If it still holds, set its "checked_on" in facts.json to today's date; if it changed, fix the fact first. To render anyway, add --allow-stale.
+```
+
+`--allow-stale` renders anyway and turns the list into a warning. It is for me; Claude never passes it.
+
+### Pictures by what they show
+
+`tag_media.py` has a local vision model look at Rockstar's 334 pictures and 9 video loops and saves, for each one, a
+description, the main subject, the things in view, the setting, a focus point, its type (screenshot, wallpaper,
+edition, key art, video loop), its shape, and whether big text, a logo or an age-rating card is printed on it. The tags
+are in `C:\AI\gta\rockstar\_tags.json`. `_tag_check\index.html` in that folder shows every thumbnail with its tags; fixes
+made there are saved as `_tags_override.json`, which always wins over the model.
+
+A shot then asks for a picture instead of naming a file (a file path still works):
+
+```json
+{"beat": "full", "query": "swamp airboat", "region": "Grassrivers"}
+{"beat": "card", "query": "bridge ocean", "label": "Leonida Keys"}
+{"beat": "full", "query": "game logo", "media": "video", "text_ok": true}
+```
+
+- A picture is never used twice in a Short (the six cuts of one wallpaper are one picture), and pictures of the last 5
+  Shorts are avoided while another good match exists (`C:\AI\gta\shorts\_used_media.json`).
+- A full-screen shot prefers a phone-shaped picture, a card a square one and a compare a landscape one.
+- A picture with big text or a logo needs `"text_ok": true`. One with a rating card is never picked. A video needs
+  `"media": "video"` and starts after its rating card. A picture of a paid edition's bonus items needs
+  `"type": "edition"`.
+- If nothing matches well, the Short stops and names the closest picture. `--allow-weak` uses it and marks it red on
+  `picks.jpg`.
+- A label that names a region picks from that region's folder, a picture of the place before one that is mainly of a
+  person, and is refused on a picture from anywhere else or on one whose subjects clearly contradict it
+  (`regions.json`). The folder is trusted over the "where" tags, which are the model's weakest.
+- `lockon` and `marks` point at a spot in one picture, so those shots name a `file`.
+
+The three demo scripts are in `examples\shorts\`. The 34-39 s target is checked on the real voice: short, choppy lines
+are read faster, so a script of place names needed speed 1.0 and 111 words where the others fit at 1.1 with 100-105.
+
+**Which model.** `qwen3-vl:8b-instruct`, compared with the 4b on 20 files that I judged by eye against notes written
+before reading the answers. The tags were equally good (98 of 100 checks each). The 8b put the focus point within a
+tenth of the frame of the subject on 14 files against 8, and the 4b answered the exact centre 8 times. The 8b takes
+about 7 s a picture against 4.5 s. The plain `qwen3-vl:4b` and `:8b` return nothing, because they spend the whole
+answer thinking, so the `-instruct` builds are used. The check for text and logos got 12 of 14 sample files right; both
+misses were big signs inside the scene called "big text", which only keeps a picture out.
+
+### Title rules
+
+32-46 characters, ALL CAPS on only 1 or 2 words (GTA, PS5 and other always-capital names don't count), no hashtags, and
+it may end with `...` or `!?`. Like the hook, it must be literally true. The script rules (a true, surprising first
+line, then "let me explain", proof by second 3, a twist, a payoff, a last line that loops) are in
+`.claude/commands/new-short.md`.

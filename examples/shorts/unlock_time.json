@@ -1,0 +1,60 @@
+{
+  "topic": "what time GTA 6 unlocks",
+  "topic_score": {"score": 5, "why": "Every player wants to know the exact moment they can start playing on launch day."},
+  "title": "What time does GTA 6 ACTUALLY unlock!?",
+  "description": "Rockstar says GTA 6 unlocks at midnight local time on November 19, on PS5 and Xbox Series X|S. Digital pre-load on PS5 started at midnight local time on November 10 and needs up to 212 GB of free space. Pre-loading does not let you play early.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Launch", "#Shorts"],
+  "voice": "am_puck",
+  "speed": 1.1,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "Rockstar says GTA 6 unlocks at midnight local time on November 19, in all regions. Here's what that means.",
+     "facts": ["unlock-time"],
+     "beats": [
+       {"beat": "full", "query": "Lucia"},
+       {"beat": "count", "card": "19 NOV", "label": "Launch day"},
+       {"beat": "snippet", "text": "GTA 6 unlocks at midnight local time on November 19.",
+        "highlight": ["midnight local time"], "label": "Rockstar says", "weight": 1.3}],
+     "green": ["MIDNIGHT"], "red": []},
+    {"say": "It is the same on both consoles: PS5 and Xbox Series X and S.",
+     "facts": ["unlock-time", "release-date"],
+     "beats": [
+       {"beat": "card", "query": "pool palm trees", "label": "PS5 + Xbox Series X|S"},
+       {"beat": "full", "query": "city skyline night"}],
+     "green": ["BOTH CONSOLES"], "red": []},
+    {"say": "Here's the twist. Digital pre-load on PS5 started at midnight local time on November 10.",
+     "facts": ["preload-date"],
+     "beats": [
+       {"beat": "banner", "text": "The twist", "query": "helicopter"},
+       {"beat": "count", "card": "10 NOV", "label": "Pre-load on PS5"},
+       {"beat": "full", "query": "boat ocean"}],
+     "green": ["NOVEMBER 10"], "red": []},
+    {"say": "If you saw November 12, that date is old. Rockstar moved digital pre-load forward to November 10.",
+     "facts": ["preload-moved-to-nov-10"],
+     "beats": [
+       {"beat": "full", "query": "yacht"},
+       {"beat": "card", "card": "~NOV 12~|*NOV 10*", "weight": 1.3},
+       {"beat": "full", "query": "motorcycle road"}],
+     "green": ["NOVEMBER 10"], "red": ["NOVEMBER 12"]},
+    {"say": "It needs up to 212 gigabytes of free space, so check your storage now.",
+     "facts": ["storage-212-gb"],
+     "beats": [
+       {"beat": "card", "card": "UP TO|*212 GB*", "label": "Free space"},
+       {"beat": "full", "query": "police car night"}],
+     "green": ["212 GIGABYTES"], "red": []},
+    {"say": "But pre-loading does not let you play early.",
+     "facts": ["preload-no-early-play"],
+     "beats": [
+       {"beat": "card", "query": "Jason gun", "label": {"text": "No early play", "style": "no"}}],
+     "green": [], "red": ["PLAY EARLY"]},
+    {"say": "So start the download today, and be ready the moment November 19 begins, because",
+     "facts": ["release-date"],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "card", "card": "*NOV 19*|BE READY"},
+       {"beat": "full", "query": "Jason Lucia car"}],
+     "green": ["NOVEMBER 19"], "red": []}
+  ]
+}
