@@ -469,8 +469,7 @@ now, `gta6` once calibrated).
 .\.venv\Scripts\python.exe index.py --all C:\AI\gta\input                       # every recording in a folder
 .\.venv\Scripts\python.exe library.py find --activity chase --min-stars 2 --min-len 6
 .\.venv\Scripts\python.exe library.py shotlist                                  # shot-list coverage table
-.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only)
-.\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
+.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only).\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
 ```
 
 `index.py` writes `C:\AI\gta\library\<video>\index.json` and `review.html` (one row per segment, never-use rows in
@@ -504,12 +503,34 @@ Every model answer is cached, so a re-run takes seconds and a stopped run carrie
 The picture size made no difference (320, 448, 640 and 960 px wide all took 3.3 s with the 4b): Ollama turns every
 picture into about 1,500 tokens. So a call costs the same for 4 frames as for 1, and the indexer sends a sheet of 4.
 **The model therefore answers once per 6 s sheet, not once per frame**: 3.4 s per call, which is about 0.85 s per
-frame it looks at. Measured on whole videos (first run, nothing cached): test1 (15:24) took 590 s and test2 (20:49)
-took 766 s, 12.8 minutes, of which 58 s is the ffmpeg pass. That is 12.3 minutes per 20 minutes of video; the
-8b-instruct would need about 18. On the sheets the 4b also caught test1's 2:10 shootout, which the 8b called on_foot.
+frame it looks at. The 8b-instruct would need about 18 minutes per 20 minutes of video. On the sheets the 4b also
+caught test1's 2:10 shootout, which the 8b called on_foot.
 
-Ollama's memory grows with every picture (free memory fell from 12 to 4.4 GB over 60 calls), so `index.py` unloads the
-model when free memory drops under 5 GB; the next call loads it again (about 5 s).
+**Time per video** (each one's first run, nothing cached; all four dev recordings):
+
+| Video | Length | Sheets | ffmpeg pass | Model | Total | Per 20 min of video | Model reloads |
+|---|---|---|---|---|---|---|---|
+| test1 | 15:24 | 155 | 45 s | 529 s | 590 s (9.8 min) | 12.8 min | 3 |
+| test2 | 20:49 | 209 | 58 s | 703 s | 766 s (12.8 min) | 12.3 min | 0 |
+| Grand Theft Auto V_20261026160754 | 8:05 | 81 | 23 s | 275 s | 302 s (5.0 min) | 12.4 min | 0 |
+| Grand Theft Auto V_20261026163544 | 25:04 | 251 | 69 s | 846 s | 920 s (15.3 min) | 12.2 min | 0 |
+
+The model took 3.37-3.41 s per sheet on every video, and all 696 sheets ended with a usable answer.
+
+**Memory.** In the speed probe Ollama's memory grew as pictures were sent: free memory fell from about 12 GB to
+4.4 GB over 60 calls. So `index.py` unloads the model when free memory drops under 5 GB, and the next call loads it
+again (about 5 s). In the full runs only test1 needed that (3 reloads); test2 and the two October 26 recordings
+finished with none. I don't know why test1 differed, so the guard stays.
+
+**Star count check.** `star_check.py` builds `C:\AI\gta\library\star_check.html`: frames the index says show a given
+number of stars, each large, with the star corner zoomed and the index's count under it. On 18 frames (6 at 3 stars
+and 6 at 4 stars from the two October 26 recordings, 3 at 1 star, and 3 at 2 stars from test1 because those
+recordings have none) every count matched what the frame shows, flashing grey stars included. 5 stars has not come
+up in any recording. The page was made with:
+
+```powershell
+.\.venv\Scripts\python.exe star_check.py "Grand Theft Auto V_20261026160754" "Grand Theft Auto V_20261026163544" --fallback test1 --want 3:6 4:6 1:3 2:3
+```
 
 **The shot-list.** `shotlist.json` lists launch-week mechanic topics (wanted system, police chase, driving, combat,
 exploring, heist, stealing cars, crashes and stunts). Each topic is a list of shots written as library queries. It
