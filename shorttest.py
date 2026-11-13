@@ -1008,7 +1008,9 @@ def every_picture_on_the_picks_sheet_must_get_on_screen():
         good = short_run(tmp, short_script(), visuals=every)
         used = picker.load_used(good["shorts"] / "_used_media.json")
         text = make_short.pick_row_text({"line": 7, "shot": 1, "picked": False, "say": "So.", "file": GATOR,
-                                         "shown": True, "seconds": 1.0}, None)
+                                         "shown": True, "seconds": 1.0, "behind_s": 2.0}, None)
+        behind = make_short.pick_row_text({"line": 1, "shot": 2, "picked": True, "query": "deer", "say": "So.",
+                                           "file": DEER, "shown": True, "seconds": 0.0, "behind_s": 2.0}, None)
         hidden = make_short.pick_row_text({"line": 7, "shot": 1, "picked": False, "say": "So.", "file": GATOR,
                                            "shown": False}, None)
         return (run["ready"] is False and len(why) == 1 and "line 7, shot 1" in why[0] and Path(GATOR).name in why[0]
@@ -1016,7 +1018,8 @@ def every_picture_on_the_picks_sheet_must_get_on_screen():
                 and ending["ready"] is False and len(ending_why) == 1 and Path(AIRBOAT).name in ending_why[0]
                 and good["ready"] and set(used[0]["files"]) == {AIRBOAT, DEER, GATOR}
                 and [s["name"] for s in used] == [good["out"].name]
-                and "1.0 s on screen" in text and "NOT SHOWN" in hidden and "on screen" in hidden)
+                and "1.0 s on screen" in text and "behind" not in text and "2.0 s behind a text card" in behind
+                and "NOT SHOWN" in hidden and "on screen" in hidden)
 
 
 @check

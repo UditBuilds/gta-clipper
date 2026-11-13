@@ -201,7 +201,8 @@ def pick_row_text(pick, entry):
     how = (f"PICKED for \"{pick['query']}\"" if pick["picked"] else "NAMED in the script")
     lines = [f"{where}   |   {pick.get('beat') or 'shot'}   |   {how}" + ("   |   WEAK MATCH" if pick.get("weak") else "")
              + ("   |   NOT SHOWN: it never gets on screen" if pick.get("shown") is False else
-                f"   |   {pick['seconds']:.1f} s on screen" if pick.get("seconds") is not None else "")]
+                f"   |   {pick['seconds']:.1f} s on screen" if pick.get("seconds") else
+                f"   |   {pick['behind_s']:.1f} s behind a text card" if pick.get("behind_s") else "")]
     lines += textwrap.wrap("SAYS: " + pick["say"], 104)[:3]
     shown = [re.sub(r"[~*|]+", " ", t).strip() for t in pick.get("text", []) if t and t.strip()]
     lines.append("ON SCREEN: " + (" / ".join(shown) if shown else "(no words on this picture)"))
@@ -367,7 +368,10 @@ def make_short(script_path, check_only=False, allow_weak=False, shorts_dir=SHORT
             mine = [v for v in own if file_name in f"{v.get('source', '')} {v.get('behind') or ''}"]
             pick["shown"] = bool(mine)
             if mine and all(isinstance(v.get("seconds"), (int, float)) for v in mine):
-                pick["seconds"] = round(sum(v["seconds"] for v in mine), 2)
+                # Its own shots, and apart from them the time it is only the blurred picture behind a text card.
+                shots = [v["seconds"] for v in mine if file_name in str(v.get("source", ""))]
+                pick["seconds"] = round(sum(shots), 2)
+                pick["behind_s"] = round(sum(v["seconds"] for v in mine) - sum(shots), 2)
             if not mine:
                 not_ready.append(f"line {pick['line']}, shot {pick['shot']}: {file_name} never gets on screen (it is grey on "
                                  "picks.jpg); take the shot out or give its line more time")
