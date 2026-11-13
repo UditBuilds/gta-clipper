@@ -456,3 +456,109 @@ misses were big signs inside the scene called "big text", which only keeps a pic
 it may end with `...` or `!?`. Like the hook, it must be literally true. The script rules (a true, surprising first
 line, then "let me explain", proof by second 3, a twist, a payoff, a last line that loops) are in
 `.claude/commands/new-short.md`.
+
+## Footage library
+
+Made for GTA 6 launch week (PR 21): the tool watches my own recordings and logs what happens in each part, so a Short
+about "police chases" can ask the library for chase footage instead of me scrubbing through hours of video. There is
+no GTA 6 footage yet, so everything here was built and measured on GTA V and takes a HUD profile (`--profile gta5`
+now, `gta6` once calibrated).
+
+```powershell
+.\.venv\Scripts\python.exe index.py C:\AI\gta\input\test1.webm --profile gta5   # index one recording
+.\.venv\Scripts\python.exe index.py --all C:\AI\gta\input                       # every recording in a folder
+.\.venv\Scripts\python.exe library.py find --activity chase --min-stars 2 --min-len 6
+.\.venv\Scripts\python.exe library.py shotlist                                  # shot-list coverage table
+.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only).\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
+```
+
+`index.py` writes `C:\AI\gta\library\<video>\index.json` and `review.html` (one row per segment, never-use rows in
+red, click a time to play it), and adds the recording to `C:\AI\gta\library\library.json`.
+
+**How a recording is indexed.**
+
+1. One ffmpeg pass (GPU decode) reads the HUD twice a second and saves one "sheet" per 6 s of video: 4 frames, 1.5 s
+   apart, in a 2x2 grid.
+2. Code reads the HUD first, with `clip.py`'s own detectors and the profile: minimap there or not, phone call screen,
+   wanted stars. New: it also counts the stars (an earned star has a dark outline round a lighter middle; an empty
+   slot is a flat grey shape).
+3. A local vision model (`qwen3-vl:4b-instruct` in Ollama) looks at each sheet and answers in strict JSON: `activity`
+   (driving, on_foot, shootout, chase, flying, boat, swimming, cutscene, menu_map, phone, loading, other), `vehicle`,
+   `police_visible`, one `notable` line, `confidence`. It is told nothing about the HUD.
+4. Code merges both into segments. The HUD rules apply per half second and always win: call screen up = `phone`; no
+   minimap for 1.5 s = `cutscene` (or the model's `menu_map`/`loading`); in a vehicle with wanted stars = `chase` (one
+   frame can't show a chase, the stars can). `cutscene`, `menu_map`, `loading` and `phone` segments are `never_use`.
+
+Every model answer is cached, so a re-run takes seconds and a stopped run carries on. Held-out footage
+(`C:\AI\gta\heldout`) is refused. The answer keys are only read by `indexeval.py`, never by the indexer.
+
+**Speed probe** (first 3 min of test1, seconds per model call once loaded):
+
+| Model | s per call | Note |
+|---|---|---|
+| `qwen3-vl:4b` (plain) | 8.2 | unusable: it spends the answer thinking, 3 of 3 replies were cut off |
+| `qwen3-vl:4b-instruct` | 3.4 | fits the 8 GB GPU whole (3.6 GB) |
+| `qwen3-vl:8b-instruct` | 5.0 | 0.9 GB of it runs on the CPU |
+
+The picture size made no difference (320, 448, 640 and 960 px wide all took 3.3 s with the 4b): Ollama turns every
+picture into about 1,500 tokens. So a call costs the same for 4 frames as for 1, and the indexer sends a sheet of 4.
+**The model therefore answers once per 6 s sheet, not once per frame**: 3.4 s per call, which is about 0.85 s per
+frame it looks at. The 8b-instruct would need about 18 minutes per 20 minutes of video. On the sheets the 4b also
+caught test1's 2:10 shootout, which the 8b called on_foot.
+
+**Time per video** (each one's first run, nothing cached; all four dev recordings):
+
+| Video | Length | Sheets | ffmpeg pass | Model | Total | Per 20 min of video | Model reloads |
+|---|---|---|---|---|---|---|---|
+| test1 | 15:24 | 155 | 45 s | 529 s | 590 s (9.8 min) | 12.8 min | 3 |
+| test2 | 20:49 | 209 | 58 s | 703 s | 766 s (12.8 min) | 12.3 min | 0 |
+| Grand Theft Auto V_20261026160754 | 8:05 | 81 | 23 s | 275 s | 302 s (5.0 min) | 12.4 min | 0 |
+| Grand Theft Auto V_20261026163544 | 25:04 | 251 | 69 s | 846 s | 920 s (15.3 min) | 12.2 min | 0 |
+
+The model took 3.37-3.41 s per sheet on every video, and all 696 sheets ended with a usable answer.
+
+**Memory.** In the speed probe Ollama's memory grew as pictures were sent: free memory fell from about 12 GB to
+4.4 GB over 60 calls. So `index.py` unloads the model when free memory drops under 5 GB, and the next call loads it
+again (about 5 s). In the full runs only test1 needed that (3 reloads); test2 and the two October 26 recordings
+finished with none. I don't know why test1 differed, so the guard stays.
+
+**Star count check.** `star_check.py` builds `C:\AI\gta\library\star_check.html`: frames the index says show a given
+number of stars, each large, with the star corner zoomed and the index's count under it. On 18 frames (6 at 3 stars
+and 6 at 4 stars from the two October 26 recordings, 3 at 1 star, and 3 at 2 stars from test1 because those
+recordings have none) every count matched what the frame shows, flashing grey stars included. 5 stars has not come
+up in any recording. The page was made with:
+
+```powershell
+.\.venv\Scripts\python.exe star_check.py "Grand Theft Auto V_20261026160754" "Grand Theft Auto V_20261026163544" --fallback test1 --want 3:6 4:6 1:3 2:3
+```
+
+**The shot-list.** `shotlist.json` lists launch-week mechanic topics (wanted system, police chase, driving, combat,
+exploring, heist, stealing cars, crashes and stunts). Each topic is a list of shots written as library queries. It
+holds only shots, no claims about GTA 6, and every topic is marked `verify after launch`.
+
+**Measured on the dev videos** (`indexeval.py`; the prompt and rules were not changed after these numbers).
+
+- test1, my five confirmed moments: 5 of 5 found. A moment counts as found when a usable segment there has the right
+  activity (a vehicle activity for at least half of a driving range; a shootout segment for a gun moment), the stars
+  were counted where I had stars, and a notable line names the thing where the moment is a thing (the body).
+  - 0:50-1:10 gun out + carjack: shootout and on_foot, "gun drawn". The carjack is only described ("Player pushes
+    car, then abandons it with a body on ground"), there is no carjack label.
+  - 1:20-2:00 driving with stars: chase, 1 star, until the stars end at 1:52, then driving.
+  - 2:10 shootout: shootout ("Player exits car, aims gun").
+  - 2:50 body on the road: on_foot, "Body on ground after car crash with blood on pavement".
+  - 3:10-4:10 driving with stars: chase, 2 stars, the whole range.
+- never_use against the answer keys' never-pick ranges: test1 298 of 299 s (6 of 6 ranges), test2 518 of 558 s (9 of
+  12 ranges at 95 % or more). The three low ones show the minimap, so the HUD rule can't see them and the model called
+  them on_foot: walking while a call is on (10:38-11:02, 67 %), the clothes shop (17:15-18:35, 68 %) and the Lifeinvader
+  entrance (20:05-20:35, 88 %).
+- never_use outside the never-pick ranges: test1 12 s and test2 36 s, every one from the HUD rule (no minimap). The
+  three I looked at are scripted cameras where the game itself hides the HUD: test2's house collapse (3:20-3:35, which
+  my key calls action, so the best 15 s of that moment are never_use), the character-switch flash at 4:48, and a
+  cinematic cut inside test1's yacht chase (11:10-11:15). The rest are a few seconds at the edges of cutscenes.
+- A text search (`--text crash`) reads every sheet's line and gives the time of each match. The model sometimes
+  writes what is missing ("no crashes or police"), and that matches too.
+- **A chase with no wanted stars is not found as a chase.** test1's yacht chase and test2's gang chase came out as
+  `driving` (91 % and 95 %). The chase label comes almost entirely from the HUD rule (vehicle + stars); the model said
+  chase on 2 of 364 sheets.
+- A stretch with no minimap is called `cutscene` unless the model says menu or loading, so a short pause map can be
+  listed as cutscene. It is never_use either way.

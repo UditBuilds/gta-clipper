@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "note": "Launch-week shot-list. It holds ONLY shots to look for in the owner's own recordings, written as library.py queries. It makes no claim about what is in GTA 6: every topic stays 'verify after launch' until the game is out and the facts are checked. Run: python library.py shotlist",
+  "topics": [
+    {
+      "id": "wanted-system",
+      "title": "Wanted system: stars rising, losing the cops",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "first-star-on-foot", "want": "on foot with the first star showing", "query": {"activity": ["on_foot", "shootout"], "min_stars": 1, "max_stars": 1, "min_len": 4}},
+        {"id": "one-star-vehicle", "want": "in a vehicle with 1 star", "query": {"activity": ["chase"], "min_stars": 1, "max_stars": 1, "min_len": 6}},
+        {"id": "two-stars", "want": "in a vehicle with 2 stars", "query": {"activity": ["chase"], "min_stars": 2, "max_stars": 2, "min_len": 6}},
+        {"id": "three-plus-stars", "want": "3 or more stars, on foot or in a vehicle", "query": {"min_stars": 3, "min_len": 6}},
+        {"id": "stars-gone", "want": "driving or walking right after the stars are gone", "query": {"activity": ["driving", "on_foot"], "after": ["chase"], "max_stars": 0, "min_len": 6}}
+      ]
+    },
+    {
+      "id": "police-chase",
+      "title": "Police chase",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "long-chase", "want": "a chase of 15 s or more", "query": {"activity": ["chase"], "min_stars": 1, "min_len": 15}},
+        {"id": "police-in-shot", "want": "a chase with police in the picture", "query": {"activity": ["chase"], "police": true, "min_len": 6}},
+        {"id": "chase-crash", "want": "a crash during a chase", "query": {"activity": ["chase"], "text": ["crash", "collision", "collide", "hits", "smash", "wreck"], "min_len": 4}},
+        {"id": "getaway-start", "want": "a chase that starts right after a shootout", "query": {"activity": ["chase"], "after": ["shootout"], "min_len": 6}}
+      ]
+    },
+    {
+      "id": "driving-vehicles",
+      "title": "Driving and vehicles",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "calm-drive", "want": "calm driving, no stars, 12 s or more", "query": {"activity": ["driving"], "max_stars": 0, "min_len": 12}},
+        {"id": "sports-car", "want": "a sports car", "query": {"activity": ["driving", "chase"], "vehicle": ["sports car"], "min_len": 6}},
+        {"id": "two-wheels", "want": "a motorbike or bicycle", "query": {"activity": ["driving", "chase"], "vehicle": ["motorbike", "motorcycle", "bicycle", "bike"], "min_len": 6}},
+        {"id": "big-vehicle", "want": "a truck or van", "query": {"activity": ["driving", "chase"], "vehicle": ["truck", "van"], "min_len": 6}},
+        {"id": "getting-in", "want": "driving right after being on foot (getting in)", "query": {"activity": ["driving", "chase"], "after": ["on_foot", "shootout"], "min_len": 6}}
+      ]
+    },
+    {
+      "id": "combat-weapons",
+      "title": "Combat and weapons",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "shootout", "want": "a shootout on foot, 6 s or more", "query": {"activity": ["shootout"], "min_len": 6}},
+        {"id": "shootout-wanted", "want": "a shootout with wanted stars", "query": {"activity": ["shootout"], "min_stars": 1, "min_len": 4}},
+        {"id": "gun-drawn", "want": "a gun drawn or aimed", "query": {"activity": ["on_foot", "shootout"], "text": ["gun", "aim", "weapon", "rifle", "pistol", "shoot"], "min_len": 4}},
+        {"id": "aftermath", "want": "a body on the ground", "query": {"text": ["body", "on the ground", "on ground", "blood"], "min_len": 4}}
+      ]
+    },
+    {
+      "id": "exploring-map",
+      "title": "Exploring the map and regions",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "walk", "want": "walking around, no stars, 12 s or more", "query": {"activity": ["on_foot"], "max_stars": 0, "min_len": 12}},
+        {"id": "long-drive", "want": "a long calm drive, 30 s or more", "query": {"activity": ["driving"], "max_stars": 0, "min_len": 30}},
+        {"id": "air", "want": "flying", "query": {"activity": ["flying"], "min_len": 6}},
+        {"id": "water", "want": "a boat or swimming", "query": {"activity": ["boat", "swimming"], "min_len": 6}},
+        {"id": "scenery", "want": "beach, water, hills or skyline in view", "query": {"text": ["beach", "ocean", "pier", "mountain", "hill", "skyline", "desert", "forest", "river", "lake", "bridge"], "min_len": 6}}
+      ]
+    },
+    {
+      "id": "heist-robbery",
+      "title": "Heist and robbery",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "inside-store", "want": "inside a shop, store or bank", "query": {"text": ["store", "shop", "bank", "counter", "cashier", "register", "vault", "jewel"], "min_len": 4}},
+        {"id": "armed-indoors", "want": "a gun drawn at people", "query": {"activity": ["shootout"], "text": ["pedestrian", "people", "clerk", "man", "woman", "figures"], "min_len": 4}},
+        {"id": "getaway", "want": "a getaway: a chase of 10 s or more with 2+ stars", "query": {"activity": ["chase"], "min_stars": 2, "min_len": 10}}
+      ]
+    },
+    {
+      "id": "stealing-cars",
+      "title": "Stealing cars",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "carjack", "want": "taking a car: pulled out, pushed, entering or exiting", "query": {"text": ["steal", "stolen", "carjack", "pulls", "pushes", "enters", "exits car", "gets in", "gets into", "getting into"], "min_len": 4}},
+        {"id": "drive-off-wanted", "want": "driving off with stars right after being on foot", "query": {"activity": ["chase"], "after": ["on_foot", "shootout"], "min_stars": 1, "min_len": 6}}
+      ]
+    },
+    {
+      "id": "crashes-stunts",
+      "title": "Crashes and stunts",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "crash", "want": "a crash", "query": {"text": ["crash", "collision", "collide", "smash", "wreck", "hits"], "min_len": 4}},
+        {"id": "air-time", "want": "a jump, a flip or a car in the air", "query": {"text": ["airborne", "jump", "flip", "mid-air", "in the air", "stunt", "drift"], "min_len": 4}},
+        {"id": "boom", "want": "an explosion or fire", "query": {"text": ["explosion", "explod", "fire", "flames", "burning"], "min_len": 4}}
+      ]
+    }
+  ]
+}
