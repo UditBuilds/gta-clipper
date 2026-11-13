@@ -1,0 +1,76 @@
+{
+  "topic": "How GTA 6's wanted system works: 6 stars, hollow vs solid vs red stars, witnesses, what police know",
+  "topic_score": {"score": 3, "why": "Almost every player meets the police in their first hour, but nobody needs this before launch day."},
+  "title": "GTA 6 wanted stars: hollow, solid or RED?",
+  "description": "GTA 6 has six wanted stars, one more than GTA 5's five. Rockstar says police only hear about a crime from a witness or an alarm. What the hollow, solid white and red stars mean comes from press previews, so it is reported, not confirmed by Rockstar.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Police", "#Shorts"],
+  "voice": "am_puck", "speed": 1.0, "music": "auto", "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "In GTA 5, five stars. In GTA 6, six.",
+     "facts": ["wanted-six-stars"],
+     "beats": [
+       {"beat": "full", "query": "police car helicopter motorcycle"},
+       {"beat": "card", "card": "~5 STARS~|*6 STARS*"}],
+     "green": ["SIX"], "red": ["FIVE"]},
+
+    {"say": "But the stars aren't the clever part. Let me explain.",
+     "facts": [],
+     "beats": [
+       {"beat": "banner", "text": "Let me explain", "query": "Jason Lucia"},
+       {"beat": "full", "query": "helicopter city skyline"}],
+     "green": [], "red": []},
+
+    {"say": "Rockstar says police only hear about a crime from a witness or an alarm.",
+     "facts": ["wanted-witness-or-alarm"],
+     "beats": [
+       {"beat": "full", "query": "police car crowd"},
+       {"beat": "snippet", "text": "A crime needs a witness, or an alarm.", "highlight": ["witness", "alarm"],
+        "label": {"text": "Rockstar says", "style": "info"}},
+       {"beat": "full", "query": "crowd phone"}],
+     "green": ["WITNESS", "ALARM"], "red": []},
+
+    {"say": "A hollow star reportedly means a crime was reported but police have no description of you.",
+     "facts": ["wanted-hollow-star"],
+     "beats": [
+       {"beat": "card", "card": "HOLLOW STAR|*NO DESCRIPTION*", "label": {"text": "Reported", "style": "info"}},
+       {"beat": "full", "query": "man hand hat dreadlocks"},
+       {"beat": "full", "query": "man cap sunglasses"}],
+     "green": ["NO DESCRIPTION"], "red": []},
+
+    {"say": "A solid white star reportedly means police can see you right now.",
+     "facts": ["wanted-solid-star"],
+     "beats": [
+       {"beat": "card", "card": "SOLID STAR|*POLICE SEE YOU*", "label": {"text": "Reported", "style": "info"}},
+       {"beat": "full", "query": "police car tunnel"}],
+     "green": ["SEE YOU"], "red": []},
+
+    {"say": "A red star reportedly means you escaped but police are still searching.",
+     "facts": ["wanted-red-star"],
+     "beats": [
+       {"beat": "card", "card": "RED STAR|*STILL SEARCHING*", "label": {"text": "Reported", "style": "info"}},
+       {"beat": "full", "query": "helicopter police car swamp"}],
+     "green": ["STILL SEARCHING"], "red": []},
+
+    {"say": "Police can reportedly know your outfit and your getaway car.",
+     "facts": ["wanted-police-know-outfit-car"],
+     "beats": [
+       {"beat": "compare", "top": {"query": "floral shirt", "label": "Your outfit"},
+                           "bottom": {"query": "blue car", "label": "Your getaway car"}},
+       {"beat": "full", "query": "man driving steering wheel"}],
+     "green": ["OUTFIT", "GETAWAY CAR"], "red": []},
+
+    {"say": "So before you run, think. Who saw you? And what did they see?",
+     "facts": [],
+     "beats": [
+       {"beat": "banner", "text": "Who saw you?", "query": "man phone neon"},
+       {"beat": "full", "query": "man gun police lights"}],
+     "green": [], "red": []},
+
+    {"say": "In GTA 6, six stars is the easy part.",
+     "facts": ["wanted-six-stars"],
+     "beats": [
+       {"beat": "full", "query": "woman gun car sunglasses"}],
+     "green": ["SIX STARS"], "red": []}
+  ]
+}
