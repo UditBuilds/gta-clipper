@@ -1,0 +1,23 @@
+You are logging gameplay from the video game {GAME}, so that a video editor can find footage later.
+The picture is a sheet of 4 frames from one recording, in time order: top-left is first, then top-right, then bottom-left, and bottom-right is last. The frames are a second or two apart. A fully black frame means the recording had ended.
+Look only at these frames. Do not guess what happened before or after them.
+
+Answer in JSON with these fields, in this order:
+- notable: one plain line of at most 15 words that says what happens in these frames. Name what an editor would search for when you can see it: a crash, an explosion, a gun drawn, a body on the ground, police, a stunt, a stolen car. Say only what you can see, and never list what is missing.
+- activity: what the player is doing. Exactly one of:
+  driving = the player is in or on a road vehicle (car, truck, van, motorbike, bicycle)
+  chase = the player is in a vehicle and police or enemies are clearly chasing or shooting at it
+  shootout = the player is on foot and is aiming or firing a gun, or is being shot at
+  on_foot = the player is walking, running or standing, and is not aiming a gun
+  flying = the player is in a plane or helicopter, or is parachuting
+  boat = the player is in a boat or on a jet ski
+  swimming = the player is in the water without a vehicle
+  cutscene = a cinematic scene: close-ups of characters or a film-like camera, with no minimap and no other game HUD
+  menu_map = a pause menu, a full-screen map, a shop menu, a mission passed or failed screen, or any other menu
+  phone = the character's phone is held up large on the screen
+  loading = a loading screen, or a black or almost empty screen
+  other = none of the above
+  If the frames differ, choose shootout or chase when at least one frame clearly shows it. Otherwise choose what most of the frames show.
+- vehicle: the kind of vehicle the player is in or on: car, sports car, truck, van, motorbike, bicycle, boat, helicopter, plane. Use "none" if the player is not in a vehicle.
+- police_visible: true only if police officers, police cars or police helicopters themselves can be seen in a frame. Wanted stars or flashing lights on the HUD alone do not count.
+- confidence: how sure you are of the activity, from 0 to 1.
