@@ -9,11 +9,13 @@ leak into what the scan finds.
 Each check prints PASS or FAIL with what it tests. A check that raises counts as FAIL (with the error), so a missing
 function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL; exit code 0 or 1.
 
-Usage:  python footagetest.py
+Usage:  python footagetest.py          (2 checks of explainer.py's sound are skipped with plain .venv)
+        .venv-tts\\Scripts\\python.exe footagetest.py     every check
 """
 
 import json
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,8 +25,10 @@ import calibrate as cal
 import calibrate_guided as guided
 import calibtest
 import clip
+import footage_short
 import index
 import library
+import shorttest
 
 HERE = Path(__file__).resolve().parent
 CHECKS = []
@@ -537,15 +541,409 @@ def the_command_line_prints_star_rises_as_json():
             and r[0]["video"] == "rec" and [x["segment"] for x in rows] == [2] and rows[0]["text_denied"] == 0)
 
 
+# --- Mode B: Shorts built from the owner's own footage (footage_short.py) ---
+
+def made_up_library():
+    """Three made-up recordings. alpha: a calm drive, a cutscene, then a chase where the stars go 0 -> 1 at 50 s and
+    1 -> 3 at 60 s. bravo: a long calm drive, then a shootout. charlie: 4 s on foot (too short for much)."""
+    alpha = made_up_index("alpha", [seg(0, 30, "driving", notable=["Player drives a car down a street."]),
+                                    seg(30, 40, "cutscene"),
+                                    seg(40, 100, "chase", 3, police=True, notable=["Car crashes into police car."])],
+                          timeline=made_up_timeline([0] * 100 + [1] * 20 + [3] * 80, no_minimap=[(60, 80)]))
+    alpha["segments"][2]["notable"][0]["t"] = 60.0
+    bravo = made_up_index("bravo", [seg(0, 60, "driving", notable=["Truck drives on a highway."]),
+                                    seg(60, 90, "shootout", notable=["Player aims gun at bikers."])],
+                          timeline=made_up_timeline([0] * 180))
+    charlie = made_up_index("charlie", [seg(0, 4, "on_foot", notable=["Player walks."])],
+                            timeline=made_up_timeline([0] * 8))
+    return [alpha, bravo, charlie]
+
+
+def row(indexes, **query):
+    return library.find(indexes, **query)[0]
+
+
+@check
+def footage_is_cut_on_clean_edges():
+    """place() on a made-up recording: a 3 s beat in the chase sits at its middle, half a second clear of the
+    cutscene before it and a second clear of both star changes; with the query's word seen at 60 s it moves to that
+    moment instead, still a second after the change; footage another beat shows is left alone; a beat that needs
+    1.5 s of clean lead-in (the loop ending) or a longer clean tail (a text card blurred over it) is refused where
+    the footage is too short for it"""
+    lib = made_up_library()
+    alpha, charlie = lib[0], lib[2]
+    chase = row(lib, video=["alpha"], activity=["chase"])
+    crash = row(lib, video=["alpha"], activity=["chase"], text=["crash"])
+    walk = row(lib, video=["charlie"])
+    place = footage_short.place
+    moved = place(alpha, chase, 3.0, taken=[("alpha", 64.0, 80.0)])
+    return (place(alpha, chase, 3.0) == 68.5
+            and place(alpha, crash, 3.0) == 61.5
+            and moved is not None and (moved + 3.0 <= 63.0 or moved >= 81.0)
+            and all(abs(c - moved) >= 1.0 and abs(c - moved - 3.0) >= 1.0 for c in (50.0, 60.0))
+            and place(alpha, chase, 3.0, lead=1.5) - 1.5 >= 40.5
+            and place(charlie, walk, 3.0) == 0.5
+            and place(charlie, walk, 3.0, lead=1.5) is None
+            and place(charlie, walk, 3.0, tail=5.0) is None
+            and place(charlie, walk, 6.0) is None)
+
+
+@check
+def a_star_rise_beat_keeps_the_change_inside_it():
+    """a beat filled from a star rise starts 2 s before the change when it is long enough (4 s: 58-62 s for the
+    rise at 60 s), and earlier in the beat when it is short (2 s: the change 1 s in), so the lower count is on screen
+    first and the higher one after; the 0 -> 1 rise at 50 s is cut the same way; a rise whose lead-in would reach
+    into the cutscene is refused"""
+    lib = made_up_library()
+    alpha = lib[0]
+    rises = {r["change_s"]: r for r in library.find(lib, stars_rise=True, video=["alpha"])}
+    place = footage_short.place
+    near_cutscene = dict(rises[60.0], change_s=41.5, holds_s=8.0)
+    return (sorted(rises) == [50.0, 60.0]
+            and place(alpha, rises[60.0], 4.0) == 58.0 and place(alpha, rises[60.0], 2.0) == 59.0
+            and place(alpha, rises[50.0], 4.0) == 48.0
+            and place(alpha, near_cutscene, 4.0) is None)
+
+
+@check
+def the_best_unused_footage_is_picked():
+    """pick_beats on the made-up library: a beat about wanted stars gets the star rise (1 -> 3), not just any
+    stretch with stars; the next beat prefers a recording the Short hasn't used; asked for the same thing again it
+    takes another segment, not the same one; with no activity named the chase beats the calm drive (more action);
+    a beat nothing matches says so; and no two beats show the same footage"""
+    lib = made_up_library()
+    beats = [{"line": 0, "shot": 0, "query": {"activity": ["chase"], "min_stars": 2}, "seconds": 3.0, "lead": 1.5},
+             {"line": 0, "shot": 1, "query": {"activity": ["driving"]}, "seconds": 2.0},
+             {"line": 1, "shot": 0, "query": {"activity": ["driving"]}, "seconds": 2.0},
+             {"line": 1, "shot": 1, "query": {"activity": ["shootout"]}, "seconds": 2.0},
+             {"line": 2, "shot": 0, "query": {"activity": ["boat"]}, "seconds": 2.0}]
+    picks = footage_short.pick_beats(beats, lib)
+    any_action = footage_short.pick_beats([{"line": 0, "shot": 0, "query": {"min_len": 6}, "seconds": 2.0}], lib)[0]
+    spans = [(p["video"], p["start_s"], p["end_s"]) for p in picks if p["found"]]
+    apart = all(a[0] != b[0] or a[2] <= b[1] or b[2] <= a[1] for k, a in enumerate(spans) for b in spans[k + 1:])
+    return (picks[0]["found"] and picks[0]["kind"] == "rise" and picks[0]["video"] == "alpha"
+            and picks[0]["start_s"] < 60.0 < picks[0]["end_s"] and "from 1 to 3" in picks[0]["why"]
+            and (picks[1]["video"], picks[1]["activity"]) == ("bravo", "driving")
+            and (picks[2]["video"], picks[2]["activity"]) == ("alpha", "driving")
+            and picks[3]["video"] == "bravo" and picks[3]["activity"] == "shootout"
+            and picks[4]["found"] is False and "no footage" in picks[4]["why"]
+            and apart and any_action["activity"] == "chase")
+
+
+@check
+def footage_an_earlier_short_showed_is_avoided_while_there_is_other():
+    """with bravo's drive shown by an earlier Short, a driving beat takes alpha's drive instead; with both shown it
+    takes one again rather than nothing, and the pick says it was reused"""
+    lib = made_up_library()
+    beat = [{"line": 0, "shot": 0, "query": {"activity": ["driving"]}, "seconds": 2.0}]
+    fresh = footage_short.pick_beats(beat, lib, avoid=[("bravo", 0.0, 60.0)])[0]
+    again = footage_short.pick_beats(beat, lib, avoid=[("bravo", 0.0, 60.0), ("alpha", 0.0, 30.0)])[0]
+    return (fresh["video"] == "alpha" and fresh["reused"] is False
+            and again["found"] and again["reused"] is True and "earlier Short" in again["why"])
+
+
+FOOTAGE_TITLE = "My LAST ride in GTA 5 before GTA 6 lands"
+
+
+def footage_script(**changes):
+    script = {
+        "title": FOOTAGE_TITLE, "description": "One last ride through my own GTA 5 footage.",
+        "hashtags": ["#GTA5", "#GTA6", "#Shorts"], "voice": "am_puck", "speed": 1.0, "music": None, "sfx": True,
+        "footage": {"game_audio": True, "profile": "gta5"},
+        "lines": [
+            {"say": "This is my last ride in GTA 5, and it starts with the police right behind me.", "facts": [],
+             "beats": [{"beat": "full", "shot": {"activity": ["chase"], "min_stars": 2}},
+                       {"beat": "card", "card_aspect": "16:9", "shot": {"activity": ["driving"], "max_stars": 0}}]},
+            {"say": "Then a calm drive, a shootout, and a boat that I never recorded at all.", "facts": [],
+             "beats": [{"beat": "full", "shot": {"activity": ["driving"], "max_stars": 0}},
+                       {"beat": "banner", "text": "Shootout", "shot": {"activity": ["shootout"]}},
+                       {"beat": "full", "shot": {"activity": ["boat"]}, "query": "airboat swamp"}]},
+            {"say": "After all these years the old streets still feel like home to me, every single one.", "facts": [],
+             "beats": [{"beat": "card", "card": "ONE|LAST|RIDE"},
+                       {"beat": "full", "shot": {"activity": ["chase"], "stars_rise": False}}]},
+            {"say": "So this is goodbye for now, and thank you for riding along with me today.", "facts": [],
+             "beats": [{"beat": "full", "shot": {"activity": ["driving"]}}]}]}
+    script.update(changes)
+    return script
+
+
+def stand_in_timing(path, root):
+    """Every line 5.5 s, shared equally by its beats; the loop ending repeats the first beat for 1.5 s; a text card
+    blurs the next picture (else the one before), as explainer.py does."""
+    script = json.loads(Path(path).read_text(encoding="utf-8"))
+    lines = [[5.5 / len(line["beats"])] * len(line["beats"]) for line in script["lines"]]
+    order = [(n, i, b) for n, line in enumerate(script["lines"]) for i, b in enumerate(line["beats"])]
+    pictures = [k for k, (_, _, b) in enumerate(order) if "file" in b]
+    behind = {}
+    for k, (n, i, b) in enumerate(order):
+        if "card" in b:
+            after = [j for j in pictures if j > k]
+            j = after[0] if after else [j for j in pictures if j < k][-1]
+            behind[(n, i)] = order[j][:2]
+    STATE["timing_script"] = script
+    return {"total_s": 5.5 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": behind}
+
+
+def stand_in_render(shift=0.0):
+    """A render that writes the log explainer.py would: every footage beat, the footage behind each text card and
+    the loop ending, each with where in its source it starts. shift moves the first beat's footage (a render gone
+    wrong, for the check after it)."""
+    def render(resolved_path, out, root, shorts_dir):
+        script = json.loads(Path(resolved_path).read_text(encoding="utf-8"))
+        times = stand_in_timing(resolved_path, root)
+        visuals, first = [], True
+        for n, line in enumerate(script["lines"]):
+            for i, b in enumerate(line["beats"]):
+                seconds = times["lines"][n][i]
+                if "card" in b:
+                    pn, pi = times["behind"][(n, i)]
+                    bg = script["lines"][pn]["beats"][pi]
+                    visuals.append({"line": n + 1, "source": "card:" + b["card"], "kind": "card", "seconds": seconds,
+                                    "behind": f"{bg['file']}@{bg.get('at', 0)}", "loop_tail": False,
+                                    "source_start_s": float(bg.get("at", 0)) if "at" in bg else None})
+                    continue
+                at = float(b.get("at", 0)) + (shift if first else 0.0)
+                video = "at" in b
+                visuals.append({"line": n + 1, "source": f"{b['file']}@{b.get('at', 0)}", "kind": "video" if video else "image",
+                                "seconds": seconds, "behind": None, "loop_tail": False, "sound": bool(b.get("sound")),
+                                "source_start_s": at if video else None})
+                if first:
+                    tail = dict(visuals[-1], line=len(script["lines"]), seconds=1.5, loop_tail=True,
+                                source_start_s=at - 1.5)
+                first = False
+        visuals.append(tail)
+        (Path(out) / "log.json").write_text(json.dumps({"visuals": visuals, "warnings": [], "game_audio": None,
+                                                        "pacing": {"length_s": times["total_s"]}}), encoding="utf-8")
+        (Path(out) / "short.mp4").write_bytes(b"")
+        return lambda pacing: [f"  Length        {pacing['length_s']:.1f} s"]
+    return render
+
+
+def footage_run(tmp, script=None, name="script.json", render=None, **more):
+    path = Path(tmp) / name
+    path.write_text(json.dumps(script or footage_script()), encoding="utf-8")
+    said, thumbs = [], []
+    out, ready = footage_short.footage_short(
+        path, shorts_dir=Path(tmp) / "shorts", today="2026-11-14", facts=shorttest.FACTS, tags=shorttest.fake_tags(),
+        indexes=more.pop("indexes", None) or made_up_library(), timing=stand_in_timing,
+        render=render or stand_in_render(), log=said.append,
+        thumb=lambda source, t, out: thumbs.append((str(source), t)) or False, **more)
+    return out, ready, said, thumbs
+
+
+@check
+def a_footage_short_is_built_from_the_library_end_to_end():
+    """the whole of footage_short.py on a made-up library, with stand-ins for the voice timing and the render: every
+    "shot" beat becomes a file with a start time and "sound": true in the script explainer.py gets (which holds no
+    "shot", "footage" or "facts" any more); the first beat keeps 1.5 s of clean lead-in for the loop ending and the
+    beat a text card blurs keeps a clean tail; the beat with no footage falls back to the Rockstar picture its
+    "query" asks for and picks.json says so; picks.json has one row per beat with video, start, end and why;
+    picks.html is written with a thumbnail asked for per picture; the Short is READY and its footage is logged as
+    used"""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, ready, said, thumbs = footage_run(tmp)
+        resolved = json.loads((out / "script_resolved.json").read_text(encoding="utf-8"))
+        picks = json.loads((out / "picks.json").read_text(encoding="utf-8"))
+        page = (out / "picks.html").read_text(encoding="utf-8")
+        used = json.loads((Path(tmp) / "shorts" / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
+        files = {p.name for p in out.iterdir()}
+    beats = [b for line in resolved["lines"] for b in line["beats"]]
+    footage = [b for b in beats if "at" in b]
+    rows = picks["beats"]
+    fallback = [r for r in rows if r["source"] == "rockstar fallback"]
+    first = rows[0]
+    return (ready and "footage" not in resolved and all("facts" not in line for line in resolved["lines"])
+            and all("shot" not in b for b in beats) and len(footage) == 6 and all(b.get("sound") is True for b in footage)
+            and len(rows) == 8 and picks["beats_from_footage"] == 6 and picks["beats_fell_back_to_rockstar"] == 1
+            and first["source"] == "footage" and first["video"] == "alpha" and first["kind"] == "rise"
+            and first["start_s"] - 1.5 >= 40.5 and first["end_s"] - first["start_s"] == 2.75
+            and len(fallback) == 1 and fallback[0]["line"] == 2 and "no footage" in fallback[0]["why"]
+            and fallback[0]["path"] == "rockstar/" + shorttest.AIRBOAT
+            and any("NO FOOTAGE" in line for line in said) and any(line.startswith("READY") for line in said)
+            and all(r.get("why") for r in rows) and picks["ready"] is True
+            and all(s["what"] in ("a beat", "behind a text card", "the loop ending") for s in picks["shown"])
+            and {"script.json", "script_resolved.json", "picks.json", "picks.html", "upload.txt", "claims.txt",
+                 "pacing.txt", "short.mp4"} <= files and "script_timing.json" not in files
+            and page.count("<article") == 8 and "ROCKSTAR FALLBACK" in page and len(thumbs) == 7
+            and used["shorts"][0]["name"].endswith("my-last-ride-in-gta-5-before-gta-6-lands")
+            and len(used["shorts"][0]["spans"]) == len(picks["shown"]))
+
+
+@check
+def never_use_footage_never_gets_on_screen():
+    """no footage the Short shows touches the made-up cutscene (alpha 30-40 s), not a beat, not the loop ending and
+    not the footage behind the text card; and when a render does put a cutscene on screen (the stand-in shifts the
+    first beat's footage back into it), the check after the render says so and the Short is NOT READY and is not
+    logged as used"""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, ready, _, _ = footage_run(tmp)
+        shown = json.loads((out / "picks.json").read_text(encoding="utf-8"))["shown"]
+        clear = all(not (Path(s["video"]).stem == "alpha" and s["start_s"] < 40.0 and s["end_s"] > 30.0) for s in shown)
+    with tempfile.TemporaryDirectory() as tmp:
+        out, bad_ready, said, _ = footage_run(tmp, render=stand_in_render(shift=-25.0))
+        logged = (Path(tmp) / "shorts" / footage_short.USED_FOOTAGE).exists()
+    return (ready and clear and len(shown) >= 8 and bad_ready is False and not logged
+            and any(line.startswith("NOT READY") and "not all usable footage" in line for line in said))
+
+
+@check
+def a_second_short_does_not_repeat_the_first_ones_footage():
+    """two Shorts made one after the other from the same library: where the library has other footage for a beat,
+    the second Short takes it (its calm drives start somewhere else); rendering the first one again keeps its own
+    picks"""
+    with tempfile.TemporaryDirectory() as tmp:
+        one, _, _, _ = footage_run(tmp)
+        first = json.loads((one / "picks.json").read_text(encoding="utf-8"))["beats"]
+        two, _, _, _ = footage_run(tmp, footage_script(title="One MORE ride in GTA 5 before GTA 6"), "two.json")
+        second = json.loads((two / "picks.json").read_text(encoding="utf-8"))["beats"]
+        again, _, _, _ = footage_run(tmp)
+        repeat = json.loads((again / "picks.json").read_text(encoding="utf-8"))["beats"]
+    span = lambda r: (r["video"], r["start_s"], r["end_s"])
+    calm = lambda rows: {span(r) for r in rows if r["source"] == "footage" and r["activity"] == "driving"}
+    return (one != two and again == one and calm(first) and not (calm(first) & calm(second))
+            and [span(r) for r in repeat if r["source"] == "footage"]
+            == [span(r) for r in first if r["source"] == "footage"])
+
+
+@check
+def a_script_that_cannot_be_a_footage_short_is_refused_with_reasons():
+    """before anything is picked or rendered: a beat with both a shot and a file, footage in a beat type that can't
+    hold it, a shot-list id that doesn't exist, an unknown query key, a script with no shot at all, too few words,
+    and a library with no recording for the profile asked for are each refused with a plain reason"""
+    def refused(script, *words, **more):
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                footage_run(tmp, script, **more)
+            except footage_short.FootageError as e:
+                return all(w in str(e) for w in words)
+        return False
+    beats = lambda *b: footage_script(lines=[dict(footage_script()["lines"][0], beats=list(b)),
+                                             *footage_script()["lines"][1:]])
+    no_shots = footage_script(lines=[dict(line, beats=[{"beat": "card", "card": "HELLO"}])
+                                     for line in footage_script()["lines"]])
+    short = footage_script(lines=[dict(footage_script()["lines"][0], say="Too short.")])
+    return (refused(beats({"beat": "full", "shot": {"activity": ["chase"]}, "file": "rockstar/x.jpg"}), "one of them")
+            and refused(beats({"beat": "lockon", "shot": {"activity": ["chase"]}}), "full, card or banner")
+            and refused(beats({"beat": "full", "shot": "police-chase/no-such-shot"}), "not in shotlist.json")
+            and refused(beats({"beat": "full", "shot": {"speed": "fast"}}), "unknown query key")
+            and refused(no_shots, "no beat asks for footage")
+            and refused(short, "spoken words")
+            and refused(footage_script(footage={"profile": "gta6"}), "no recording", "gta6"))
+
+
+@check
+def shot_list_ids_and_fallback_words():
+    """a beat's shot may be a shot-list id ("police-chase/long-chase" is that shot's query); a beat with no "query"
+    of its own falls back to plain words for what it was after (a chase: police car); its own "query" wins; and a
+    star-rise query never takes the two length filters with it, which are about segments"""
+    query = footage_short.shot_query("police-chase/long-chase")
+    lib = made_up_library()
+    rises = footage_short.candidates(lib, {"stars_rise": True, "min_len": 500})
+    return (query == {"activity": ["chase"], "min_stars": 1, "min_len": 15}
+            and footage_short.fallback_query({"shot": {"activity": ["chase"]}}) == "police car"
+            and footage_short.fallback_query({"shot": {"activity": ["boat"]}, "query": "airboat swamp"}) == "airboat swamp"
+            and len(rises) == 2 and all("change_s" in r for r in rises))
+
+
+def explainer_or_none():
+    """explainer.py, when this is run with .venv-tts (it needs numpy and Kokoro); None with plain .venv."""
+    try:
+        import numpy  # noqa: F401
+        import explainer
+        return explainer
+    except ImportError:
+        return None
+
+
+def tone_video(path, seconds=6, hz=440):
+    """A small video with a steady tone as its sound."""
+    subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    f"testsrc2=s=640x360:r=30:d={seconds}", "-f", "lavfi", "-i", f"sine=frequency={hz}:duration={seconds}",
+                    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(path)],
+                   check=True)
+
+
+@check
+def explainer_reads_sound_on_a_video_shot():
+    """(needs .venv-tts; SKIPPED with plain .venv) explainer.py takes "sound": true on a video shot and nowhere
+    else: an image with sound, a text card with sound and a sound that isn't true or false are refused; a script
+    without it reads as before, with game_volume 1; a game_volume out of range is refused"""
+    explainer = explainer_or_none()
+    if explainer is None:
+        return "SKIP"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tone_video(root / "clip.mp4")
+        subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=gray:s=640x360", "-frames:v", "1", str(root / "still.jpg")], check=True)
+
+        def read(*beats, **top):
+            path = root / "s.json"
+            path.write_text(json.dumps({"title": "Sound test", "lines": [{"say": "One line here.", "beats": list(beats)}],
+                                        **top}), encoding="utf-8")
+            return explainer.load_script(path, root)
+
+        def refused(*beats, **top):
+            try:
+                read(*beats, **top)
+            except explainer.ScriptError:
+                return True
+            return False
+        with_sound = read({"beat": "full", "file": "clip.mp4", "at": "1", "sound": True})
+        plain = read({"beat": "full", "file": "clip.mp4", "at": "1"})
+        return (with_sound["lines"][0]["visuals"][0].get("sound") is True
+                and "sound" not in plain["lines"][0]["visuals"][0] and plain["game_volume"] == 1.0
+                and read({"beat": "full", "file": "clip.mp4"}, game_volume=0.5)["game_volume"] == 0.5
+                and refused({"beat": "full", "file": "still.jpg", "sound": True})
+                and refused({"beat": "card", "card": "HELLO", "sound": True}, {"beat": "full", "file": "clip.mp4"})
+                and refused({"beat": "full", "file": "clip.mp4", "sound": "yes"})
+                and refused({"beat": "full", "file": "clip.mp4"}, game_volume=9))
+
+
+@check
+def game_sound_sits_under_the_voice_only_where_its_shot_is():
+    """(needs .venv-tts; SKIPPED with plain .venv) explainer.game_bed with a made-up voice: the footage's sound is
+    there only during the shot that asked for it (silent before and after, silent for a shot without "sound" and
+    for the loop ending's repeat), it fades in and out at the cuts, and while the voice speaks it sits about 13 dB
+    under it (within 2 dB)"""
+    explainer = explainer_or_none()
+    if explainer is None:
+        return "SKIP"
+    import numpy as np
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        tone_video(work / "clip.mp4")
+        rate, fps = explainer.RATE, explainer.FPS
+        t = np.arange(6 * rate) / rate
+        voice = np.repeat((0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)[:, None], 2, axis=1)
+        video = {"kind": "video", "path": work / "clip.mp4", "start": 1.0, "source": "clip.mp4@1", "sound": True}
+        quiet = dict(video, sound=False)
+        slots = [{"line": 0, "start": 0, "frames": 2 * fps, "visual": quiet, "start_s": 1.0},
+                 {"line": 0, "start": 2 * fps, "frames": 2 * fps, "visual": video, "start_s": 1.0},
+                 {"line": 0, "start": 4 * fps, "frames": 2 * fps, "visual": video, "start_s": 1.0, "loop_tail": True}]
+        bed, info = explainer.game_bed(slots, voice, 1.0, work)
+        none, _ = explainer.game_bed(slots[:1], voice, 1.0, work)
+    rms = lambda a, b, x=None: float(np.sqrt(((bed if x is None else x)[int(a * rate):int(b * rate)] ** 2).mean()))
+    under = 20 * np.log10(rms(2.5, 3.5, voice) / rms(2.5, 3.5))
+    return (none is None and len(info["game_pieces"]) == 1 and rms(0.0, 1.9) == 0.0 and rms(4.1, 6.0) == 0.0
+            and rms(2.5, 3.5) > 0.0 and rms(2.0, 2.005) < 0.5 * rms(2.5, 3.5) and 11.0 <= under <= 15.0)
+
+
 def main():
-    ok = True
+    ok, skipped = True, 0
     for fn in CHECKS:
         try:
-            good, err = bool(fn()), ""
+            got = fn()
+            good, err = bool(got), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run
-            good, err = False, f"  ({type(e).__name__}: {e})"
+            got, good, err = None, False, f"  ({type(e).__name__}: {e})"
         ok &= good
-        print(f"  {'PASS' if good else 'FAIL'} {fn.__name__}: {' '.join((fn.__doc__ or '').split())}{err}", flush=True)
+        skipped += got == "SKIP"
+        word = "SKIP" if got == "SKIP" else "PASS" if good else "FAIL"
+        print(f"  {word} {fn.__name__}: {' '.join((fn.__doc__ or '').split())}{err}", flush=True)
+    if skipped:
+        print(f"{skipped} check(s) SKIPPED: they need explainer.py's own Python. Run this file with "
+              ".venv-tts\\Scripts\\python.exe to include them.")
     print("RESULT: " + ("PASS" if ok else "FAIL"))
     sys.exit(0 if ok else 1)
 
