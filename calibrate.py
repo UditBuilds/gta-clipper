@@ -30,6 +30,17 @@ Usage:  python calibrate.py <name> [--add <video> <time> [<time> ...]] ... [--po
   e.g.  python calibrate.py gta6 --add C:\\AI\\gta\\input\\gta6_day1.webm 1:40 2:20 3:05 --add other.webm 0:30
         python calibrate.py gta6          (carry on with the frames already added)
 Times are m:ss, h:mm:ss or seconds.
+
+Guided mode (PR 22), one command for launch night:
+
+        python calibrate.py --guided --profile gta6 --video C:\\AI\\gta\\input\\gta6_day1.webm --star-slots 6
+
+It looks through the recording itself (calibrate_guided.py): grabs about a dozen good frames, finds the bars and
+the wanted-star row, and fills the page in, so you only confirm or fix. After Save it tries the new profile on 3
+minutes of the recording (index.py, then star_check.py) and prints PASS or FAIL with the pages to look at. A
+recording with no wanted stars still gives a profile: its stars are marked "not calibrated", and the same command
+on a clip that has stars adds them later. That is the one case in which a saved profile is written again (the old
+file is kept in the session folder); everything else about never overwriting stands.
 """
 
 import argparse
@@ -792,6 +803,7 @@ class Session:
         self.file = self.dir / "session.json"
         self.lock = threading.Lock()
         self.cache = {}  # (frame id, geometry) -> raw HUD bytes
+        self.replace_ok = False  # guided mode only: the saved profile still has parts to do, so Save may finish it
         if self.file.is_file():
             self.data = json.loads(self.file.read_text(encoding="utf-8"))
         else:
@@ -882,10 +894,11 @@ class Session:
         with ThreadPoolExecutor(WORKERS) as pool:
             return dict(zip((f["id"] for f in frames), pool.map(one, frames)))
 
-    def find_bars(self, rect):
+    def find_bars(self, rect, use=None):
         """Find the bars inside one rough box (find_strips) and guess HUD shown or hidden on every frame.
         The bars are found from the frames confirmed "HUD shown" when there are 3 or more, else from every frame
-        not black and not confirmed hidden (the HUD must then be on most of them). Returns a message for the page."""
+        not black and not confirmed hidden (the HUD must then be on most of them); guided mode names the frames
+        itself (use: the ids of the frames its scan says show the HUD). Returns a message for the page."""
         fw, fh = self.frame_size() or (1920, 1080)
         x0, y0 = max(0, round(rect[0])), max(0, round(rect[1]))
         x1, y1 = min(fw, round(rect[0] + rect[2])), min(fh, round(rect[1] + rect[3]))
@@ -898,7 +911,10 @@ class Session:
         area = [x0, y0, x1 - x0, y1 - y0]
         frames = self.data["frames"]
         sure = [f for f in frames if f["labels"].get("hud") == "shown"]
-        use = sure if len(sure) >= 3 else [f for f in frames if not f.get("black") and f["labels"].get("hud") != "hidden"]
+        if use is not None:
+            use = [f for f in frames if f["id"] in use]
+        else:
+            use = sure if len(sure) >= 3 else [f for f in frames if not f.get("black") and f["labels"].get("hud") != "hidden"]
         raws = self.read_area(frames, area)
         found = find_bars_in([raws[f["id"]] for f in use], area[2], area[3])
         r0, r1 = found["rows"]
@@ -1150,7 +1166,7 @@ class Session:
         if not report["clean"] and not force_with_problems:
             raise CalibError("some frames still come out wrong or a limit is one-sided; press 'Save anyway' to keep it")
         out = clip.PROFILE_DIR / f"{self.name}.json"
-        if out.exists():
+        if out.exists() and not self.replace_ok:
             raise CalibError(f"{out} already exists; calibrate.py never overwrites a profile. Pick another name")
         log = self.data["log"]
         bars = self.data["drawing"].get("bars") or []
@@ -1169,13 +1185,29 @@ class Session:
                                "stars": star_source(self.data["drawing"].get("stars") or {}),
                                "labels": label_summary(self.data["frames"]),
                                "page_opened": opened, "saved": saved}
+        guided = self.data.get("guided")
+        if guided:
+            # What is still to do. Stars the scan found nothing of are "not calibrated", not "this game has none".
+            pending = [part for part, off in (("stars", not prof["stars"].get("on") and guided.get("stars") == "none"),
+                                              ("phone", not prof["phone"].get("on") and guided.get("phone") == "skipped"))
+                       if off]
+            prof["calibration"]["guided"] = {"video": guided.get("video_name"), "pending": pending,
+                                             "bars_found_by_scan": bool(guided.get("bars")),
+                                             "stars_found_by_scan": guided.get("stars") == "found"}
+            if "stars" in pending:
+                prof["calibration"]["stars"] = "not calibrated"
         clean = json.loads(json.dumps(prof))
         for sec in ("stars", "phone"):
             clean[sec].pop("_missing", None)
         clip.PROFILE_DIR.mkdir(exist_ok=True)
         text = json.dumps(clean, indent=2)
-        with open(out, "x", encoding="utf-8") as fh:  # "x": fails if it appeared meanwhile
-            fh.write(text + "\n")
+        if out.exists():   # replace_ok: keep the file that is being finished
+            kept = self.dir / f"profile_before_{saved.replace(':', '')}.json"
+            kept.write_bytes(out.read_bytes())
+            out.write_text(text + "\n", encoding="utf-8")
+        else:
+            with open(out, "x", encoding="utf-8") as fh:  # "x": fails if it appeared meanwhile
+                fh.write(text + "\n")
         clip.load_profile(self.name)  # what clip.py will read
         self.event("save", path=str(out), clean=report["clean"])
         self.data["saved"] = {"path": str(out), "time": saved, "report": report}
@@ -1217,8 +1249,11 @@ def minutes(a, b):
 
 # --- The page's server (127.0.0.1 only) ---
 
-def serve(session, port, browser):
+def serve(session, port, browser, guided=False):
+    """Run the page until Finish or Ctrl+C; in guided mode it stops by itself once the profile is saved. Returns
+    True when a profile was saved while it ran."""
     page = (Path(__file__).resolve().parent / "calibrate_page.html").read_text(encoding="utf-8")
+    done = {"saved": False}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -1244,7 +1279,9 @@ def serve(session, port, browser):
                 self.send(200, {"name": session.name, "game": d.get("game", ""), "frames": d["frames"],
                                 "drawing": d["drawing"], "overrides": d.get("overrides", {}),
                                 "frame_size": session.frame_size(), "saved": d.get("saved"),
-                                "exists": (clip.PROFILE_DIR / f"{session.name}.json").exists(),
+                                "exists": (clip.PROFILE_DIR / f"{session.name}.json").exists()
+                                and not session.replace_ok,
+                                "guided": d.get("guided") if guided else None,
                                 "cell": DEFAULTS["phone_cell"], "log": d["log"]})
             elif re.fullmatch(r"/frame/f\d+\.png", self.path):
                 png = session.dir / "frames" / self.path.split("/")[-1]
@@ -1296,7 +1333,10 @@ def serve(session, port, browser):
                     elif self.path == "/save":
                         out, mins = session.save_profile(bool(body.get("anyway")))
                         print(f"Saved {out}" + (f" ({mins:g} min after the page was first opened)" if mins else ""))
+                        done["saved"] = True
                         self.send(200, {"path": str(out), "minutes": mins})
+                        if guided:
+                            threading.Thread(target=httpd.shutdown, daemon=True).start()
                     elif self.path == "/quit":
                         self.send(200, {"ok": True})
                         threading.Thread(target=httpd.shutdown, daemon=True).start()
@@ -1317,16 +1357,36 @@ def serve(session, port, browser):
         pass
     httpd.server_close()
     print("Stopped. Session kept in", session.file)
+    return done["saved"]
 
 
 def main():
     ap = argparse.ArgumentParser(description="Make a HUD profile for clip.py from labelled frames (local page).")
-    ap.add_argument("name", help="profile name: profiles/NAME.json (lowercase letters, digits, _)")
+    ap.add_argument("name", nargs="?", help="profile name: profiles/NAME.json (lowercase letters, digits, _)")
+    ap.add_argument("--guided", action="store_true",
+                    help="one command for launch night: the tool finds frames, bars and stars itself, you confirm or "
+                         "fix, then it checks the saved profile (needs --profile and --video)")
+    ap.add_argument("--profile", help="guided mode: the profile's name (as NAME above)")
+    ap.add_argument("--video", type=Path, help="guided mode: the recording to calibrate from")
+    ap.add_argument("--star-slots", type=int, metavar="N",
+                    help="guided mode: how many wanted-star slots the game has, if you know (GTA V: 5, GTA 6: 6)")
+    ap.add_argument("--game", help="guided mode: the game's name for messages (default: guessed from the profile name)")
+    ap.add_argument("--skip-index", action="store_true",
+                    help="guided mode: leave out index.py and star_check.py at the end (when Ollama isn't available)")
     ap.add_argument("--add", nargs="+", action="append", default=[], metavar="VIDEO_THEN_TIMES",
                     help="a video, then the times to grab from it (m:ss, h:mm:ss or seconds); repeat for more videos")
     ap.add_argument("--port", type=int, default=0, help="port for the page (default: any free one)")
     ap.add_argument("--no-browser", action="store_true", help="don't open the browser")
     args = ap.parse_args()
+    if args.guided:
+        if args.name or args.add or not args.profile or not args.video:
+            ap.error("guided mode is: calibrate.py --guided --profile NAME --video RECORDING")
+        import calibrate_guided   # it imports this module, so it is loaded only here
+        sys.exit(calibrate_guided.run(args.profile, args.video, slots=args.star_slots, game=args.game,
+                                      port=args.port, browser=not args.no_browser, skip_index=args.skip_index,
+                                      log=lambda m: print(m, flush=True)))
+    if not args.name:
+        ap.error("give the profile's name, or use --guided --profile NAME --video RECORDING")
     if not NAME_RE.match(args.name):
         sys.exit("ERROR: the name must be 1-40 lowercase letters, digits or _ (it becomes profiles/NAME.json)")
     if (clip.PROFILE_DIR / f"{args.name}.json").exists():

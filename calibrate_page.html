@@ -67,10 +67,15 @@ td input { width:90px; }
 #lightbox img { max-width:96vw; max-height:92vh; image-rendering:pixelated; }
 code { background:#0b0d12; padding:1px 5px; border-radius:4px; }
 label.chk { display:flex; gap:8px; align-items:center; margin:10px 0; }
+#guide:empty { display:none; }
+#guide { margin:12px 16px 0; padding:12px 16px; border:1px solid #1d4ed8; border-radius:8px; background:#0b1a33; }
+#guide ol { margin:6px 0 8px; padding-left:22px; } #guide li { margin:3px 0; } #guide li.done { color:#bbf7d0; }
+#guide li.now { font-weight:700; }
 @media (max-width:900px) { .wrap { grid-template-columns:1fr; } nav { border-right:0; border-bottom:1px solid var(--line); } .ws { grid-template-columns:1fr; } }
 </style></head><body>
 <header><h1>Make a HUD profile: <span id="pname"></span></h1>
 <span class="muted" id="elapsed"></span><span class="muted" id="savedstate"></span></header>
+<div id="guide"></div>
 <div class="wrap">
 <nav id="nav"></nav>
 <main id="main"></main>
@@ -134,9 +139,10 @@ function stepDone(n) {
   if (n === 6) return !!S.saved || !!S.data.saved;
 }
 function renderNav() {
+  if (S.data.guided) renderGuide();
   $("#nav").innerHTML = STEPS.map((t, i) => `<button class="${S.step === i + 1 ? "on" : ""}" data-step="${i + 1}">
     <span class="num">${i + 1}</span>${t}<span class="tick">${stepDone(i + 1) ? "✔" : ""}</span></button>`).join("");
-  for (const b of $("#nav").querySelectorAll("button")) b.onclick = () => { S.step = +b.dataset.step; render(); };
+  for (const b of $("#nav").querySelectorAll("button")) b.onclick = () => { S.step = +b.dataset.step; if (S.data.guided) S.view = null; render(); };
 }
 
 // ---------- step 2: labels ----------
@@ -180,6 +186,8 @@ function renderLabels() {
   ${noHudGuess ? `<div class="msg info">No HUD guesses yet: do step 1 first (find the bars). Until then, tick HUD yourself.</div>` : ""}
   <div class="row"><span class="k">Game name</span><input type="text" id="game" placeholder="e.g. GTA 6" value="${esc(S.data.game || "")}">
    <span class="muted">used in clip.py's messages, e.g. "no GTA 6 minimap found"</span></div>
+  ${S.data.frames.some(f => unchecked(f) && ["hud","stars","phone"].every(k => f.labels[k] != null || (f.suggest || {})[k] != null))
+      ? `<div class="row"><button class="act" id="allok">All guesses look right</button><span class="muted">confirms every picture you haven't changed. Look at each one first.</span></div>` : ""}
   <div class="counts"><span class="${left ? "need" : ""}">Checked: ${S.data.frames.length - left} of ${S.data.frames.length} pictures</span>
    ${need(c.hud.shown, 3, "HUD shown")}${need(c.hud.hidden, 2, "HUD hidden")}${need(c.stars.yes, 2, "stars yes")}
    ${need(c.stars.no, 2, "stars no")}${need(c.phone.yes, 2, "phone yes")}${need(c.phone.no, 2, "phone no")}</div>
@@ -197,6 +205,10 @@ function renderLabels() {
   for (const b of document.querySelectorAll(".seg button")) b.onclick = () => {
     const f = S.data.frames.find(x => x.id === b.dataset.f);
     f.labels[b.dataset.k] = b.dataset.v;
+    changed(); render();
+  };
+  const all = $("#allok"); if (all) all.onclick = () => {
+    for (const f of S.data.frames) if (["hud","stars","phone"].every(k => f.labels[k] != null || (f.suggest || {})[k] != null)) looksRight(f);
     changed(); render();
   };
   for (const b of document.querySelectorAll("[data-ok]")) b.onclick = () => {
@@ -247,6 +259,13 @@ function getImg(id) {
 }
 function fsize() { return S.data.frame_size || [1920, 1080]; }
 function fitView() { const [w, h] = fsize(); return {cx:w / 2, cy:h / 2, z:960 / w}; }
+// Guided mode: open step 1 zoomed in on the bars the tool found, and step 3 on the star row, so the check is one look.
+function guidedView(step) {
+  if (!S.data.guided) return null;
+  const d = S.data.drawing, b = step === 1 ? d.bar_area : step === 3 ? d.stars.box : null;
+  if (!b) return null;
+  return {cx:b[0] + b[2] / 2, cy:b[1] + b[3] / 2, z:Math.min(6, 960 / (b[2] * 1.8))};
+}
 function starOutline(st) {
   const c = st.clicks || {};
   if (!(st.slots && c.top_first && c.top_last && c.low && c.inner)) return null;
@@ -494,7 +513,7 @@ function renderWs() {
     <button class="plain" id="zfit">Whole picture</button><span class="muted" id="zoomtxt"></span></div>
     <div class="ws"><div class="canvasbox"><canvas id="detail" width="960" height="540"></canvas></div>
     <div><canvas id="overview" width="300" height="169"></canvas><div id="side"></div></div></div>`;
-  if (!S.view) S.view = fitView();
+  if (!S.view) S.view = guidedView(step) || fitView();
   $("#fsel").onchange = e => { S.frame[step] = e.target.value; drawWs(); };
   $("#zfit").onclick = () => { S.view = fitView(); drawWs(); };
   bindCanvas(); renderWsSide(); drawWs();
@@ -578,8 +597,9 @@ function renderSave() {
    After that, try it on a whole video:<br><code>.\\.venv\\Scripts\\python.exe clip.py &lt;your video&gt; --profile ${esc(S.data.name)}</code><br>
    and look at the result with make_review.py: excluded stretches, the stars and phone columns, and the clips.</div>`;
   if (saved) {
-    html += `<div class="msg ok">Saved to <code>${esc(saved.path)}</code>${S.saved && S.saved.minutes ? ` — ${S.saved.minutes} minutes after you first opened this page` : ""}.</div>
-      <p>You're done here. Press Finish to stop the page (or just close it and press Ctrl+C in the terminal).</p><button class="act" id="quit">Finish</button>`;
+    html += `<div class="msg ok">Saved to <code>${esc(saved.path)}</code>${S.saved && S.saved.minutes ? ` — ${S.saved.minutes} minutes after you first opened this page` : ""}.</div>`
+      + (S.data.guided ? `<p><b>You're done on this page.</b> Go back to the terminal window: it is now trying the new profile on 3 minutes of your recording and will print PASS or FAIL. You can close this tab.</p>`
+         : `<p>You're done here. Press Finish to stop the page (or just close it and press Ctrl+C in the terminal).</p><button class="act" id="quit">Finish</button>`);
   } else if (S.data.exists) {
     html += `<div class="msg err">profiles/${esc(S.data.name)}.json already exists. Start calibrate.py again with another name.</div>`;
   } else if (!r || S.changed) {
@@ -601,6 +621,31 @@ function renderSave() {
     render();
   };
   const q = $("#quit"); if (q) q.onclick = async () => { await api("/quit", {}); $("#main").innerHTML = "<h2>Stopped.</h2><p>You can close this tab.</p>"; };
+}
+
+// ---------- guided mode (calibrate.py --guided): the tool did the finding, the page is only for checking ----------
+function guideSteps() {
+  const g = S.data.guided, d = S.data.drawing;
+  const saved = !!S.saved || !!S.data.saved;
+  return [
+    [1, g.bars ? "Minimap bars: the tool found them. Check the orange boxes sit inside the coloured bars on 2 or 3 pictures."
+               : "Minimap bars: the tool could NOT find them. Drag one rough box round the coloured bars (step 1 says how)."],
+    [2, "Pictures: check the tool's guesses. Fix any wrong one, then press \"All guesses look right\". Check the game's name."],
+    [3, d.stars.off ? (g.stars === "none" ? "Wanted stars: none found in this recording, so the stars rule stays off (\"not calibrated\"). Stars ARE in this recording? Untick the box in step 3 and drag a box round them."
+                                          : "Wanted stars: switched off.")
+                    : "Wanted stars: the tool found the star row. Check the green outlines sit on the stars, then press \"Looks right\"."],
+    [5, "Measure: press Measure and read the three results."],
+    [6, saved ? "Saved. Go back to the terminal window: it is now checking the new profile." : "Save: press Save profile."]];
+}
+function renderGuide() {
+  const el = $("#guide");
+  if (!S.data.guided) { el.innerHTML = ""; return; }
+  const steps = guideSteps(), next = steps.find(([n]) => !stepDone(n));
+  el.innerHTML = `<b>Guided calibration.</b> The tool has already looked through <code>${esc(S.data.guided.video_name)}</code>. You only check its work, top to bottom:
+   <ol>${steps.map(([n, t]) => `<li class="${stepDone(n) ? "done" : next && next[0] === n ? "now" : ""}">${stepDone(n) ? "✔ " : ""}${esc(t)}</li>`).join("")}</ol>
+   <span class="muted">The phone call screen is skipped for now (switched off). You can draw it in step 4 if this recording has a call.</span>
+   ${next && next[0] !== S.step ? ` <button class="act small" id="gnext">Go to: ${esc(STEPS[next[0] - 1])}</button>` : ""}`;
+  const b = $("#gnext"); if (b) b.onclick = () => { S.step = next[0]; S.view = null; render(); };
 }
 
 function render() {

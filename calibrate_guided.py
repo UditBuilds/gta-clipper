@@ -17,14 +17,21 @@ Nothing here knows GTA V: no position, colour or size of any HUD part is assumed
 """
 
 import functools
+import json
 import math
+import re
 import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from types import SimpleNamespace
 
 import calibrate as cal
+import clip
 
 SCAN_FRAMES = 120        # looks at the recording (fewer for a short one: never closer than SCAN_MIN_GAP_S)
-SCAN_MIN_GAP_S = 2.0
+SCAN_MIN_GAP_S = 0.5
 SCAN_WORKERS = 6
 DIV = 4                  # a small frame is the picture at 1/DIV size
 BLACK_MEAN = 14.0        # a small frame whose average channel value is under this is a black screen
@@ -33,8 +40,9 @@ BLACK_MEAN = 14.0        # a small frame whose average channel value is under th
 BARS_USE = 40            # at most this many frames (spread evenly) go into the search
 HUE_BUCKETS = 12         # 30 degrees each
 BAR_SHARE = 0.25         # a bar pixel has one hue on at least this share of the frames (the HUD may be off on the rest)
+BAR_MIN_FRAMES = 5       # ...and on at least this many: with a handful of frames, chance alone repeats a hue
 BAR_MIN_RUN = 5          # small pixels: a bar is at least this long (20 px of the real picture)
-BAR_THICK = 4            # small pixels: 4 rows up and 4 rows down the hue is gone, or the strip is no bar
+BAR_THICK = 4            # small pixels: a bar is at most this thick (16 px of the real picture)
 BAR_PAD = (16, 10)       # real pixels added left/right and above/below the strips for the rough box
 
 # coarse_stars
@@ -58,6 +66,8 @@ STAR_TRY = 10            # the best this many shapes get a real star fit; the mo
 STAR_MAX_ASPECT = 10     # a box more than this many times wider than tall is a line of text, not a star row
 STAR_MIN_HEIGHT = 16     # real pixels: smaller is too small for calibrate.fit_stars
 STAR_FIT_YES, STAR_FIT_NO = 4, 6   # full-size pictures with and without the shape that go into the fit
+TUNE_REACH = (1.0, 5.0)  # tune_outline tries outlines this much smaller and larger (real pixels)...
+TUNE_STEP = 0.5          # ...in steps of this
 STAR_MARGIN = 0.25       # the fitted outline must score this much higher on every "stars" picture than on any other
 
 
@@ -113,7 +123,7 @@ def _hue_bucket(r, g, b):
 
 def bar_pixels(images, w, h):
     """Per pixel: (hue bucket, mean colour) when one hue is there on at least BAR_SHARE of the frames, else None."""
-    need = max(3, math.ceil(BAR_SHARE * len(images)))
+    need = max(BAR_MIN_FRAMES, math.ceil(BAR_SHARE * len(images)))
     planes = [[im[k::3] for im in images] for k in range(3)]
     out = [None] * (w * h)
     for p, (rs, gs, bs) in enumerate(zip(zip(*planes[0]), zip(*planes[1]), zip(*planes[2]))):
@@ -139,7 +149,7 @@ def coarse_bars(frames, w, h):
     "strips": [{"x": [x0, x1], "y": [y0, y1], "colour": (r, g, b)}, ...]} or None when no row of 2 or more thin
     coloured strips is found."""
     images = spread([f for f in frames if not is_black(f)], BARS_USE)
-    if len(images) < 3:
+    if len(images) < BAR_MIN_FRAMES:
         return None
     px = bar_pixels(images, w, h)
 
@@ -147,7 +157,7 @@ def coarse_bars(frames, w, h):
         v = px[y * w + x] if 0 <= y < h else None
         return v is not None and _near(v[0], bucket)
 
-    runs = []   # (y, x0, x1, bucket): a level run of one hue that is gone BAR_THICK rows above and below
+    runs = []   # (y, x0, x1, bucket): a level run of one hue that is thin and has nothing of its hue near it
     for y in range(h):
         x = 0
         while x < w:
@@ -160,9 +170,14 @@ def coarse_bars(frames, w, h):
                 x += 1
             if x - x0 < BAR_MIN_RUN:
                 continue
+            # A bar's hue is gone BAR_THICK rows above and below it (the edge of the sky fails this), and the patch
+            # round the run is thin: few of the rows near it have the hue along most of the run (the middle of a
+            # patch 5-7 rows tall fails this).
             above = sum(same(i, y - BAR_THICK, bucket) for i in range(x0, x))
             below = sum(same(i, y + BAR_THICK, bucket) for i in range(x0, x))
-            if max(above, below) <= 0.3 * (x - x0):
+            thick = sum(1 for dy in range(-BAR_THICK, BAR_THICK + 1)
+                        if sum(same(i, y + dy, bucket) for i in range(x0, x)) >= 0.7 * (x - x0))
+            if max(above, below) <= 0.3 * (x - x0) and thick <= BAR_THICK:
                 runs.append((y, x0, x, bucket))
     # Runs on neighbouring rows that overlap are one strip; strips level with each other are one row of bars.
     strips = []
@@ -179,9 +194,12 @@ def coarse_bars(frames, w, h):
     strips = [s for s in strips if s["y"][1] - s["y"][0] <= BAR_THICK]
     best = None
     for s in strips:
-        row = sorted((t for t in strips if t["y"][0] < s["y"][1] + 1 and s["y"][0] < t["y"][1] + 1),
-                     key=lambda t: t["x"][0])
-        row = [t for i, t in enumerate(row) if i == 0 or t["x"][0] >= row[i - 1]["x"][1]]   # side by side only
+        level = sorted((t for t in strips if t["y"][0] < s["y"][1] + 1 and s["y"][0] < t["y"][1] + 1),
+                       key=lambda t: t["x"][0])
+        row = []
+        for t in level:                                  # side by side only
+            if not row or t["x"][0] >= row[-1]["x"][1]:
+                row.append(t)
         if len(row) >= 2:
             length = sum(t["x"][1] - t["x"][0] for t in row)
             # Bars sit close together: a row's strips are judged with the gaps between them counted against it.
@@ -427,15 +445,23 @@ def find_stars(on, w, h, frame, read, slots=None, log=lambda m: None):
         return None
     _, fit, alike, rect, yes_i, no_i = best
     if slots and fit["slots"] != slots:
-        # The owner said how many slots the row has. Every slot must fit in the box (stars are about as wide as
-        # they are tall), so the row's box is widened on both sides and the fit is told the number.
-        want = round(slots * 1.25 * (rect[3] - 2 * STAR_PAD[1])) + 2 * STAR_PAD[0]
-        x0 = max(0, rect[0] - max(0, want - rect[2]))
-        wide = [x0, rect[1], min(frame[0], rect[0] + rect[2] + max(0, want - rect[2])) - x0, rect[3]]
+        # The owner said how many slots the row has. The slots the fit didn't see may be on either side of the ones
+        # it did, so the box grows by that many star widths both ways (the fit's own spacing, or a little more than
+        # a star's width when it saw one star only) and the fit is told the number.
+        pitch = fit["tip_spacing"] if fit["slots"] > 1 else 2.2 * fit["radius"]
+        extra = abs(slots - fit["slots"])
+        grow = math.ceil(extra * pitch + fit["radius"])
+        x0, y0, bw, bh = fit["box"]
+        left = max(0, x0 - grow)
+        wide = [left, y0, min(frame[0], x0 + bw + grow) - left, bh]
         try:
             told = _fit(read, on, yes_i, no_i, wide, slots)
             if told and told["separates"]:
-                tight = row_rect(told, frame)
+                # The fit can sit one slot off: an outline on nothing costs it little. Where the slots really are
+                # is settled on all the scan's frames (slot_shift), then the fit is redone in that row's own box.
+                shift = slot_shift(raws, alike, told, extra, w, h)
+                moved = dict(told, first_tip_x=told["first_tip_x"] + shift * told["tip_spacing"])
+                tight = row_rect(moved, frame)
                 again = _fit(read, on, yes_i, no_i, tight, slots) if tight != wide else None
                 fit = again if again and again["separates"] else told
                 log(f"    with {slots} slots, as you said: the row is at {fit['box']}")
@@ -443,19 +469,114 @@ def find_stars(on, w, h, frame, read, slots=None, log=lambda m: None):
                 log(f"    {slots} slots, as you said, don't fit what the pictures show; keeping the {fit['slots']} found")
         except cal.CalibError:
             log(f"    {slots} slots, as you said, don't fit in the row's box; keeping the {fit['slots']} found")
+    roomy = row_rect(dict(fit, radius=fit["radius"] + TUNE_REACH[1], tip_y=fit["tip_y"] - TUNE_REACH[1]), frame)
+    try:
+        again = _fit(read, on, yes_i, no_i, roomy, fit["slots"]) if roomy != fit["box"] else fit
+        if again and again["separates"]:
+            fit = again
+    except cal.CalibError:
+        pass
+    fit = tune_outline(fit, fit["_yes"], fit["_no"])
+    if fit.get("tuned_for_count"):
+        log(f"    outline resized to radius {fit['radius']:g} px so the star count can see each star's dark rim")
+    fit = {k: v for k, v in fit.items() if not k.startswith("_")}
     return {"fit": fit, "alike": {t: round(a, 3) for (t, _), a in zip(on, alike)},
             "yes": [t for (t, _), a in zip(on, alike) if a >= STAR_ALIKE],
             "no": [t for (t, _), a in zip(on, alike) if a <= STAR_UNLIKE]}
 
 
+def slot_shift(raws, alike, fit, reach, w, h):
+    """By how many slots (-reach to reach) a fitted row should move sideways to sit on the slots that are really
+    drawn. A slot, lit or empty, is drawn over the scene, so at its middle the average small frame WITH the stars
+    differs from the average one WITHOUT; where the row has no slot they are alike. The shift with the largest
+    difference summed over the row's slot middles wins; 0 unless another is clearly better."""
+    yes = [f for f, a in zip(raws, alike) if a >= STAR_ALIKE]
+    no = [f for f, a in zip(raws, alike) if a <= STAR_UNLIKE]
+    if not yes or not no:
+        return 0
+    cy = round((fit["tip_y"] + fit["radius"]) / DIV)
+
+    def drawn(x):
+        cx = round(x / DIV)
+        cells = [((cy + dy) * w + cx + dx) * 3 for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                 if 0 <= cx + dx < w and 0 <= cy + dy < h]
+        if not cells:
+            return 0.0
+        return sum(abs(sum(_lum(f, i) for f in yes) / len(yes) - sum(_lum(f, i) for f in no) / len(no))
+                   for i in cells) / len(cells)
+
+    def total(shift):
+        return sum(drawn(fit["first_tip_x"] + (k + shift) * fit["tip_spacing"]) for k in range(fit["slots"]))
+    best = max(range(-reach, reach + 1), key=lambda k: (total(k), -abs(k)))
+    return best if total(best) > 1.05 * total(0) else 0
+
+
 def _fit(read, on, yes_i, no_i, rect, slots):
+    """calibrate.fit_stars on full-size pictures of rect; the fit also carries those pictures ("_yes", "_no")
+    until find_stars is done with it. None when too few pictures could be read."""
     with ThreadPoolExecutor(SCAN_WORKERS) as pool:
         yes = list(pool.map(lambda i: read(on[i][0], rect), yes_i))
         no = list(pool.map(lambda i: read(on[i][0], rect), no_i))
     yes, no = [r for r in yes if r], [r for r in no if r]
     if len(yes) < cal.STAR_MIN_YES or len(no) < cal.STAR_MIN_NO:
         return None
-    return cal.fit_stars(rect, yes, no, slots)
+    return {**cal.fit_stars(rect, yes, no, slots), "_yes": yes, "_no": no}
+
+
+def _star_prof(box, geom):
+    """Just enough of a profile for index.py's star counting and clip.py's star score, from a box and an outline."""
+    prof = SimpleNamespace(star_box=tuple(box), hud_w=box[2], star_tip_y=geom["tip_y"], star_radius=geom["radius"],
+                           star_inner=geom["inner"], data={},
+                           star_tips_x=tuple(geom["first_tip_x"] + geom["tip_spacing"] * k for k in range(geom["slots"])))
+    prof.star_template = clip.star_template(prof)
+    return prof
+
+
+def tune_outline(fit, yes, no):
+    """The fitted outline, resized so the star COUNT works too. fit_stars lines the outline up with the strongest
+    edge, and on a lit star that is where the white middle meets its dark rim: a little inside the star's real edge.
+    index.py counts a star by a dark rim just inside the outline round a lighter middle, so an outline that sits on
+    the middle's edge counts nothing (measured on the 26 October recordings: no star counted up to radius 15, all of
+    them from 15.2 or 17.3 on). Here the size is stepped (the stars' middles stay put) and index.py's own rule
+    counts the stars on the pictures that show them. If the fit's own size already counts the most, it stays.
+    Otherwise the outline becomes the smallest size that counts the most, plus one step for safety, as long as
+    clip.py's star score still tells the pictures with stars from those without. A game whose stars have no such
+    rim changes nothing: nothing is counted at any size, and the fit stays as it is."""
+    import index
+    box = fit["box"]
+    rule = dict(index.STAR_COUNT)
+    base = {k: fit[k] for k in ("first_tip_x", "tip_spacing", "tip_y", "radius", "inner", "slots")}
+
+    def sized(r):
+        return dict(base, radius=round(r, 2), tip_y=round(fit["tip_y"] + fit["radius"] - r, 2))
+
+    def counted(geom):
+        prof = _star_prof(box, geom)
+        masks = index.star_masks(prof, rule)
+        return sum(index.count_stars(index.star_slots(raw, prof, masks), rule) for raw in yes)
+
+    def fits(geom):
+        r = geom["radius"]
+        return (r >= cal.STAR_MIN_R and geom["tip_y"] >= box[1] - cal.STAR_TOL
+                and geom["tip_y"] + r * (1 + cal.SIN54) <= box[1] + box[3] + cal.STAR_TOL
+                and geom["first_tip_x"] - r * cal.COS18 >= box[0] - cal.STAR_TOL
+                and geom["first_tip_x"] + geom["tip_spacing"] * (geom["slots"] - 1) + r * cal.COS18
+                <= box[0] + box[2] + cal.STAR_TOL)
+
+    steps = round((TUNE_REACH[0] + TUNE_REACH[1]) / TUNE_STEP)
+    sizes = [g for g in (sized(fit["radius"] - TUNE_REACH[0] + k * TUNE_STEP) for k in range(steps + 1)) if fits(g)]
+    counts = [counted(g) for g in sizes]
+    own = counted(base)
+    if not counts or max(counts) <= own:
+        return fit
+    first = counts.index(max(counts))
+    pick = first + 1 if first + 1 < len(sizes) and counts[first + 1] == counts[first] else first
+    best = sizes[pick]
+    scores_yes, scores_no = cal.star_scores(box, best, yes), cal.star_scores(box, best, no)
+    if min(scores_yes) <= max(scores_no):
+        return fit
+    return {**fit, **best, "lowest_yes": round(min(scores_yes), 3), "highest_no": round(max(scores_no), 3),
+            "tuned_for_count": True, "separates": True}
 
 
 # --- Which frames go on the page ---
@@ -512,3 +633,319 @@ def check_window(found, duration, length=180.0):
     best = max((sum(1 for m in marks if s <= m < s + length), -s, s)
                for s in sorted({max(0.0, min(duration - length, m - 15.0)) for m in marks} | {0.0}))
     return round(best[2], 1), length
+
+
+# --- The guided command itself: calibrate.py --guided --profile NAME --video RECORDING ---
+
+CHECK_S = 180.0          # the saved profile is tried on this much of the recording
+STAR_CHECK_EACH = 3      # pictures per star count on the star check page
+
+
+def guess_game(name):
+    """The game's name for messages, from the profile's name."""
+    return "GTA 6" if "gta6" in name or "gtavi" in name else "GTA V" if "gta5" in name else name
+
+
+def pending_parts(name, profile_dir=None):
+    """What a saved profile still has to do: None when there is no profile, [] when it is finished, else the parts
+    guided mode marked (["stars"], ["phone"] or both). Only "stars" lets the profile be written again."""
+    path = Path(profile_dir or clip.PROFILE_DIR) / f"{name}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return list(((data.get("calibration") or {}).get("guided") or {}).get("pending") or [])
+
+
+def fill_session(session, video, found, picks, slots=None, game=None, log=print):
+    """Put what the scan found into the calibration session, as guesses the page shows: the frames, the bars (found
+    properly at full size by Session.find_bars inside the scan's rough box), a guess for every label, the star row,
+    and the phone switched off for now. Nothing is confirmed here: the owner does that on the page. Returns the
+    session's "guided" block."""
+    d = session.data
+    before = {f["id"] for f in d["frames"]}
+    session.add(video, [f"{p['t']:.2f}" for p in picks])
+    new = [f for f in d["frames"] if f["id"] not in before]
+    guess = {f["id"]: next(p for p in picks if abs(p["t"] - f["time_s"]) < 0.02) for f in new}
+    drawing = d["drawing"]
+    bars_ok = False
+    shown = [f["id"] for f in d["frames"]
+             if f["labels"].get("hud") == "shown" or (f["id"] in guess and guess[f["id"]]["hud"] == "shown")]
+    rect = (drawing.get("bar_area") if drawing.get("bars") and drawing.get("bar_area")
+            else full_rect(found["bars"]["box"], BAR_PAD) if found["bars"] else None)
+    if rect:
+        try:
+            log("  " + session.find_bars(rect, use=shown))
+            bars_ok = True
+        except cal.CalibError as e:
+            log(f"  The bars were not found at full size ({e}). You will drag a box round them on the page.")
+    for f in new:
+        suggest = f.setdefault("suggest", {})
+        if suggest.get("hud") is None and guess[f["id"]]["hud"]:
+            suggest["hud"], suggest["why"] = guess[f["id"]]["hud"], "the scan's guess"
+        suggest["stars"], suggest["phone"] = guess[f["id"]]["stars"] or "no", "no"
+    stars = drawing.setdefault("stars", {})
+    done_before = bool((stars.get("fit") or {}).get("confirmed")) or stars.get("mode") == "clicks"
+    if found["stars"]:
+        stars.update(box=list(found["stars"]["fit"]["box"]), fit=dict(found["stars"]["fit"]), mode="fit", off=False)
+        star_state = "found"
+    elif done_before and not stars.get("off"):
+        star_state = "kept"
+    else:
+        stars["off"] = True
+        star_state = "none"
+    phone = drawing.setdefault("phone", {})
+    phone.setdefault("grey", [])
+    drawn = bool(phone.get("box") and phone.get("dark") and phone.get("bright") and phone["grey"])
+    if not drawn:
+        phone["off"] = True
+    d["game"] = d.get("game") or game or guess_game(session.name)
+    d["guided"] = {"video": str(Path(video).resolve()), "video_name": Path(video).name, "bars": bars_ok,
+                   "stars": star_state, "phone": "drawn" if drawn else "skipped", "slots_told": slots,
+                   "frames_added": len(new), "started": cal.now()}
+    session.event("guided_fill", bars=bars_ok, stars=star_state, frames=len(new))
+    session.save()
+    return d["guided"]
+
+
+def cut_excerpt(ffmpeg, ffprobe, video, info, start, length, out_dir):
+    """A copy (no re-encode) of length seconds of the recording from start, for the check. Returns (path, None), or
+    (None, why) when the copy can't be made or doesn't read back as the same kind of picture: a PS5 .webm is stored
+    1920x1088 with a container crop, and a copy that lost it would shift every HUD box."""
+    out = Path(out_dir) / f"{Path(video).stem}_check{Path(video).suffix}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    done = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
+                           "-i", str(video), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", str(out)],
+                          capture_output=True, text=True)
+    if done.returncode or not out.is_file():
+        return None, "ffmpeg could not copy that part: " + done.stderr.strip()[-200:]
+    try:
+        got = clip.probe(ffprobe, out)
+    except SystemExit:
+        return None, "the copy can't be read back"
+    keys = ("width", "height", "container_crop", "video_codec", "color_range", "pix_fmt")
+    if any(got[k] != info[k] for k in keys):
+        return None, "the copy doesn't read back as the same picture (" + ", ".join(
+            f"{k} {info[k]} became {got[k]}" for k in keys if got[k] != info[k]) + ")"
+    return out, None
+
+
+def verdict(index_run, stars_on, stars_expected, star_pictures, measure_problems, pending):
+    """(result, problems) from what the checks found. index_run: the index dict, None when the index didn't run, or
+    "skipped". FAIL if anything is wrong; a profile whose stars are still to do is never plain PASS."""
+    problems = list(measure_problems)
+    if index_run is None:
+        problems.append("the 3-minute index did not finish, so the profile wasn't tried on moving footage")
+    elif index_run != "skipped":
+        hud = index_run["hud"]
+        if not hud["on"]:
+            problems.append(f"the minimap was found in only {hud['minimap_share']:.0%} of the 3 minutes: the profile's "
+                            "bars don't match this recording")
+        if stars_on and stars_expected and hud["stars_s"] <= 0:
+            problems.append("the scan saw wanted stars in these 3 minutes, but the saved profile finds none there")
+        if stars_on and hud["stars_s"] > 0 and star_pictures == 0:
+            problems.append("the star check page has no pictures, though the index found stars")
+    if problems:
+        return "FAIL", problems
+    if index_run == "skipped":
+        return "SAVED, NOT CHECKED (--skip-index)" + (". STARS NOT CALIBRATED" if "stars" in pending else ""), problems
+    if "stars" in pending:
+        return "PASS for the minimap. STARS NOT CALIBRATED", problems
+    return "PASS", problems
+
+
+def check_profile(name, video, info, window, stars_expected, out_dir, ffmpeg, ffprobe, skip_index=False, log=print,
+                  index_video=None, star_check=None):
+    """Try the saved profile: index CHECK_S of the recording with it (index.py) and build the star check page
+    (star_check.py), in a library of their own under out_dir so the real library is never touched. Returns a dict
+    with the result, the problems and the pages. index_video and star_check are swapped by the tests."""
+    import index
+    prof = clip.load_profile(name)
+    saved = json.loads((clip.PROFILE_DIR / f"{name}.json").read_text(encoding="utf-8"))
+    calib = saved.get("calibration") or {}
+    pending = (calib.get("guided") or {}).get("pending") or []
+    measure_problems = [f"{rule}: saved although some labelled pictures come out wrong" for rule, status
+                        in (calib.get("status") or {}).items() if status == "problem"]
+    out = {"profile": str(clip.PROFILE_DIR / f"{name}.json"), "stars_on": prof.stars_on, "phone_on": prof.phone_on,
+           "pending": pending, "review": None, "star_check": None, "index": None, "star_pictures": 0}
+    index_run = "skipped"
+    if not skip_index:
+        library = Path(out_dir) / "library"
+        start, length = window
+        target, limit = None, None
+        clip_file, why = cut_excerpt(ffmpeg, ffprobe, video, info, start, length, Path(out_dir))
+        if clip_file:
+            target = clip_file
+            log(f"  Checking {clip.hms(start)} to {clip.hms(start + length)} of the recording"
+                + (" (the part where the scan saw wanted stars)." if stars_expected else "."))
+        else:
+            target, limit, stars_expected = Path(video), length, False
+            log(f"  Checking the first {length:.0f} s of the recording ({why}).")
+        try:
+            index_run = (index_video or index.index_video)(target, profile=name, library=library, limit_s=limit,
+                                                           log=lambda m: log("    " + m))
+            out["review"] = str(library / target.stem / "review.html")
+            out["index"] = {"minimap_share": index_run["hud"]["minimap_share"], "hud_on": index_run["hud"]["on"],
+                            "stars_s": index_run["hud"]["stars_s"], "segments": len(index_run["segments"]),
+                            "max_stars": max((s["max_stars"] for s in index_run["segments"]), default=0)}
+        except index.IndexError_ as e:
+            index_run = None
+            log(f"  The index stopped: {e}")
+        if index_run and prof.stars_on and index_run["hud"]["stars_s"] > 0:
+            counts = sorted({s["hud_stars"] for s in index_run["sheets"] if s.get("hud_stars")})
+            out["star_pictures"] = (star_check or run_star_check)(target.stem, counts, library, log)
+            out["star_check"] = str(library / "star_check.html") if out["star_pictures"] else None
+    out["result"], out["problems"] = verdict(index_run, prof.stars_on, stars_expected, out["star_pictures"],
+                                             measure_problems, pending)
+    return out
+
+
+def run_star_check(stem, counts, library, log=print):
+    """star_check.py on one recording of the check library; returns how many pictures its page shows."""
+    here = Path(__file__).resolve().parent
+    done = subprocess.run([sys.executable, str(here / "star_check.py"), stem, "--want",
+                           *[f"{c}:{STAR_CHECK_EACH}" for c in counts], "--library", str(library)],
+                          capture_output=True, text=True, cwd=here)
+    for line in done.stdout.strip().splitlines():
+        log("    " + line)
+    if done.returncode:
+        log("    star_check.py stopped: " + done.stderr.strip()[-300:])
+        return 0
+    found = re.search(r"\((\d+) pictures in", done.stdout)
+    return int(found.group(1)) if found else 0
+
+
+def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=False, log=print, serve=None):
+    """The guided calibration, start to finish. Returns the exit code: 0 PASS (also with stars still to do), 1 FAIL
+    or nothing saved, 2 it could not start."""
+    import index
+    import vlm
+    t0 = time.time()
+    video = Path(video)
+
+    def stop(msg):
+        log("ERROR: " + msg)
+        return 2
+
+    if not cal.NAME_RE.match(name or ""):
+        return stop("the profile name must be 1-40 lowercase letters, digits or _ (it becomes profiles/NAME.json)")
+    if slots is not None and not 1 <= slots <= 10:
+        return stop("--star-slots is the number of wanted-star slots, 1 to 10")
+    if not video.is_file():
+        return stop(f"video not found: {video}")
+    barred = index.off_limits(video)
+    if barred:
+        return stop(f"{video} is in {barred}: held-out footage is never used (the owner's rule)")
+    pending = pending_parts(name)
+    if pending is not None and "stars" not in pending:
+        return stop(f"profiles/{name}.json already exists and its stars are done. calibrate.py never overwrites a "
+                    f"finished profile: pick another name, for example {name}2")
+    if not skip_index:
+        try:
+            vlm.check_ollama(index.MODEL)
+        except vlm.VlmError as e:
+            why = "is not running" if "not reachable" in str(e) else f"does not have the model {index.MODEL}"
+            return stop(f"Ollama {why}. The check at the end needs it. Open the Ollama app (or run: ollama serve), "
+                        "then run the same command again. To calibrate now and check later, add --skip-index.")
+    try:
+        session = cal.Session(name)
+    except cal.CalibError as e:
+        return stop(str(e))
+    guided = session.data.get("guided") or {}
+    resume = pending is None and guided.get("video") == str(video.resolve()) and bool(session.data["frames"])
+    if pending and not session.data["frames"]:
+        return stop(f"profiles/{name}.json is waiting for its stars, but its session folder {session.dir} is gone, so "
+                    "it can't be finished. Calibrate again under another name")
+    info = clip.probe(session.ffprobe, video)
+    try:
+        if resume:
+            log(f"Carrying on with the session from before ({len(session.data['frames'])} pictures; nothing was saved "
+                "last time).")
+        else:
+            log(f"Step 1 of 5. Looking through {video.name} ({clip.hms(info['duration'])}); about half a minute...")
+            frames = scan(session.ffmpeg, video, info)
+            w, h = small_size(info)
+            found = analyse(frames, w, h, cal.shown_size(info),
+                            lambda t, rect: grab_area(session.ffmpeg, video, info, t, rect), slots, log)
+            fr = found["frames"]
+            log(f"  {len(frames)} looks at the recording: HUD on screen in {sum(1 for f in fr if f['hud'])}, "
+                f"black screen in {sum(1 for f in fr if f['black'])}.")
+            log("  Minimap bars: " + (f"found near {full_rect(found['bars']['box'])} ({len(found['bars']['strips'])} "
+                                      "coloured strips)." if found["bars"] else
+                                      "NOT found. You will drag one box round them on the page."))
+            if found["stars"]:
+                fit = found["stars"]["fit"]
+                log(f"  Wanted stars: found, {fit['slots']} slot(s) at {fit['box']}, on screen in "
+                    f"{len(found['stars']['yes'])} of the looks.")
+            else:
+                log("  Wanted stars: none found in this recording.")
+            log("Step 2 of 5. Grabbing the pictures for the page...")
+            picks = choose_frames(found) if not session.data["frames"] else choose_frames(found, shown=3, hidden=1)
+            if pending:
+                session.replace_ok = True
+                session.data.pop("saved", None)
+            guided = fill_session(session, video, found, picks, slots, game, log)
+            guided["check_window"] = list(check_window(found, info["duration"], CHECK_S))
+            guided["stars_in_window"] = bool(found["stars"]) and any(
+                guided["check_window"][0] <= t < sum(guided["check_window"]) for t in found["stars"]["yes"])
+            guided["scan_s"] = round(time.time() - t0, 1)
+            session.save()
+    except cal.CalibError as e:
+        return stop(str(e))
+    if pending:
+        session.replace_ok = True
+    log("Step 3 of 5. YOUR TURN. A page opens in your browser. The blue box at its top lists what to check.")
+    log("  When you press Save there, come back here: the checks start by themselves.")
+    t_page = time.time()
+    if not (serve or cal.serve)(session, port, browser, guided=True):
+        log("Nothing was saved. Run the same command again to carry on where you stopped.")
+        return 1
+    t_saved = time.time()
+    log("Step 4 of 5. Trying the new profile on 3 minutes of the recording"
+        + (" (skipped: --skip-index)." if skip_index else f" (index.py with {index.MODEL}; about 2 minutes)..."))
+    window = guided.get("check_window") or [0.0, min(CHECK_S, info["duration"])]
+    result = check_profile(name, video, info, window, bool(guided.get("stars_in_window")), session.dir / "check",
+                           session.ffmpeg, session.ffprobe, skip_index, log)
+    t_done = time.time()
+    result["minutes"] = {"scan": round(guided.get("scan_s", 0) / 60, 1), "page": round((t_saved - t_page) / 60, 1),
+                         "checks": round((t_done - t_saved) / 60, 1),
+                         "start_to_save": round((guided.get("scan_s", 0) + t_saved - t_page) / 60, 1),
+                         "total": round((guided.get("scan_s", 0) + t_done - t_page) / 60, 1)}
+    (session.dir / "guided_result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
+    log("Step 5 of 5. Result.")
+    for line in result_lines(name, video, result):
+        log(line)
+    return 1 if result["result"] == "FAIL" else 0
+
+
+def result_lines(name, video, r):
+    """The last thing the guided command prints: the result, what to look at, and how long it took."""
+    idx, m = r["index"], r["minutes"]
+    lines = ["", f"RESULT: {r['result']}"]
+    lines += [f"  Problem: {p}" for p in r["problems"]]
+    lines.append(f"  Profile:      {r['profile']}")
+    if idx:
+        lines.append(f"  Minimap:      found in {idx['minimap_share']:.0%} of the 3 minutes checked")
+    if "stars" in r["pending"]:
+        lines.append("  Wanted stars: NOT CALIBRATED. This recording showed none. Record a clip where you get wanted "
+                     "stars, then run:")
+        lines.append(f"                  .\\.venv\\Scripts\\python.exe calibrate.py --guided --profile {name} "
+                     "--video \"<that clip>\" --star-slots 6")
+    elif r["stars_on"]:
+        lines.append("  Wanted stars: calibrated" + (f"; showing for {idx['stars_s']:.0f} s of the 3 minutes, up to "
+                                                      f"{idx['max_stars']} star(s) counted" if idx else ""))
+    else:
+        lines.append("  Wanted stars: switched off by you")
+    lines.append("  Phone calls:  " + ("calibrated" if r["phone_on"] else "not calibrated yet (skipped; phone calls "
+                                                                           "won't be cut out)"))
+    if r["review"]:
+        lines.append(f"  Look at:      {r['review']}")
+        lines.append("                  (one row per segment: red rows are cutscenes or menus; do the labels and stars fit?)")
+    if r["star_check"]:
+        lines.append(f"                {r['star_check']}")
+        lines.append(f"                  ({r['star_pictures']} pictures: is the star count under each one right?)")
+    lines.append(f"  Time:         {m['start_to_save']} min from the command to Save (scan {m['scan']}, your part "
+                 f"{m['page']}), checks {m['checks']}; {m['total']} min in all")
+    return lines
