@@ -14,6 +14,7 @@ Usage:  python footagetest.py
 
 import json
 import random
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -22,6 +23,8 @@ import calibrate as cal
 import calibrate_guided as guided
 import calibtest
 import clip
+import index
+import library
 
 HERE = Path(__file__).resolve().parent
 CHECKS = []
@@ -355,6 +358,183 @@ def a_finished_profile_is_never_written_again_by_hand_either():
         finally:
             cal.CALIB_ROOT, clip.PROFILE_DIR = old
     return switch_off and refused and same
+
+
+# --- Library search: denied words, structured filters first, star rises ---
+
+def seg(start, end, activity="driving", stars=0, notable=(), never=None, vehicle="car", police=False):
+    return {"start_s": start, "end_s": end, "duration_s": end - start, "activity": activity,
+            "never_use": activity in index.NEVER_USE if never is None else never, "max_stars": stars,
+            "stars_s": float(end - start) if stars else 0.0, "vehicle": vehicle, "police_visible": police,
+            "notable": [{"t": start, "text": t} for t in notable], "confidence": 0.9}
+
+
+def made_up_index(stem, segments, duration=None, timeline=None):
+    idx = {"video": {"stem": stem, "path": f"C:\\made_up\\{stem}.webm", "duration_s": duration or segments[-1]["end_s"]},
+           "profile": {"name": "gta5"}, "settings": {"every_s": 6.0}, "segments": segments, "sheets": []}
+    if timeline:
+        idx["_timeline"] = timeline
+    return idx
+
+
+def made_up_timeline(counts, no_minimap=(), phone=()):
+    """A HUD timeline from one star count per half second; no_minimap and phone are (first step, end step) ranges."""
+    n = len(counts)
+    flags = lambda ranges: [any(a <= i < b for a, b in ranges) for i in range(n)]
+    gone, ph = flags(no_minimap), flags(phone)
+    return {"on": True, "n": n, "minimap_share": 1.0, "stars": [c > 0 for c in counts], "count": list(counts),
+            "phone": ph, "no_minimap": gone,
+            "samples": [(i * clip.BUCKET, 0.6 if c else 0.0, not gone[i], ph[i], c) for i, c in enumerate(counts)]}
+
+
+@check
+def a_denied_word_is_not_a_match():
+    """positive_text blanks what a line denies: the library's own lines 'no crashes or police', 'no vehicle or
+    police', 'with no incident', 'no police visible' and 'without a crash' hold none of those words any more; "isn't
+    chased" loses 'chased'; a comma doesn't end it ('no police, crashes or fire'); 'but' and a full stop do ('no
+    police but a crash', 'No police. A car crashes.'); a line with no denial is unchanged apart from its case"""
+    kept = library.positive_text
+    gone = lambda line, *words: all(w not in kept(line) for w in words)
+    return (gone("Player drives black car through city streets, no crashes or police.", "crash", "police")
+            and "drives black car" in kept("Player drives black car through city streets, no crashes or police.")
+            and gone("Man on phone, angry, in tropical setting, no vehicle or police", "vehicle", "police")
+            and "phone" in kept("Man on phone, angry, in tropical setting, no vehicle or police")
+            and gone("White truck drives through suburban streets with no incident.", "incident")
+            and gone("Player drives truck near river under bridge, no police visible", "police")
+            and gone("Player drives off without a crash", "crash")
+            and gone("The player isn't chased by police", "chased", "police")
+            and gone("no police, crashes or fire", "police", "crash", "fire")
+            and "crash" in kept("no police but a crash") and "police" not in kept("no police but a crash")
+            and "crashes" in kept("No police. A car crashes.") and "police" not in kept("No police. A car crashes.")
+            and kept("Police car CRASHES into wall") == "police car crashes into wall"
+            and len(kept("no crashes or police")) == len("no crashes or police"))
+
+
+@check
+def text_search_skips_denied_lines_and_says_so():
+    """a text search for 'police' or 'crash' finds the segment whose line says it and not the one whose line denies
+    it; the row counts the denying lines it passed over (text_denied); a segment with one line of each kind is found
+    by its saying line only"""
+    idx = made_up_index("a", [
+        seg(0, 12, notable=["Player drives black car through city streets, no crashes or police."]),
+        seg(12, 24, notable=["Black car crashes into police car."]),
+        seg(24, 36, notable=["Calm drive, no police visible", "Police car follows the player"])])
+    rows = library.find([idx], text=["police", "crash"])
+    return ([r["segment"] for r in rows] == [2, 3] and rows[0]["text_denied"] == 0
+            and [n["text"] for n in rows[1]["text_hits"]] == ["Police car follows the player"]
+            and rows[1]["text_denied"] == 1
+            and library.find([idx], text=["incident"]) == [])
+
+
+@check
+def structured_filters_run_before_the_text_search():
+    """the text search reads only the segments the other filters leave: with activity, stars, length and never_use
+    filters on, the lines of the segments those reject are never read (counted), and the answer is the same as
+    filtering afterwards"""
+    idx = made_up_index("a", [
+        seg(0, 12, "driving", notable=["a crash"]), seg(12, 14, "chase", 2, notable=["a crash"]),
+        seg(14, 30, "chase", 2, notable=["a crash"]), seg(30, 50, "cutscene", notable=["a crash"]),
+        seg(50, 70, "chase", 1, notable=["a crash"]), seg(70, 90, "chase", 3, notable=["quiet road"])])
+    read, real = [], library.segment_lines
+    library.segment_lines = lambda i, s: read.append(s["start_s"]) or real(i, s)
+    try:
+        rows = library.find([idx], activity=["chase"], min_stars=2, min_len=6, text=["crash"])
+    finally:
+        library.segment_lines = real
+    return [r["segment"] for r in rows] == [3] and read == [14, 70]
+
+
+@check
+def a_star_change_needs_a_steady_count_on_both_sides():
+    """star_changes: 0,0,0,1,1,1 is one rise at the fourth step; a count that flickers for one half second (2,3,2)
+    is no change; a rise straight after another unsteady step is skipped; falls are listed too, as falls"""
+    c = library.star_changes
+    return (c([0, 0, 0, 1, 1, 1]) == [(3, 0, 1)]
+            and c([2, 2, 2, 3, 2, 2, 2]) == []
+            and c([1, 1, 2, 2, 3, 3, 3]) == [(2, 1, 2), (4, 2, 3)]
+            and c([0, 1, 0, 1, 0, 1, 1, 1]) == []
+            and c([3, 3, 3, 0, 0, 0]) == [(3, 3, 0)]
+            and c([]) == [] and c([1]) == [])
+
+
+@check
+def a_star_rise_window_starts_2_s_before_and_is_confirmed_at_both_ends():
+    """rise_windows on a made-up recording: the rise from 1 to 3 stars at 20 s gives the window 18-22 s (2 s before,
+    2 s after), with the HUD read 1 star at its start and 3 at its end, and it may span two segments (driving into
+    chase); with after_s 5 the window ends 5 s after the change; a rise whose higher count drops again inside the
+    window, one next to a cutscene, one where the minimap is gone and one at the very start of the recording are
+    all left out; a fall is never a row"""
+    counts = [0] * 20 + [1] * 20 + [3] * 30 + [0] * 10 + [2] * 3 + [0] * 17 + [1] * 20 + [0] * 10 + [2] * 20 + [0] * 10
+    segs = [seg(0, 20, "driving"), seg(20, 35, "chase", 3), seg(35, 50, "on_foot"), seg(50, 58, "cutscene"),
+            seg(58, 80, "on_foot", 2)]
+    tl = made_up_timeline(counts, no_minimap=[(126, 132)])
+    idx = made_up_index("a", segs, duration=80.0, timeline=tl)
+    rows = library.rise_windows(idx, tl)
+    longer = library.rise_windows(idx, tl, after_s=5.0)
+    early = made_up_timeline([0] * 2 + [1] * 30)
+    by_change = {r["change_s"]: r for r in rows}
+    r = by_change.get(20.0)
+    return (sorted(by_change) == [10.0, 20.0] and r is not None
+            and (r["start_s"], r["end_s"], r["stars_before"], r["stars_after"]) == (18.0, 22.0, 1, 3)
+            and r["hud_start"]["stars"] == 1 and r["hud_end"]["stars"] == 3 and r["segments"] == [1, 2]
+            and r["holds_s"] == 15.0
+            and [x["end_s"] for x in longer if x["change_s"] == 20.0] == [25.0]
+            and library.rise_windows(made_up_index("b", [seg(0, 16)], timeline=early), early) == [])
+
+
+@check
+def stars_rise_is_a_query_like_any_other():
+    """find(stars_rise=True) returns the rise windows with the video, its path and the segment's activity; min_stars
+    and max_stars mean the count after the rise; activity and video filter as usual; a shot-list query may ask for
+    it; a recording without saved HUD samples gives a plain error instead of an empty answer"""
+    counts = [0] * 20 + [1] * 20 + [3] * 40
+    tl = made_up_timeline(counts)
+    idx = made_up_index("a", [seg(0, 20, "driving"), seg(20, 40, "chase", 3)], duration=40.0, timeline=tl)
+    rows = library.find([idx], stars_rise=True)
+    high = library.find([idx], stars_rise=True, min_stars=2)
+    bare = made_up_index("c", [seg(0, 20)])
+    try:
+        library.find([bare], stars_rise=True)
+        plain_error = False
+    except library.LibraryError as e:
+        plain_error = "hud.json" in str(e)
+    return ([(r["stars_before"], r["stars_after"], r["activity"], r["video"]) for r in rows]
+            == [(0, 1, "driving", "a"), (1, 3, "chase", "a")]
+            and [r["stars_after"] for r in high] == [3]
+            and library.find([idx], stars_rise=True, max_stars=1)[0]["stars_after"] == 1
+            and library.find([idx], stars_rise=True, activity=["on_foot"]) == []
+            and library.find([idx], stars_rise=True, video=["other"]) == []
+            and library.check_query({"stars_rise": True, "min_stars": 2})["after_s"] == 2.0
+            and plain_error)
+
+
+@check
+def the_command_line_prints_star_rises_as_json():
+    """library.py find --stars-rise --json on a library folder made here (index.json, hud.json with made-up HUD
+    samples, library.json): one rise, as JSON another tool can read, with the window and the HUD read at both ends;
+    the plain find --json rows carry text_denied"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib = Path(tmp)
+        counts = [0] * 20 + [2] * 40
+        tl = made_up_timeline(counts)
+        idx = made_up_index("rec", [seg(0, 10, "driving", notable=["Calm drive, no police"]),
+                                    seg(10, 30, "chase", 2, notable=["Police chase the car"])], duration=30.0)
+        idx.update(indexed="2026-11-14T00:00:00", model={"name": "made-up"})
+        (lib / "rec").mkdir()
+        (lib / "rec" / "index.json").write_text(json.dumps(idx), encoding="utf-8")
+        (lib / "rec" / "hud.json").write_text(json.dumps({"fields": {}, "frame_times": [], "samples": tl["samples"]}),
+                                              encoding="utf-8")
+        (lib / "library.json").write_text(json.dumps({"version": 1, "videos": {"rec": {"index": "rec/index.json"}}}),
+                                          encoding="utf-8")
+        run = lambda *args: subprocess.run([sys.executable, str(HERE / "library.py"), "--library", str(lib), "find",
+                                            *args, "--json"], capture_output=True, text=True, cwd=HERE)
+        rises, plain = run("--stars-rise"), run("--text", "police")
+        if rises.returncode or plain.returncode:
+            return False
+        r, rows = json.loads(rises.stdout), json.loads(plain.stdout)
+    return (len(r) == 1 and (r[0]["start_s"], r[0]["end_s"], r[0]["stars_before"], r[0]["stars_after"])
+            == (8.0, 12.0, 0, 2) and r[0]["hud_start"]["stars"] == 0 and r[0]["hud_end"]["stars"] == 2
+            and r[0]["video"] == "rec" and [x["segment"] for x in rows] == [2] and rows[0]["text_denied"] == 0)
 
 
 def main():
