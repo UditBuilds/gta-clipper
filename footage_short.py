@@ -144,7 +144,10 @@ def place(idx, cand, seconds, lead=0.0, tail=None, taken=()):
         start = round((cand["change_s"] - before) / GRID_S) * GRID_S
         end = start + seconds
         others = [c for c in changes if abs(c - cand["change_s"]) > 1e-6]
-        if (ok(start) and end <= cand["change_s"] + cand["holds_s"] + 1e-6 and cand["change_s"] + EDGE_S <= end + 1e-6
+        # The beat ends EDGE_S after the change, or half a beat after it when the beat is shorter than that allows.
+        after = min(EDGE_S, GRID_S * (seconds // (2 * GRID_S)) or GRID_S)
+        if (ok(start) and end <= cand["change_s"] + cand["holds_s"] + 1e-6 and cand["change_s"] + after <= end + 1e-6
+                and start < cand["change_s"]
                 and all(abs(c - start) >= EDGE_S and abs(c - end) >= EDGE_S for c in others)):
             return start
         return None
