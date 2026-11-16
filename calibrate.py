@@ -77,6 +77,8 @@ BAR_ROW_SHARE = 0.5      # bar rows: at least half as many bar pixels as the ful
 BAR_COL_SHARE = 0.6      # a column is part of a bar when 60 % of the bar rows are bar pixels there
 BAR_MIN_W = 6            # narrower coloured runs are not bars
 BAR_HUE_SPLIT = 30.0     # a hue change of more than this (degrees) between neighbouring columns starts a new bar
+BAR_PIECE_W = 20         # a run narrower than this (px), at most BAR_JOIN_GAP from a run of the same hue, is a piece of
+BAR_JOIN_GAP = 12        # ...that bar, cut off by a map icon: they are joined (GTA V's narrowest bar is about 50 px)
 BAR_MAX_AREA = 160_000   # a bigger rough box is refused (slow, and it picks up more than the bars)
 # Finding the stars inside the drawn star box (fit_stars). Judgement values, not measured on any game; calibtest.py
 # checks them on made-up star rows (sizes, shapes, slot counts, lit and unlit slots, text on the "no" pictures).
@@ -484,13 +486,28 @@ def find_strips(images, w, h):
                                                     360 - abs(hue(cols[x]) - hue(cols[x - 1]))) <= BAR_HUE_SPLIT:
             x += 1
         if x - x0 >= BAR_MIN_W:
-            trim = 2 if x - x0 >= 12 else 1
-            bars.append([x0 + trim, x - trim])
+            bars.append([x0, x])
+    # A map icon over a part-empty bar on one or two frames can cut that bar in pieces: a narrow run right next to a
+    # run of the same hue is a piece of it, so they are one bar again (two real bars of one colour are each wider).
+    joined = []
+    for a, b in bars:
+        if joined:
+            pa, pb = joined[-1]
+            mean = lambda r0, r1: tuple(sum(cols[i][k] for i in range(r0, r1) if cols[i])
+                                        / sum(1 for i in range(r0, r1) if cols[i]) for k in range(3))
+            turn = abs(hue(mean(pa, pb)) - hue(mean(a, b)))
+            if (a - pb <= BAR_JOIN_GAP and min(turn, 360 - turn) <= BAR_HUE_SPLIT
+                    and min(b - a, pb - pa) < BAR_PIECE_W):
+                joined[-1] = [pa, b]
+                continue
+        joined.append([a, b])
+    bars = [[a + (2 if b - a >= 12 else 1), b - (2 if b - a >= 12 else 1)] for a, b in joined]
     if len(bars) < 2:
         raise CalibError(f"found {'only one coloured bar' if bars else 'no coloured bars'} in that box; the tool needs "
                          "at least 2 (for example health and armour). Draw the box round all the bars under the "
                          "minimap, with a little space round them")
-    colours = [tuple(round(sum(cols[x][k] for x in range(a, b)) / (b - a), 1) for k in range(3)) for a, b in bars]
+    colours = [tuple(round(sum(cols[x][k] for x in range(a, b) if cols[x]) / sum(1 for x in range(a, b) if cols[x]), 1)
+                     for k in range(3)) for a, b in bars]
     return {"rows": [y0, y1], "bars": bars, "colours": colours, "names": [hue_name(c) for c in colours]}
 
 

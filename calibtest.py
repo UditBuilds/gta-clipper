@@ -381,6 +381,46 @@ def no_bars_or_one_bar_is_refused():
             and "only one coloured bar" in refused_with(cal.find_strips, single, w, h))
 
 
+def bar_row_frames(bars, n=12, drain=None, icon=None, seed=11, w=200, h=16):
+    """n frames (RGB bytes, w x h) of coloured bars [(x0, x1, rgb)] on rows 6-10 over a random blocky scene.
+    drain (x0, x1): those columns of the bars are a dark, nearly grey empty part on the first half of the frames.
+    icon (x0, x1): a black map icon over rows 4-12 there on frame n // 2 (one of the frames with the bar full)."""
+    rng = random.Random(seed)
+    out = []
+    for f in range(n):
+        px = bytearray(w * h * 3)
+        blocks = {}
+        for yy in range(h):
+            for xx in range(w):
+                key = (xx // 8, yy // 8)
+                if key not in blocks:
+                    blocks[key] = hsv(rng.uniform(0, 360), rng.uniform(0, 0.8), rng.uniform(0.1, 1.0))
+                c = blocks[key]
+                for x0, x1, rgb in bars:
+                    if x0 <= xx < x1 and 6 <= yy < 10:
+                        c = (55, 68, 55) if drain and drain[0] <= xx < drain[1] and f < n // 2 else rgb
+                if icon and f == n // 2 and icon[0] <= xx < icon[1] and 4 <= yy < 12:
+                    c = (10, 10, 10)
+                px[(yy * w + xx) * 3:(yy * w + xx) * 3 + 3] = bytes(c)
+        out.append(bytes(px))
+    return out
+
+
+@check
+def a_part_empty_bar_under_a_map_icon_stays_one_bar():
+    """a bar empty on its right part on half the frames, with a map icon over that part on one more frame, was cut
+    in two (a guided run on real footage found 5 bars where there are 3, and missed the minimap on 6 % of the
+    picture); the narrow piece is now joined back: 2 bars, the first one whole. Two separate bars of one colour,
+    each wider than a piece, stay two"""
+    green, blue = (60, 190, 70), (60, 130, 200)
+    cut = cal.find_strips(bar_row_frames([(10, 140, green), (146, 190, blue)], drain=(70, 140), icon=(122, 130)),
+                          200, 16)
+    twins = cal.find_strips(bar_row_frames([(10, 60, green), (66, 120, green), (126, 180, blue)]), 200, 16)
+    return (len(cut["bars"]) == 2 and cut["bars"][0][0] <= 12 and cut["bars"][0][1] >= 136
+            and cut["names"][0] == "green"
+            and len(twins["bars"]) == 3 and twins["bars"][0][1] <= 60 and twins["bars"][1][0] >= 66)
+
+
 @check
 def hud_guess_from_the_found_bars():
     """the tool's guess is 'shown' on frames with the invented HUD and 'hidden' on frames without it"""
