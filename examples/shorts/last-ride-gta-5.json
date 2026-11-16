@@ -1,0 +1,218 @@
+{
+  "topic": "last ride in GTA 5 (posting Wed Nov 18, 7 PM IST, the day before GTA 6)",
+  "topic_score": {
+    "score": 4,
+    "why": "Almost every GTA player is saying goodbye to GTA 5 this week; it is a feeling, not a fact people need."
+  },
+  "title": "My LAST ride in GTA 5 before GTA 6",
+  "description": "One last drive, one last police chase and one last crash in Los Santos, all from my own GTA 5 gameplay. PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+  "hashtags": [
+    "#GTA5",
+    "#GTA6",
+    "#LastRide",
+    "#Shorts"
+  ],
+  "voice": "am_puck",
+  "speed": 1.0,
+  "music": "auto",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "footage": {
+    "game_audio": true,
+    "profile": "gta5"
+  },
+  "lines": [
+    {
+      "say": "After 13 years, this is my last ride in GTA 5.",
+      "facts": [
+        "thirteen-year-wait"
+      ],
+      "beats": [
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "driving"
+            ],
+            "max_stars": 0,
+            "min_len": 12,
+            "vehicle": [
+              "sports car",
+              "convertible",
+              "coupe"
+            ]
+          }
+        },
+        {
+          "beat": "count",
+          "card": "13 YEARS"
+        }
+      ],
+      "green": [
+        "LAST RIDE"
+      ],
+      "red": []
+    },
+    {
+      "say": "One more drive through Los Santos, past the palm trees and the skyline.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "driving"
+            ],
+            "max_stars": 0,
+            "min_len": 12,
+            "video": [
+              "test2"
+            ],
+            "text": [
+              "city",
+              "street"
+            ]
+          }
+        },
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "driving"
+            ],
+            "max_stars": 0,
+            "min_len": 12,
+            "video": [
+              "test2"
+            ],
+            "text": [
+              "skyline",
+              "highway"
+            ]
+          }
+        }
+      ],
+      "green": [],
+      "red": []
+    },
+    {
+      "say": "And then, like always, the stars show up.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "card",
+          "card_aspect": "16:9",
+          "shot": {
+            "stars_rise": true,
+            "video": [
+              "test1"
+            ],
+            "max_stars": 1
+          }
+        }
+      ],
+      "green": [],
+      "red": [
+        "STARS"
+      ]
+    },
+    {
+      "say": "One last run from the cops. One last crash.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "chase"
+            ],
+            "min_stars": 3,
+            "police": true,
+            "stars_rise": false
+          }
+        },
+        {
+          "beat": "full",
+          "file": "C:/AI/gta/input/test1.webm",
+          "at": "223.1",
+          "sound": true
+        }
+      ],
+      "green": [],
+      "red": [
+        "CRASH"
+      ]
+    },
+    {
+      "say": "I'm going to miss this city.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "on_foot"
+            ],
+            "max_stars": 0,
+            "min_len": 12,
+            "video": [
+              "test1"
+            ],
+            "text": [
+              "beach"
+            ]
+          }
+        }
+      ],
+      "green": [],
+      "red": []
+    },
+    {
+      "say": "PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+      "facts": [
+        "unlock-time"
+      ],
+      "beats": [
+        {
+          "beat": "full",
+          "query": "city skyline",
+          "region": "Vice City",
+          "label": {
+            "text": "GTA 6",
+            "style": "info"
+          }
+        },
+        {
+          "beat": "card",
+          "card": "MIDNIGHT LOCAL"
+        },
+        {
+          "beat": "count",
+          "card": "19 NOV"
+        }
+      ],
+      "green": [
+        "MIDNIGHT"
+      ],
+      "red": []
+    },
+    {
+      "say": "So this is goodbye, Los Santos.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "full",
+          "shot": {
+            "activity": [
+              "driving"
+            ],
+            "max_stars": 0,
+            "min_len": 30
+          }
+        }
+      ],
+      "green": [],
+      "red": []
+    }
+  ]
+}

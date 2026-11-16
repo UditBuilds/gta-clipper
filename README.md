@@ -469,7 +469,8 @@ now, `gta6` once calibrated).
 .\.venv\Scripts\python.exe index.py --all C:\AI\gta\input                       # every recording in a folder
 .\.venv\Scripts\python.exe library.py find --activity chase --min-stars 2 --min-len 6
 .\.venv\Scripts\python.exe library.py shotlist                                  # shot-list coverage table
-.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only).\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
+.\.venv\Scripts\python.exe indexeval.py test1                                   # measure an index (dev videos only)
+.\.venv\Scripts\python.exe indextest.py                                         # the tests (no Ollama, no footage)
 ```
 
 `index.py` writes `C:\AI\gta\library\<video>\index.json` and `review.html` (one row per segment, never-use rows in
@@ -556,9 +557,76 @@ holds only shots, no claims about GTA 6, and every topic is marked `verify after
   my key calls action, so the best 15 s of that moment are never_use), the character-switch flash at 4:48, and a
   cinematic cut inside test1's yacht chase (11:10-11:15). The rest are a few seconds at the edges of cutscenes.
 - A text search (`--text crash`) reads every sheet's line and gives the time of each match. The model sometimes
-  writes what is missing ("no crashes or police"), and that matches too.
+  writes what is missing ("no crashes or police"); since PR 23 a line that denies the word is skipped, and the row
+  says how many it passed over.
 - **A chase with no wanted stars is not found as a chase.** test1's yacht chase and test2's gang chase came out as
   `driving` (91 % and 95 %). The chase label comes almost entirely from the HUD rule (vehicle + stars); the model said
   chase on 2 of 364 sheets.
 - A stretch with no minimap is called `cutscene` unless the model says menu or loading, so a short pause map can be
   listed as cutscene. It is never_use either way.
+
+## Footage Shorts (Mode B) and guided calibration
+
+Made for GTA 6 launch night (PR 23). A **footage Short** is a 20-35 s Short built from my own gameplay, picked from
+the footage library, with the same voice, captions, cards and music as the explainer Shorts. Rockstar's pictures
+are only the fallback, and the GTA 6 lines still have to come from `facts.json`.
+
+```powershell
+.\.venv\Scripts\python.exe library.py find --stars-rise                          # every moment the wanted stars go up
+.\.venv-tts\Scripts\python.exe footage_short.py C:\AI\gta\shorts\_drafts\<slug>.json --check   # check + pick, no render
+.\.venv-tts\Scripts\python.exe footage_short.py C:\AI\gta\shorts\_drafts\<slug>.json           # render
+.\.venv-tts\Scripts\python.exe footagetest.py                                    # the tests (no Ollama, no footage)
+```
+
+Or type `/footage-short <topic>` in Claude Code: it writes the script, checks it, renders and reports.
+
+**The script** is a `make_short.py` script where a beat can ask for footage with `"shot"`: a `library.py` query
+(`{"activity": ["chase"], "min_stars": 2}`, `{"stars_rise": true}`) or a shot-list id (`"police-chase/long-chase"`).
+`"beat": "full"` fills the screen with the middle of the gameplay; `"beat": "card"` floats it as a framed card so the
+minimap and stars stay in view. `"footage": {"profile": "gta5"}` keeps a GTA 5 Short to GTA 5 footage (and a GTA 6
+one to `gta6`). To show an exact moment, a beat can name the recording itself: `{"beat": "full", "file":
+"C:/AI/gta/input/test1.webm", "at": "223.1", "sound": true}`; that one is not checked against the index, so look at it.
+
+**How footage is picked.** The voice is made once to learn each beat's length. Each shot beat takes the best piece
+that this Short (and the last 5 Shorts) haven't shown: more action first, a star rise for a beat about stars. It is
+cut on half seconds, never into a cutscene, menu, map, phone call or loading screen, and at least 1 s from a star
+change at either end (a star-rise beat holds its own change, at least 0.5 s from each end in a beat under 2 s). The
+footage behind a text card and the loop ending's lead-in must be clean too. After the render, every stretch that got
+on screen is checked against the index again. The Short is READY at 20-39 s with all of it clean.
+
+`<shorts>\<date>-<slug>\` gets `short.mp4`, `upload.txt`, `claims.txt`, `pacing.txt`, `picks.json` and `picks.html`
+(one card per beat: a thumbnail, what the voice says over it, where it comes from and why, and "play this part").
+
+**What the tool can't see, so check `picks.html` yourself:**
+- burned-in game subtitles (mission dialogue can swear) and tutorial pop-ups. A full beat crops the corners away, a
+  card beat keeps them;
+- the car radio. Nothing measures music: the first footage Short (Nov 18, "My LAST ride in GTA 5") was checked with
+  spectrograms, not by ear. If a beat might have radio, set `"game_audio": false`;
+- whether a moment looks good. A crash beat is aimed at the middle of the index's 6 s window, which can miss the hit:
+  pin it with `file` + `at`.
+
+### Guided calibration (launch night)
+
+One command makes a HUD profile for a game with no profile yet:
+
+```powershell
+.\.venv\Scripts\python.exe calibrate.py --guided --profile gta6 --video "C:\AI\gta\input\<first GTA 6 recording>.webm" --star-slots 6
+```
+
+1. It looks at about 120 frames of the recording (about 50 s for 8 minutes) and finds, with no GTA layout assumed,
+   the coloured bars by the minimap and the wanted-star row.
+2. A page opens with about a dozen pictures and the tool's guess for each (HUD shown or hidden, stars yes or no).
+   Fix any wrong guess, check the bars and the star outline, press Save.
+3. It tries the saved profile on 3 minutes of the recording with `index.py` (Ollama must be running; `--skip-index`
+   leaves this for later) and prints PASS or FAIL, the pages to look at, and the next command when something is
+   still to do. A recording with no wanted stars saves the minimap part and says STARS NOT CALIBRATED; run the same
+   command on a clip with stars later. A finished profile is never overwritten.
+
+**Tried on GTA V (PR 23)**, with a script standing in for me that accepted every guess, on `Grand Theft Auto
+V_20261026160754` (8:05): 3 bars and a 5-slot star row, close to `gta5.json` (first star tip x 1695.9 vs 1696.5,
+spacing 28.9 vs 28.6). That profile, on test1 and test2 (not used to make it), agrees with `gta5.json` on the minimap
+in all but 20 of 1,850 and 3 of 2,500 half-seconds (the 20 are a close-up where `gta5.json` is the one that is wrong)
+and on the stars in all but 3 and 0. The first try found 5 bars: a map icon over a half-empty health bar had cut it
+in pieces, and the minimap was missed in 6 % of test1. Fixed in `calibrate.find_strips`. The phone is skipped in
+guided mode, so phone calls are not cut out until it is calibrated by hand. The browser page itself and the Ollama
+check at the end were not run on real footage here.
