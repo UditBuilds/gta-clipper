@@ -1,4 +1,4 @@
-"""The automatic half of `calibrate.py --guided` (PR 22, session 2): look through a recording without a profile and
+"""The automatic half of `calibrate.py --guided` (PR 23): look through a recording without a profile and
 find what the calibration page needs, so the owner only confirms or fixes it.
 
   scan()         about 120 small frames spread over the recording, each grabbed by seeking (so an hour of video costs

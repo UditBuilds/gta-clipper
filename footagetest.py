@@ -1,4 +1,4 @@
-"""Checks for PR 22, session 2: the guided calibration (calibrate.py --guided, calibrate_guided.py), the library
+"""Checks for PR 23 (the S2 work): the guided calibration (calibrate.py --guided, calibrate_guided.py), the library
 search fixes (library.py) and Shorts built from the owner's own footage (footage_short.py).
 
 No Ollama, no Kokoro voice and none of the owner's footage are used: the HUDs, the recordings, the model's answers
@@ -603,6 +603,24 @@ def a_star_rise_beat_keeps_the_change_inside_it():
             and place(alpha, rises[60.0], 4.0) == 58.0 and place(alpha, rises[60.0], 2.0) == 59.0
             and place(alpha, rises[50.0], 4.0) == 48.0
             and place(alpha, near_cutscene, 4.0) is None)
+
+
+@check
+def a_short_star_rise_beat_still_gets_its_rise():
+    """a star-rise beat under 2 s (the voice makes beats of any length) still shows its rise: every length from 1.0
+    to 1.9 s is placed, the change at least half a second after the start and before the end (1.0-1.6 s: 59.5 for
+    the rise at 60 s; 1.7-1.9 s: 59.0, which a full second after the change would have refused); a beat under 1 s
+    gets no rise, and the 2 s and longer beats keep a second on each side"""
+    lib = made_up_library()
+    alpha = lib[0]
+    rise = {r["change_s"]: r for r in library.find(lib, stars_rise=True, video=["alpha"])}[60.0]
+    place = footage_short.place
+    got = {k / 10: place(alpha, rise, k / 10) for k in range(5, 31)}
+    return (all(got[s] is None for s in (0.5, 0.6, 0.7, 0.8, 0.9))
+            and all(got[k / 10] == 59.5 for k in range(10, 17))
+            and all(got[k / 10] == 59.0 for k in range(17, 26))
+            and all(60.0 - got[s] >= 0.5 and got[s] + s - 60.0 >= 0.5 - 1e-9 for s in got if got[s] is not None)
+            and all(60.0 - got[s] >= 1.0 and got[s] + s - 60.0 >= 1.0 - 1e-9 for s in got if s >= 2.0))
 
 
 @check

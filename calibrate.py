@@ -31,7 +31,7 @@ Usage:  python calibrate.py <name> [--add <video> <time> [<time> ...]] ... [--po
         python calibrate.py gta6          (carry on with the frames already added)
 Times are m:ss, h:mm:ss or seconds.
 
-Guided mode (PR 22), one command for launch night:
+Guided mode (PR 23), one command for launch night:
 
         python calibrate.py --guided --profile gta6 --video C:\\AI\\gta\\input\\gta6_day1.webm --star-slots 6
 

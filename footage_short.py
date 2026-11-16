@@ -1,4 +1,4 @@
-"""Mode B (PR 22, session 2): turn one script into a finished vertical Short built from the owner's OWN gameplay
+"""Mode B (PR 23): turn one script into a finished vertical Short built from the owner's OWN gameplay
 footage, picked from the footage library (index.py, library.py). Rockstar's pictures are only the fallback.
 
   .venv-tts\\Scripts\\python.exe footage_short.py script.json            check, pick footage, render, write the files
@@ -25,7 +25,9 @@ What it does, in order, stopping at the first step that finds a problem:
      more action (a chase or a shootout before a calm drive, more wanted stars, police in view), a star rise for a
      beat that asks for wanted stars, and a recording this Short hasn't used yet. The piece is then cut to the
      beat's exact length on clean edges (place): never into a never_use part (cutscene, menu or map, phone, loading),
-     never within a second of a star change at either end, and with enough clean footage after it for a text card
+     never within a second of a star change at either end (a star-rise beat holds its own change inside it: at least
+     a second either side of it from 2 s up, half a second in a shorter beat), and with enough clean footage after it
+     for a text card
      blurred over it and, for the first beat, before it for the loop ending;
   4. a beat that finds no footage falls back to a Rockstar picture (picker.py) and says so in picks.json;
   5. renders with explainer.py (captions, am_puck, music bed, sound effects as in every explainer Short), then reads
@@ -129,7 +131,9 @@ def place(idx, cand, seconds, lead=0.0, tail=None, taken=()):
       - a segment: the beat stays inside the segment, its two ends at least EDGE_S from any star change, as close as
         it gets to the moment the query's words were seen (else the segment's middle);
       - a star rise: the beat starts RISE_LEAD_S before the change (never later than RISE_LEAD_SHARE into the beat),
-        and the higher count holds to the beat's end.
+        and the higher count holds to the beat's end. The change is inside the beat and at least EDGE_S before its
+        end; a beat under 2 s can't hold that, so there it is half the beat (rounded down to GRID_S, at least GRID_S).
+        A beat under 1 s gets no star rise. Any other star change stays EDGE_S from both ends.
     Either way everything shown (lead, beat, tail) is clean footage, and not footage another beat already shows."""
     tail = max(seconds, tail or 0.0)
     video = idx["video"]["stem"]
