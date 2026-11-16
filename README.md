@@ -600,8 +600,9 @@ on screen is checked against the index again. The Short is READY at 20-39 s with
 **What the tool can't see, so check `picks.html` yourself:**
 - burned-in game subtitles (mission dialogue can swear) and tutorial pop-ups. A full beat crops the corners away, a
   card beat keeps them;
-- the car radio. Nothing measures music: the first footage Short (Nov 18, "My LAST ride in GTA 5") was checked with
-  spectrograms, not by ear. If a beat might have radio, set `"game_audio": false`;
+- the car radio. Nothing measures music. The first footage Short (Nov 18, "My LAST ride in GTA 5") was checked with
+  spectrograms, not by ear; a test mix showed a spectrogram catches music about as loud as the game sound but not
+  8 dB quieter. Listen to the "play this part" links, or set `"game_audio": false`;
 - whether a moment looks good. A crash beat is aimed at the middle of the index's 6 s window, which can miss the hit:
   pin it with `file` + `at`.
 
