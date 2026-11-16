@@ -688,14 +688,14 @@ def claims_sheet_lists_each_fact_with_its_source():
 @check
 def the_real_facts_file_reads_and_keeps_the_owners_statuses():
     """facts.json in the repo loads and keeps the rules, whatever the number of facts: every fact has a valid status,
-    time_sensitive and checked_on (load_facts checks this); the nine facts the owner confirmed on 2026-11-12 are still
-    confirmed, the Xbox pre-load time is still reported and longest-gta-gap still unverified (more facts may be added,
+    time_sensitive and checked_on (load_facts checks this); the eight facts the owner confirmed on 2026-11-12 and kept
+    (unlock-time went to reported on 2026-11-16) are still confirmed, the Xbox pre-load time is still reported and longest-gta-gap still unverified (more facts may be added,
     these must not change); every reported fact's safe wording says "reportedly"; digital pre-load is November 10 and
     no usable fact says November 12 except as the old date or the boxed-copy date; every fact that may be used has a
     source link and the date it was checked"""
     real = facts.load_facts()
     confirmed = {"release-date", "preload-date", "preload-moved-to-nov-10", "boxed-copies-nov-12", "storage-212-gb",
-                 "unlock-time", "six-regions", "thirteen-year-wait", "preload-no-early-play"}
+                 "six-regions", "thirteen-year-wait", "preload-no-early-play"}
     usable = {name: f for name, f in real.items() if f["status"] != "unverified"}
     says_12 = {name for name, f in usable.items()
                if any(day in facts.plain(w) for w in facts.wordings(f) for day in ("november 12", "12 nov"))}

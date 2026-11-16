@@ -1,0 +1,71 @@
+{
+  "topic": "GTA 6 New Zealand trick: play hours early?",
+  "topic_score": {"score": 3, "why": "Many players would love to play early, but the trick is only practical on Xbox and nobody has confirmed it works for GTA 6."},
+  "title": "Can you play GTA 6 EARLY on Xbox?",
+  "description": "New Zealand reportedly unlocks first, at 4:30 PM IST on November 18, and on Xbox you can reportedly change your console location to New Zealand in Settings. Nobody has confirmed that this works for GTA 6, and Microsoft reportedly limits Xbox region changes to once every 3 months, while PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+  "hashtags": ["#GTA6", "#GTAVI", "#GTA6Launch", "#Shorts"],
+  "voice": "am_puck", "speed": 1.1, "music": "auto", "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {"say": "New Zealand reportedly gets GTA 6 first, and Xbox players may be able to join them.",
+     "facts": ["new-zealand-first"],
+     "beats": [
+       {"beat": "card", "card": "NZ GETS|*GTA 6 FIRST*", "label": {"text": "Reported", "style": "info"}},
+       {"beat": "full", "query": "city skyline night"},
+       {"beat": "full", "query": "Lucia"}],
+     "green": ["GTA 6 FIRST"], "red": []},
+
+    {"say": "Here's why. PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+     "facts": ["unlock-time"],
+     "beats": [
+       {"beat": "banner", "text": "Here's why", "query": "helicopter"},
+       {"beat": "full", "query": "palm trees sunset"},
+       {"beat": "snippet", "text": "PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+        "highlight": ["midnight local time"], "label": {"text": "PS Store, reported", "style": "info"}}],
+     "green": ["MIDNIGHT LOCAL TIME"], "red": []},
+
+    {"say": "So New Zealand reportedly unlocks first, at 4:30 PM IST on November 18.",
+     "facts": ["new-zealand-first"],
+     "beats": [
+       {"beat": "full", "query": "boat ocean"},
+       {"beat": "card", "card": "*4:30 PM IST*|NOV 18", "label": {"text": "New Zealand, reported", "style": "info"}},
+       {"beat": "full", "query": "car ocean"}],
+     "green": ["FIRST"], "red": []},
+
+    {"say": "On Xbox you can reportedly change your console location to New Zealand in Settings.",
+     "facts": ["xbox-nz-location"],
+     "beats": [
+       {"beat": "banner", "text": "The trick", "query": "yacht"},
+       {"beat": "snippet", "text": "Settings, System, Language and location: New Zealand.",
+        "highlight": ["New Zealand"], "label": {"text": "Xbox, reported", "style": "info"}}],
+     "green": ["NEW ZEALAND"], "red": []},
+
+    {"say": "That may let you start early, but nobody has confirmed it works.",
+     "facts": [],
+     "beats": [
+       {"beat": "card", "card": "NOT CONFIRMED", "label": {"text": "For GTA 6", "style": "no"}},
+       {"beat": "full", "query": "Jason gun"}],
+     "green": [], "red": ["NOBODY HAS CONFIRMED"]},
+
+    {"say": "Microsoft reportedly limits Xbox region changes to once every 3 months, so you likely can't switch straight back.",
+     "facts": ["xbox-region-change-limit"],
+     "beats": [
+       {"beat": "banner", "text": "The catch", "query": "police car night"},
+       {"beat": "count", "card": "3 MONTHS", "label": {"text": "Xbox limit, reported", "style": "no"}},
+       {"beat": "full", "query": "motorcycle road"}],
+     "green": ["3 MONTHS"], "red": ["STRAIGHT BACK"]},
+
+    {"say": "On PS5 you reportedly can't change an account's region.",
+     "facts": ["ps5-no-region-change"],
+     "beats": [
+       {"beat": "card", "card": "PS5|*NO SWITCH*", "label": {"text": "Reported", "style": "no"}}],
+     "green": [], "red": ["CAN'T CHANGE"]},
+
+    {"say": "Unless you risk it, wait, while",
+     "facts": [],
+     "beats": [
+       {"beat": "full", "query": "Jason Lucia"},
+       {"beat": "full", "query": "pool palm trees"}],
+     "green": [], "red": []}
+  ]
+}
