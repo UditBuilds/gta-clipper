@@ -2,7 +2,7 @@
   "topic": "GTA 6 New Zealand trick: play hours early?",
   "topic_score": {"score": 3, "why": "Many players would love to play early, but the trick is only practical on Xbox and nobody has confirmed it works for GTA 6."},
   "title": "Can you play GTA 6 EARLY on Xbox?",
-  "description": "New Zealand reportedly unlocks first, at 4:30 PM IST on November 18, and on Xbox you can reportedly change your console location to New Zealand in Settings. Nobody has confirmed that this works for GTA 6, and Microsoft reportedly limits Xbox region changes to once every 3 months, while Rockstar says GTA 6 unlocks at midnight local time on November 19.",
+  "description": "New Zealand reportedly unlocks first, at 4:30 PM IST on November 18, and on Xbox you can reportedly change your console location to New Zealand in Settings. Nobody has confirmed that this works for GTA 6, and Microsoft reportedly limits Xbox region changes to once every 3 months, while PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
   "hashtags": ["#GTA6", "#GTAVI", "#GTA6Launch", "#Shorts"],
   "voice": "am_puck", "speed": 1.1, "music": "auto", "sfx": true,
   "end_pill": "@NeonGetaway • Subscribe",
@@ -15,13 +15,13 @@
        {"beat": "full", "query": "Lucia"}],
      "green": ["GTA 6 FIRST"], "red": []},
 
-    {"say": "Here's why. Rockstar says GTA 6 unlocks at midnight local time on November 19.",
+    {"say": "Here's why. PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
      "facts": ["unlock-time"],
      "beats": [
        {"beat": "banner", "text": "Here's why", "query": "helicopter"},
        {"beat": "full", "query": "palm trees sunset"},
-       {"beat": "snippet", "text": "GTA 6 unlocks at midnight local time on November 19.",
-        "highlight": ["midnight local time"], "label": {"text": "Rockstar says", "style": "info"}}],
+       {"beat": "snippet", "text": "PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+        "highlight": ["midnight local time"], "label": {"text": "PS Store, reported", "style": "info"}}],
      "green": ["MIDNIGHT LOCAL TIME"], "red": []},
 
     {"say": "So New Zealand reportedly unlocks first, at 4:30 PM IST on November 18.",
@@ -61,7 +61,7 @@
        {"beat": "card", "card": "PS5|*NO SWITCH*", "label": {"text": "Reported", "style": "no"}}],
      "green": [], "red": ["CAN'T CHANGE"]},
 
-    {"say": "So unless you want the risk, you wait, while",
+    {"say": "Unless you risk it, wait, while",
      "facts": [],
      "beats": [
        {"beat": "full", "query": "Jason Lucia"},
