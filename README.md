@@ -628,6 +628,10 @@ V_20261026160754` (8:05): 3 bars and a 5-slot star row, close to `gta5.json` (fi
 spacing 28.9 vs 28.6). That profile, on test1 and test2 (not used to make it), agrees with `gta5.json` on the minimap
 in all but 20 of 1,850 and 3 of 2,500 half-seconds, and on the stars in all but 3 and 0. All 20 on test1 are inside
 one cutscene with no HUD (5:16-7:06): in 18 `gta5.json` sees a minimap that isn't there, in 2 the new profile does. The first try found 5 bars: a map icon over a half-empty health bar had cut it
-in pieces, and the minimap was missed in 6 % of test1. Fixed in `calibrate.find_strips`. The phone is skipped in
+in pieces, and the minimap was missed in 6 % of test1. Fixed in `calibrate.find_strips`. On the other three
+recordings it also found 3 bars; test2 (no wanted stars) ends with STARS NOT CALIBRATED as it should. A profile is
+only as good as the bars it saw: in `Grand Theft Auto V_20261026163544` the special-ability bar was nearly empty, so
+the tool kept only its 8 px lit end, and that profile misses test1's minimap in 44 of 1,850 half-seconds (2.4 %). On
+launch night, calibrate on a recording where the bars are full. The phone is skipped in
 guided mode, so phone calls are not cut out until it is calibrated by hand. The browser page itself and the Ollama
 check at the end were not run on real footage here.

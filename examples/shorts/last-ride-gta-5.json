@@ -126,9 +126,15 @@
             "activity": [
               "chase"
             ],
-            "min_stars": 3,
+            "video": [
+              "test1"
+            ],
+            "min_stars": 2,
             "police": true,
-            "stars_rise": false
+            "stars_rise": false,
+            "text": [
+              "pedestrians nearby"
+            ]
           }
         },
         {
