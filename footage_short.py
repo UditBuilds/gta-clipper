@@ -467,6 +467,9 @@ def beat_rows(script, resolved, picks_by_beat, rockstar_picks, lengths):
                            path=after["file"], why="the script asked for this picture"
                            if rock and rock.get("picked") else "the script named this file",
                            query=(rock or {}).get("query"))
+                start = seconds_at(after.get("at"))
+                if start is not None and seconds and Path(after["file"]).suffix.lower() in tag_media.VIDEO_EXTS:
+                    row.update(start_s=start, end_s=round(start + seconds, 3))   # a moment the script pinned
             else:
                 text = (after.get("card") or after.get("text")) if isinstance(after, dict) else str(after)
                 row.update(source="text card", text=text, why="a text card; the picture next to it is blurred behind it")
@@ -483,6 +486,17 @@ def grab_thumb(source, t, out, root=make_short.GTA_ROOT):
     return done.returncode == 0 and Path(out).is_file()
 
 
+def seconds_at(at):
+    """A video beat's "at" (12.5, "12.5", "1:23" or "1:02:03.5") in seconds, or None."""
+    if isinstance(at, (int, float)) and not isinstance(at, bool):
+        return float(at)
+    try:
+        parts = [float(x) for x in str(at).strip().split(":")]
+    except ValueError:
+        return None
+    return sum(v * 60 ** k for k, v in enumerate(reversed(parts))) if 1 <= len(parts) <= 3 else None
+
+
 def write_picks_page(rows, title, out_dir, thumb=grab_thumb):
     """picks.html in the Short's folder: one card per beat, in order, with a thumbnail (the middle of the footage the
     beat shows, or the moment just after a star change), what the voice says over it, where it comes from and why."""
@@ -493,7 +507,7 @@ def write_picks_page(rows, title, out_dir, thumb=grab_thumb):
         name, picture = f"beat_{k:02d}.jpg", ""
         if r.get("path"):
             t = ((r["change_s"] + 1.0) if r.get("change_s") is not None else (r["start_s"] + r["end_s"]) / 2
-                 ) if r["source"] == "footage" else 0.0
+                 ) if r.get("start_s") is not None else 0.0
             if thumb(r["path"], t, thumbs / name):
                 picture = f'<img src="picks/{name}" alt="beat {k}">'
         colour = {"footage": "ok", "rockstar fallback": "warn", "text card": "card"}.get(r["source"], "pic")
@@ -501,6 +515,11 @@ def write_picks_page(rows, title, out_dir, thumb=grab_thumb):
             link = "file:///" + quote(str(Path(r["path"])).replace("\\", "/"), safe="/:") + f"#t={r['start_s']:.1f},{r['end_s']:.1f}"
             where = (f'<b>{html.escape(r["video"])}</b> {library.hms(r["start_s"])} to {library.hms(r["end_s"])} '
                      f'({r["start_s"]:.1f}-{r["end_s"]:.1f} s) &middot; <a href="{html.escape(link)}">play this part</a>')
+        elif r.get("path") and r.get("start_s") is not None:
+            link = "file:///" + quote(str(Path(r["path"])).replace("\\", "/"), safe="/:") + f"#t={r['start_s']:.1f},{r['end_s']:.1f}"
+            where = (f'<b>{html.escape(Path(r["path"]).name)}</b> {library.hms(r["start_s"])} to {library.hms(r["end_s"])} '
+                     f'({r["start_s"]:.1f}-{r["end_s"]:.1f} s, pinned by the script, not checked against the index) '
+                     f'&middot; <a href="{html.escape(link)}">play this part</a>')
         elif r.get("path"):
             where = f'<b>{html.escape(Path(r["path"]).name)}</b>'
         else:

@@ -624,6 +624,25 @@ def a_short_star_rise_beat_still_gets_its_rise():
 
 
 @check
+def a_moment_pinned_with_file_and_at_gets_its_own_thumbnail():
+    """a beat that names a recording and a time itself ({"file": video, "at": "223.1"}) shows that moment in
+    picks.json and picks.html (its start and end, a thumbnail from its middle, a "play this part" link); before, its
+    thumbnail was the recording's first frame. A named picture, and "at" written as m:ss, still work"""
+    script = {"title": "t", "lines": [{"say": "One last crash.", "beats": [
+        {"beat": "full", "file": "C:/AI/gta/input/rec.webm", "at": "223.1"},
+        {"beat": "full", "file": "rockstar/a.jpg"},
+        {"beat": "full", "file": "C:/AI/gta/input/rec.webm", "at": "1:02.5"}]}]}
+    rows = footage_short.beat_rows(script, script, {}, [], [[1.3, 2.0, 1.0]])
+    asked = []
+    with tempfile.TemporaryDirectory() as tmp:
+        footage_short.write_picks_page(rows, "t", tmp, thumb=lambda path, t, out: asked.append((Path(path).name, t)))
+        page = (Path(tmp) / "picks.html").read_text(encoding="utf-8")
+    return (rows[0]["start_s"] == 223.1 and rows[0]["end_s"] == 224.4 and "start_s" not in rows[1]
+            and rows[2]["start_s"] == 62.5 and abs(asked[0][1] - 223.75) < 1e-6 and asked[1] == ("a.jpg", 0.0)
+            and page.count("play this part") == 2 and "#t=223.1,224.4" in page)
+
+
+@check
 def the_best_unused_footage_is_picked():
     """pick_beats on the made-up library: a beat about wanted stars gets the star rise (1 -> 3), not just any
     stretch with stars; the next beat prefers a recording the Short hasn't used; asked for the same thing again it
