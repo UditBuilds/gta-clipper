@@ -633,5 +633,12 @@ recordings it also found 3 bars; test2 (no wanted stars) ends with STARS NOT CAL
 only as good as the bars it saw: in `Grand Theft Auto V_20261026163544` the special-ability bar was nearly empty, so
 the tool kept only its 8 px lit end, and that profile misses test1's minimap in 44 of 1,850 half-seconds (2.4 %). On
 launch night, calibrate on a recording where the bars are full. The phone is skipped in
-guided mode, so phone calls are not cut out until it is calibrated by hand. The browser page itself and the Ollama
-check at the end were not run on real footage here.
+guided mode, so phone calls are not cut out until it is calibrated by hand: in the check below, a 13 s phone call
+that `gta5.json` marks never_use came out as usable on_foot.
+
+**The whole command with the real Ollama check** (Nov 16; only the page was a stand-in accepting every guess) on
+`Grand Theft Auto V_20261026160754`: RESULT: PASS in 3.2 min (scan 0.9, checks 2.3: 31 sheets, 0 errors, 3.7 s per
+sheet; the memory guard unloaded and reloaded the model once). Minimap in 95 % of the 3 minutes, stars for 96 s, all
+6 star-check pictures counted right (1 and 3 stars), and the segments match the library's own index of that stretch
+(the same 1:54-3:34 chase at 3 stars) apart from the phone call. GPU peak 5.1 GB, 64 C. The browser page has not been
+clicked through by a person yet.
