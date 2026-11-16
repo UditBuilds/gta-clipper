@@ -135,7 +135,8 @@
           "beat": "full",
           "file": "C:/AI/gta/input/test1.webm",
           "at": "223.1",
-          "sound": true
+          "sound": true,
+          "focus": 0.62
         }
       ],
       "green": [],
@@ -178,7 +179,7 @@
           "query": "city skyline",
           "region": "Vice City",
           "label": {
-            "text": "GTA 6",
+            "text": "PS Store, reported",
             "style": "info"
           }
         },

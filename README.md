@@ -625,8 +625,8 @@ One command makes a HUD profile for a game with no profile yet:
 **Tried on GTA V (PR 23)**, with a script standing in for me that accepted every guess, on `Grand Theft Auto
 V_20261026160754` (8:05): 3 bars and a 5-slot star row, close to `gta5.json` (first star tip x 1695.9 vs 1696.5,
 spacing 28.9 vs 28.6). That profile, on test1 and test2 (not used to make it), agrees with `gta5.json` on the minimap
-in all but 20 of 1,850 and 3 of 2,500 half-seconds (the 20 are a close-up where `gta5.json` is the one that is wrong)
-and on the stars in all but 3 and 0. The first try found 5 bars: a map icon over a half-empty health bar had cut it
+in all but 20 of 1,850 and 3 of 2,500 half-seconds, and on the stars in all but 3 and 0. All 20 on test1 are inside
+one cutscene with no HUD (5:16-7:06): in 18 `gta5.json` sees a minimap that isn't there, in 2 the new profile does. The first try found 5 bars: a map icon over a half-empty health bar had cut it
 in pieces, and the minimap was missed in 6 % of test1. Fixed in `calibrate.find_strips`. The phone is skipped in
 guided mode, so phone calls are not cut out until it is calibrated by hand. The browser page itself and the Ollama
 check at the end were not run on real footage here.
