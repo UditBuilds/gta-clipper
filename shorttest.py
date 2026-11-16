@@ -854,7 +854,8 @@ def upload_text_needs_a_description_and_three_to_five_hashtags():
     1-5 with a reason, and under 3 it warns without stopping; upload.txt has the title, the description and the tags"""
     def problems(**changes):
         return make_short.upload_problems(short_script(**changes))
-    low = make_short.check_script(short_script(topic_score={"score": 2, "why": "PC players only"}), FACTS, fake_tags())
+    low = make_short.check_script(short_script(topic_score={"score": 2, "why": "PC players only"}), FACTS, fake_tags(),
+                                   today="2026-11-11")              # FACTS were checked that day, as in short_run
     text = make_short.upload_text(short_script())
     return (problems() == []
             and len(problems(description="")) == 1 and len(problems(description="Out now #GTA6")) == 1
@@ -878,7 +879,7 @@ def word_count_is_checked_before_anything_renders():
         run = short_run(tmp, short)
     near = short_script()
     near["lines"][2] = {"say": "This one is a short plain line now.", "facts": [], "beats": [{"beat": "card", "card": "WAIT"}]}
-    result = make_short.check_script(near, FACTS, fake_tags())
+    result = make_short.check_script(near, FACTS, fake_tags(), today="2026-11-11")    # as in short_run
     return (words == 98 and run["error"] and "37 spoken words" in run["error"] and run["rendered"] == []
             and not (run["shorts"]).exists()
             and result["problems"] == [] and result["words"] == 88

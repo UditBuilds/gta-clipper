@@ -92,6 +92,10 @@ DUCK_DOWN_S, DUCK_UP_S = 0.06, 0.25  # how long a whole dip and a whole rise tak
 MUSIC_FADE_IN_S, MUSIC_FADE_OUT_S = 0.5, 1.0
 MUSIC_PRESENCE = "equalizer=f=2500:t=q:w=1:g=-3"  # a small dip in the music where the voice's consonants are
 MAX_MUSIC_VOLUME = 2.0               # music_volume: 1 is the level above, 0.5 is 6 dB quieter, 2 is 6 dB louder
+# A video shot's own sound (PR 22: Shorts built from gameplay footage). Off unless a shot says "sound": true. It sits
+# GAME_UNDER_LU under the voice while it speaks and rises GAME_LIFT_DB in its pauses (the same dip as the music's,
+# deeper), with a short fade at each cut so no cut clicks. The loop ending's repeat of the first shot stays silent.
+GAME_LUFS, GAME_LIFT_DB, GAME_FADE_S = -27.0, 7.0, 0.04
 # Sound effects, made here from noise and sine waves. A whoosh peaks on the cut when a line starts or a pan begins; a
 # hit lands on a card. Not on every cut. All are cut above 8 kHz: they don't need it, and it keeps them off the voice's
 # "s" sounds. The levels are measured as loudness under the voice (explainertest.py checks them).
@@ -190,13 +194,13 @@ MARK_SIZE, MARK_EARLIEST_S = 92, 0.3
 # one is drawn as before. "full": the whole screen, zooming slowly at its focus. "card": the framed card above (or a
 # text card). "count": a text card whose number counts up. The four below have their own settings.
 BEATS = ("full", "lockon", "card", "compare", "snippet", "count", "banner")
-BEAT_KEYS = {"full": {"file", "at", "focus", "pan", "weight", "label", "marks"},
+BEAT_KEYS = {"full": {"file", "at", "focus", "pan", "weight", "label", "marks", "sound"},
              "lockon": {"file", "at", "weight", "box", "label"},
-             "card": {"file", "card", "at", "focus", "pan", "weight", "card_aspect", "label", "marks", "bg"},
+             "card": {"file", "card", "at", "focus", "pan", "weight", "card_aspect", "label", "marks", "bg", "sound"},
              "compare": {"top", "bottom", "weight"},
              "snippet": {"text", "highlight", "weight", "bg", "label"},
              "count": {"card", "weight", "bg", "label"},
-             "banner": {"file", "at", "focus", "weight", "text", "style"}}
+             "banner": {"file", "at", "focus", "weight", "text", "style", "sound"}}
 # "lockon": a red box drops onto a region of the picture (given in the picture's own pixels) LOCK_SNAP_S after the cut,
 # with a small tag on its corner, and the camera zooms at it: fast at first, then a slow creep. The zoom is the largest
 # up to LOCK_ZOOM_MAX that fits the region in LOCK_ROOM and keeps it, and its tag, inside the safe area.
@@ -248,10 +252,11 @@ CLEAN_SEAM_DB = 30                   # a clip's last and first frame must be thi
 FOCUS_NAMES = {"left": 1 / 6, "center": 0.5, "centre": 0.5, "right": 5 / 6}
 FOCUS_Y_NAMES = {"top": 1 / 6, "middle": 0.5, "center": 0.5, "centre": 0.5, "bottom": 5 / 6}
 PAN_DIRECTIONS = {"right": (0.0, 1.0), "left": (1.0, 0.0)}   # right: from the left edge to the right edge
-SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight", "layout", "card_aspect", "label", "marks", "bg", "beat"}
+SHOT_KEYS = {"file", "card", "at", "focus", "pan", "weight", "layout", "card_aspect", "label", "marks", "bg", "beat",
+             "sound"}
 CARD_KEYS = {"card", "weight", "bg", "label"}
 SCRIPT_KEYS = {"title", "voice", "speed", "open_card", "music", "music_volume", "sfx", "lines", "layout",
-               "caption_style", "grade", "end_pill"}
+               "caption_style", "grade", "end_pill", "game_volume"}
 OFF_CENTRE = 0.1                     # a subject further than this from the crop's middle gets zooms only, never a drift
 PAN_BLUR = 0.14                      # a pan's motion blur, as a share of its step per frame: a camera's half-open shutter
 
@@ -665,6 +670,13 @@ def parse_shot_object(raw, root):
         extra["label"] = parse_label(raw["label"], name)
     if "marks" in raw:
         extra["marks"] = parse_marks(raw["marks"], name)
+    if "sound" in raw:
+        if not isinstance(raw["sound"], bool):
+            raise ScriptError(f"{name}: sound is true (the video's own sound plays under the voice) or false")
+        if raw["sound"] and Path(name).suffix.lower() in IMAGE_EXTS:
+            raise ScriptError(f"{name}: sound is a video's own sound, and this is an image")
+        if raw["sound"]:
+            extra["sound"] = True
     source = name
     at = raw.get("at")
     if at is not None:
@@ -777,6 +789,12 @@ def load_script(path, root):
     if caption_style not in CAPTION_STYLES:
         problems.append("caption_style is word (one word at a time) or phrase (2-4 words, the spoken one yellow)")
         caption_style = "word"
+    game_volume = script.get("game_volume", 1.0)
+    if (isinstance(game_volume, bool) or not isinstance(game_volume, (int, float))
+            or not 0 < game_volume <= MAX_MUSIC_VOLUME):
+        problems.append(f"game_volume is how loud the footage's own sound is next to normal: 1 is normal, 0.5 quieter, "
+                        f"up to {MAX_MUSIC_VOLUME:g} louder")
+        game_volume = 1.0
     grade = script.get("grade", True)
     if not isinstance(grade, bool):
         problems.append("grade is true (a little more contrast and colour, and a soft vignette) or false (none)")
@@ -843,7 +861,8 @@ def load_script(path, root):
     return {"title": title, "slug": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "voice": voice, "speed": speed,
             "open_card": open_card.strip().upper() if open_card else None, "music": music,
             "music_volume": float(music_volume), "sfx": sfx, "lines": parsed, "layout": layout,
-            "caption_style": caption_style, "grade": grade, "notes": notes, "end_pill": pill}
+            "caption_style": caption_style, "grade": grade, "notes": notes, "end_pill": pill,
+            "game_volume": float(game_volume)}
 
 
 def place_visuals(lines, caption_style):
@@ -1517,6 +1536,46 @@ def music_bed(music, voice, volume, work):
                                                       "lifted_s": round(lifted, 2)}
 
 
+def game_bed(slots, voice, volume, work):
+    """The footage's own sound under this voice: for every video shot that says "sound": true, the stretch of its
+    source the shot shows, placed where the shot is, with a short fade at both cuts. The whole track is brought to
+    GAME_LUFS and rises GAME_LIFT_DB in the voice's pauses. The loop ending's repeat of the first shot, a shot that
+    plays backwards and a source without sound add nothing. Returns (the samples or None, what was done)."""
+    import numpy as np
+    track = np.zeros((len(voice), 2), dtype=np.float32)
+    pieces = []
+    for k, slot in enumerate(slots):
+        visual = slot["visual"]
+        if (slot.get("loop_tail") or slot.get("bounce") or visual.get("kind") != "video" or not visual.get("sound")
+                or stream_of(probe(visual["path"]), "audio") is None):
+            continue
+        seconds = slot["frames"] / FPS
+        raw = work / f"game_{k:04d}.f32"
+        ffmpeg(["-ss", f"{slot.get('start_s', visual['start']):.3f}", "-t", f"{seconds:.3f}", "-i", visual["path"], "-vn",
+                "-af", f"aresample={RATE}", *F32, raw])
+        piece = np.fromfile(raw, np.float32)
+        piece = piece[:len(piece) // 2 * 2].reshape(-1, 2)
+        at = round(slot["start"] / FPS * RATE)
+        piece = piece[:max(0, min(len(piece), round(seconds * RATE), len(voice) - at))]
+        if len(piece) < 2:
+            continue
+        ramp = fade(len(piece), GAME_FADE_S)
+        track[at:at + len(piece)] += piece * (ramp * ramp[::-1])[:, None].astype(np.float32)
+        pieces.append({"line": slot["line"] + 1, "source": visual["source"], "at_s": round(at / RATE, 3),
+                       "seconds": round(len(piece) / RATE, 3)})
+    if not pieces:
+        return None, {}
+    raw = work / "game.f32"
+    track.tofile(raw)
+    level = measure_loudness(raw, F32)[0]
+    gain_db = (GAME_LUFS - level if math.isfinite(level) else 0.0) + 20 * math.log10(volume)
+    curve = duck_curve(voice[:, 0]) * (GAME_LIFT_DB / GAP_LIFT_DB)
+    lift = np.interp(np.arange(len(voice)) / RATE, (np.arange(len(curve)) + 0.5) * 0.01, curve)
+    gain = 10 ** ((gain_db + lift) / 20)
+    return track * gain[:, None].astype(np.float32), {"game_lufs": round(level, 1), "game_gain_db": round(gain_db, 2),
+                                                      "game_pieces": pieces}
+
+
 def lowpass(x, hz, rate=RATE):
     """Everything above hz gone, fading out over half an octave so nothing rings."""
     import numpy as np
@@ -1659,14 +1718,20 @@ def sfx_track(events, n):
     return track[:n]
 
 
-def mix_audio(voice_wav, music, volume, events, work):
-    """The voice, the music bed and the sound effects in one WAV at -14 LUFS. Returns its path and what went in."""
+def mix_audio(voice_wav, music, volume, events, work, game_slots=None, game_volume=1.0):
+    """The voice, the music bed, the footage's own sound (game_slots: the Short's slots, when any shot asks for it)
+    and the sound effects in one WAV at -14 LUFS. Returns its path and what went in."""
     import numpy as np
     voice = read_wav(voice_wav)
     mix, info = voice.copy(), {}
     if music:
         bed, info = music_bed(music, voice, volume, work)
         mix += bed
+    if game_slots:
+        game, game_info = game_bed(game_slots, voice, game_volume, work)
+        if game is not None:
+            mix += game
+            info.update(game_info)
     if events:
         mix += sfx_track(events, len(voice))[:, None]
     mixed = work / "mix.f32"
@@ -3045,7 +3110,9 @@ def render(script_path, root, out_root, run_dir=None):
         if script["music"] == "auto" and music is None:
             warnings.append(f'music is "auto" but {root / MUSIC_DIR} has no audio files, so this Short has no music')
         sfx = plan_sfx(slots, pill_click) if script["sfx"] else []
-        mix, sound = mix_audio(run_dir / "voice.wav", music, script["music_volume"], sfx, work)
+        wants_game = any(s["visual"].get("sound") for s in slots)
+        mix, sound = mix_audio(run_dir / "voice.wav", music, script["music_volume"], sfx, work,
+                               slots if wants_game else None, script["game_volume"])
         timing["sound"] = round(time.perf_counter() - t, 1)
 
         encoder, piece_args, final_args = pick_encoder()
@@ -3091,6 +3158,10 @@ def render(script_path, root, out_root, run_dir=None):
                      if music else None,
                      "lift_in_pauses_db": GAP_LIFT_DB if music else None, "lifted_s": sound.get("lifted_s")},
            "sfx": sfx,
+           "game_audio": ({"pieces": sound["game_pieces"], "track_lufs": sound["game_lufs"],
+                           "gain_db": sound["game_gain_db"], "volume": script["game_volume"],
+                           "under_voice_lu": round(TARGET_LUFS - GAME_LUFS - 20 * math.log10(script["game_volume"]), 1),
+                           "lift_in_pauses_db": GAME_LIFT_DB} if sound.get("game_pieces") else None),
            "captions": ("one word at a time, yellow; tagged words keep their colour (green tags draw cyan)"
                         if script["caption_style"] == "word" else
                         "2-4 words, the one being said turns yellow; tagged words keep their colour (green tags draw cyan)"),
@@ -3108,6 +3179,8 @@ def render(script_path, root, out_root, run_dir=None):
                         "motion_speed": s["motion"]["speed"] if "motion" in s else None,
                         "pan_widths_per_s": round(pan_speed(s), 2) if s.get("motion", {}).get("wide") else None,
                         "fill": s.get("fill"), "loop_tail": bool(s.get("loop_tail")),
+                        "source_start_s": round(s["start_s"], 3) if "start_s" in s else None,
+                        "bounce": bool(s.get("bounce")), "sound": bool(s["visual"].get("sound")),
                         "beat": s["visual"].get("beat"),
                         "layout": s["visual"].get("layout") or s["visual"]["kind"],
                         "card_aspect": s["visual"].get("card_aspect") if s["visual"].get("layout") == "framed" else None,
@@ -3168,6 +3241,39 @@ def render(script_path, root, out_root, run_dir=None):
     for warning in warnings:
         print(f"  WARNING: {warning}")
     return run_dir
+
+
+def timing(script_path, root, kokoro=None):
+    """How long every shot of a script will be on screen, found the way render() finds it (the voice is made and
+    measured, nothing is rendered). footage_short.py uses it to cut each piece of footage to its shot's exact length
+    before the render. Returns {"total_s", "lines": [[seconds per shot of that line, 0.0 for a shot that gets no
+    time], ...], "loop_s": the loop ending's length (it repeats the first shot), "first": (line, shot) of the shot
+    the loop ending repeats, or None, "behind": {(line, shot) of a text card: (line, shot) of the picture blurred
+    behind it}}. Lines and shots count from 0."""
+    script = load_script(script_path, root)
+    audio, rate, _, line_starts, _ = synthesize(kokoro or load_kokoro(), script["lines"], script["voice"], script["speed"])
+    with tempfile.TemporaryDirectory(prefix="timing_") as work:
+        work = Path(work)
+        save_wav(work / "raw.wav", audio, rate)
+        normalise_voice(work / "raw.wav", work / "voice.wav")
+        voice_s = float(probe(work / "voice.wav")["format"]["duration"])
+    total_frames = round(voice_s * FPS)
+    slots = plan_slots(script["lines"], line_starts, total_frames)
+    where = {id(v): (n, i) for n, line in enumerate(script["lines"]) for i, v in enumerate(line["visuals"])}
+    lines = [[0.0] * len(line["visuals"]) for line in script["lines"]]
+    loop_s, first = 0.0, None
+    for slot in slots:
+        n, i = where[id(slot["visual"])]
+        if slot.get("loop_tail"):
+            loop_s, first = slot["frames"] / FPS, (n, i)
+        else:
+            lines[n][i] += slot["frames"] / FPS
+    behind = {}
+    for (n, i) in where.values():
+        v = script["lines"][n]["visuals"][i]
+        if v["kind"] in ("card", "snippet") and id(v.get("bg")) in where:
+            behind[(n, i)] = where[id(v["bg"])]
+    return {"total_s": total_frames / FPS, "lines": lines, "loop_s": loop_s, "first": first, "behind": behind}
 
 
 def shot_stats(slots):
