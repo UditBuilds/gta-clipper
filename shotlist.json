@@ -88,6 +88,48 @@
         {"id": "air-time", "want": "a jump, a flip or a car in the air", "query": {"text": ["airborne", "jump", "flip", "mid-air", "in the air", "stunt", "drift"], "min_len": 4}},
         {"id": "boom", "want": "an explosion or fire", "query": {"text": ["explosion", "explod", "fire", "flames", "burning"], "min_len": 4}}
       ]
+    },
+    {
+      "id": "cops-outfit-car-change",
+      "title": "Losing the cops: a new car or a new outfit",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "new-car-with-stars", "want": "getting into another car while the stars show", "query": {"activity": ["chase", "driving"], "after": ["on_foot", "shootout"], "min_stars": 1, "min_len": 4}},
+        {"id": "clothes-shop", "want": "walking into a clothes shop or changing clothes (the shop menu itself is never used)", "query": {"text": ["clothes", "clothing", "outfit", "changing room", "wardrobe", "boutique"], "min_len": 4}},
+        {"id": "calm-after-stars", "want": "calm driving or walking right after the stars are gone", "query": {"activity": ["driving", "on_foot"], "after": ["chase", "shootout"], "max_stars": 0, "min_len": 6}}
+      ]
+    },
+    {
+      "id": "first-hour",
+      "title": "First-hour moments",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "first-star", "want": "the first wanted star going up", "query": {"stars_rise": true, "max_stars": 1}},
+        {"id": "first-gun", "want": "a gun drawn or fired", "query": {"activity": ["shootout"], "min_len": 4}},
+        {"id": "first-drive", "want": "a drive of 10 s or more with nothing chasing", "query": {"activity": ["driving"], "max_stars": 0, "min_len": 10}},
+        {"id": "leonida-look", "want": "swamp, beach, palms, neon or skyline in view", "query": {"text": ["swamp", "marsh", "beach", "ocean", "palm", "neon", "skyline", "boardwalk", "bridge"], "min_len": 6}}
+      ]
+    },
+    {
+      "id": "jason-lucia",
+      "title": "Jason and Lucia: together and switching",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "both-in-shot", "want": "two characters, a man and a woman, in the picture", "query": {"text": ["two characters", "man and woman", "woman and man", "couple", "two people"], "min_len": 4}},
+        {"id": "woman-playing", "want": "a woman driving or on foot (playing as Lucia)", "query": {"activity": ["driving", "chase", "on_foot", "shootout"], "text": ["woman", "female"], "min_len": 4}},
+        {"id": "switch", "want": "a character switch (the switch screen itself is never used)", "query": {"text": ["switch", "swap", "character wheel", "character select"], "min_len": 4}}
+      ]
+    },
+    {
+      "id": "big-chases",
+      "title": "Big chases",
+      "status": "verify after launch",
+      "shots": [
+        {"id": "three-stars-chase", "want": "a chase at 3 or more stars, 10 s or more", "query": {"activity": ["chase"], "min_stars": 3, "min_len": 10}},
+        {"id": "half-minute-chase", "want": "a chase of 30 s or more", "query": {"activity": ["chase"], "min_stars": 1, "min_len": 30}},
+        {"id": "helicopter-chase", "want": "a police helicopter in a chase", "query": {"activity": ["chase"], "text": ["helicopter", "chopper"], "min_len": 4}},
+        {"id": "chase-crash-police", "want": "a crash in a chase with police in the picture", "query": {"activity": ["chase"], "police": true, "text": ["crash", "collision", "smash", "wreck"], "min_len": 4}}
+      ]
     }
   ]
 }

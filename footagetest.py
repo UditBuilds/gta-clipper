@@ -807,6 +807,23 @@ def a_footage_short_is_built_from_the_library_end_to_end():
 
 
 @check
+def pinned_footage_is_logged_as_used_too():
+    """a beat that pins a moment of a recording with "file" + "at" (not picked from the library) is written to
+    _used_footage.json with the rest (PR 25: it was left out, so a later Short could show it again); it is still not
+    checked against the index"""
+    with tempfile.TemporaryDirectory() as tmp:
+        pinned = Path(tmp) / "pinned_rec.webm"
+        pinned.write_bytes(b"not a real video: the stand-in render never opens it")
+        script = footage_script()
+        script["lines"][3]["beats"] = [{"beat": "full", "file": str(pinned), "at": "12.5", "sound": True}]
+        out, ready, said, _ = footage_run(tmp, script)
+        used = json.loads((Path(tmp) / "shorts" / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
+    spans = used["shorts"][0]["spans"]
+    return ready and any(s[0] == "pinned_rec" and s[1] == 12.5 and s[2] > 12.5 for s in spans) and any(
+        s[0] == "alpha" for s in spans)
+
+
+@check
 def never_use_footage_never_gets_on_screen():
     """no footage the Short shows touches the made-up cutscene (alpha 30-40 s), not a beat, not the loop ending and
     not the footage behind the text card; and when a render does put a cutscene on screen (the stand-in shifts the

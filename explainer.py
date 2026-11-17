@@ -3134,6 +3134,13 @@ def render(script_path, root, out_root, run_dir=None):
         timing["final"] = round(time.perf_counter() - t, 1)
 
     final = probe(run_dir / "short.mp4")
+    # Every Short's sound peaks under -1.0 dBTP (PR 25): measured with ffmpeg's true-peak meter after the AAC encode,
+    # and if it is higher, the audio alone goes through a true-peak limiter and is measured again (safety.py).
+    import safety
+    try:
+        peak_guard = safety.guard_true_peak(run_dir / "short.mp4", log=print)
+    except safety.SafetyError as e:
+        raise ScriptError(str(e)) from None
     final_lufs, final_peak = measure_loudness(run_dir / "short.mp4")
     if abs(final_lufs - TARGET_LUFS) > 1:
         warnings.append(f"the final loudness is {final_lufs:.1f} LUFS; the target is {TARGET_LUFS:.0f}")
@@ -3151,7 +3158,7 @@ def render(script_path, root, out_root, run_dir=None):
                          "lines": [{"line": n + 1, "start_s": round(s, 3)} for n, s in enumerate(line_starts)]},
            "shots": shots,
            "loudness": {"voice_lufs": voice_lufs, "mix_lufs": sound["mix_lufs"], "final_lufs": final_lufs,
-                        "final_true_peak_db": final_peak},
+                        "final_true_peak_db": final_peak, "true_peak_guard": peak_guard},
            "music": {"file": str(music) if music else None, "chosen": music_note, "volume": script["music_volume"],
                      "track_lufs": sound.get("music_lufs"), "gain_db": sound.get("gain_db"),
                      "under_voice_lu": round(TARGET_LUFS - MUSIC_LUFS - 20 * math.log10(script["music_volume"]), 1)

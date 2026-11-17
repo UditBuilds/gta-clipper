@@ -642,3 +642,97 @@ sheet; the memory guard unloaded and reloaded the model once). Minimap in 95 % o
 6 star-check pictures counted right (1 and 3 stars), and the segments match the library's own index of that stretch
 (the same 1:54-3:34 chase at 3 stars) apart from the phone call. GPU peak 5.1 GB, 64 C. The browser page has not been
 clicked through by a person yet.
+
+## /launch: launch night's Shorts, made automatically (PR 25)
+
+On launch night I record on the PS5, copy the files to `C:\AI\gta\input` and type `/launch` in Claude Code (Sonnet).
+With no questions it finds the new recordings, reads the HUD (or works without it), finds the best moments, makes 3
+Shorts and writes one review page. I watch, fix a hook or a cold open with one command if needed, and upload myself.
+The steps for the night, including the recommended split night, are in [LAUNCH_NIGHT.md](LAUNCH_NIGHT.md).
+
+```powershell
+.\.venv\Scripts\python.exe launch.py prepare                          # new recordings -> candidates.json (the long part)
+.\.venv-tts\Scripts\python.exe launch.py render                       # Claude's shorts.json -> Shorts + review.html
+.\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
+.\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
+.\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 37 checks, about 2 minutes, no Ollama
+```
+
+**What prepare does.**
+
+1. Takes the recordings that are in neither the library nor an earlier /launch run, so a second run the same night
+   takes only the new part, into `launch-<date>-part2`. Held-out footage is refused.
+2. Uses `profiles/gta6.json` if it exists, else runs the guided calibration with every guess accepted
+   (`calibrate_guided.auto_accept`).
+3. Indexes every recording (index.py, a sheet every 6 s) and runs clip.py, unchanged, on each for its action score
+   (loudness and picture change).
+4. Checks the HUD against the vision model per recording; a HUD reading that can't be trusted means NO-HUD mode for it.
+5. Scores every 30 s window of clean footage and keeps the best ones that don't overlap: action, star rises, stars
+   showing, a chase or shootout, a crash, explosion or stunt the model saw, police, the model's confidence.
+6. Picks the best moment in each third of the session that passes the safety checks and shows no footage an earlier
+   Short showed, and gives it a type: an ACTION CLIP (game sound, music bed, burned-in hook, cold open and zoom at an
+   AUTO PEAK taken from evidence only) or a NARRATED Short (am_puck over the moment's footage, playing on in real time).
+7. Writes `candidates.json`: each pick with its evidence (E1, E2 ...: what the footage shows, when, and where that
+   comes from), a frame sheet and, for an ACTION CLIP, strips of frames 0.2 s apart to pick the peak from.
+
+Claude then writes `shorts.json` (3 hooks with its pick starred, title, 2-sentence description, hashtags, the peak or
+the script, optionally a later start) and runs render, which checks everything, renders, keeps the sound under -1.0
+dBTP, logs the footage as used and writes `review.html`: each Short's video, flags, hooks, script next to its evidence,
+upload text and the commands to fix it.
+
+**The truth rules (truth.py).** Every narrated line is either `on_screen`, citing evidence that is on screen while it
+is spoken (measured on the real voice), or a `fact` from facts.json, as in /new-short. Code refuses a word without its
+evidence ("stars" needs a HUD star reading, "crash" a crash), a number not in the evidence or a fact, a claim about how
+the game works without a fact ("you can", "the game", "cops will"), any name but Jason and Lucia, and story words.
+"GTA 6" and "GTA VI" are always fine. Hooks, titles and descriptions get the same checks.
+
+**The safety checks (safety.py)**, measured on the dev recordings (answer keys as truth):
+
+- A safety question to the vision model about every finalist, 4 frames a sheet, one a second: phone, menu or map,
+  loading, cutscene, blood, subtitles. It caught the phone on 33 of 33 sheets of 5 real calls, including the call the
+  guided profile left in, with no phone calibration at all. The second prompt (safety_v2, written after seeing the
+  first one's mistakes) caught 23 of 31 cutscene sheets and 10 of 17 menu or map sheets of footage neither prompt was
+  written from (the first: 8 and 8), and blocked none of 29 clean sheets there. Details in
+  [prompts/LOG.md](prompts/LOG.md#safety-prompt-versions-pr-25-launch).
+- No blood in the first 7 s: those seconds are asked twice a second, and the index's own lines count too. Blood there
+  moves the start 7 s later once, or drops that type. The AUTO PEAK's cold open is checked again at render time.
+- No swearing in the subtitles of the first 7 s: the model reads the subtitle band once a second (full size, 4 strips
+  a sheet, `prompts/subtitles_v1.txt`) and code matches the words against a list of strong and moderate swear words
+  and slurs (not damn or hell). It moves the start or drops the type like blood; swearing later is a PROFANITY flag.
+  On the dry run's river chase it read every subtitle line word for word, "Fuck! Fuck!" at 4:12, "Watch your ass" at
+  4:37 and "Shhiitttt!!" at 4:41 included (17 calls, 61 s for 68 s of footage). Spoken swearing in the game's sound
+  is not checked: there is no speech-to-text, and every Short's SOUND flag says so.
+- Footage an earlier Short showed, pinned footage included (footage_short.py now logs it too), is never used again.
+- Every render, here and in /new-short and /footage-short (explainer.py), is measured with ffmpeg's true-peak meter;
+  over -1.0 dBTP, the sound alone goes through a limiter run at 192 kHz and is measured again, or the render fails.
+
+**NO-HUD mode.** When the guided calibration fails, or the minimap is missing on more than half of the sheets the
+model calls gameplay, or the star count flickers, a recording is indexed with a profile that sees no HUD: labels come
+from the model alone, nothing mentions stars, and the safety question looks every half second. It is weaker: without
+the HUD the index alone marks only 50 % (test1) and 26 % (test2) of the answer keys' never-pick seconds as never_use
+(93-100 % with it), and finds 3 of test1's 5 moments (5 of 5 with it). The safety question is then the main guard.
+
+**Faster index, measured and not used.** A sheet every 12 s took 341 s on test1 and 453 s on test2 (every 6 s: 590 s
+and 766 s), but found only 3 of test1's 5 answer-key moments (every 6 s: 5 of 5), so /launch stays at 6 s.
+
+**The dry run (Nov 17)** on the 4 GTA V recordings (69 min), with a fresh profile made by the guided calibration with
+every guess accepted (PASS on the 25 min recording):
+
+- The first prepare took 22.8 min: calibration 3.2, index 7.7 (the model's answers were cached, so only the HUD
+  decode ran), safety checks 9.3 (159 model calls for 7 finalists; 4 failed: a phone, a cutscene twice, blood in the
+  first 7 s). Its HUD check sent 2 of the 4 recordings to NO-HUD mode wrongly: the hand-made gta5.json fails the same
+  0.8 threshold on them (0.72, 0.73), because the model calls about a quarter of story cutscenes gameplay. The
+  threshold is now 0.5, and the second prepare (8.0 min, answers cached) kept all 4 in HUD mode.
+- 3 Shorts, all READY after the render's own checks sent two scripts back once (lines spoken before their evidence was
+  on screen: the voice says about 4 words a second, not the 2.6 first assumed): a NARRATED star rise in the rain
+  (34.2 s), an ACTION CLIP of a gun-out run and a carjack (20.8 s, AUTO PEAK on the first star), and a NARRATED 4-star
+  truck chase down the river channel (28.5 s, started 3.5 s later to skip a swear word in the mission subtitles). True
+  peak -1.2 to -1.5 dBTP; the action clip measured -1.0 and was limited to -1.4.
+- For 2 hours of footage: about 1 h 45 min (index about 77 min, safety about 10, calibration 3, renders and Claude's
+  writing about 15). A 1-hour part of a split night: about 70 min.
+
+**What it can't see, so check the review page:** burned-in mission subtitles (flagged, not read; the game's own sound
+says the same words), music in the game sound, whether a crash looks cinematic, and whether a star-rise cold open is
+exciting (it often isn't). GTA 6's HUD is unknown until launch night: if the calibration fails, the night runs in
+NO-HUD mode.

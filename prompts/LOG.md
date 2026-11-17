@@ -247,3 +247,34 @@ Same columns as the table above; f = vetoed, used as filler. The test1 #6/#7 rat
 Postable@5 hides most of these mistakes: when too few candidates survive, the vetoed ones come back as fillers (4b
 stars_v1 on test2 vetoed all 10 and still scores 3/5). The judge table (Table B in eval/BASELINE.md) shows them.
 The only unrated pick is 8b stars_v1's test2 #6 (15:57.1-16:12.1), from a failed version.
+
+# Safety prompt versions (PR 25, /launch)
+
+`safety_v*.txt` asks qwen3-vl:4b-instruct about a 2x2 sheet of 4 frames, one a second: phone on screen, menu or map,
+loading or black, cutscene, blood or gore, subtitles (safety.py). The first four block the footage. Temperature 0,
+seed 42, num_ctx 4096, thinking off. Truth for every sheet is the answer key range it lies wholly inside (test1,
+test2) or the gta5 HUD's phone stretch (Grand Theft Auto V_20261026160754 4:26-4:39.5).
+
+## safety_v1 (`safety_v1.txt`), 2026-11-17
+
+Written before any run. On set A (5 phone calls, 4 stretches of gameplay) it caught the phone on 33 of 33 sheets,
+including the call the guided profile left in, and said "phone" on none of the clean sheets. But it blocked 2 clean
+driving sheets as "menu or map" (the notes said "map visible": it read the corner minimap as a map), and one stretch
+I had picked as clean (test2 15:00-15:12) is in fact the end of Lester's cutscene, where it said "cutscene" on 1 of 3
+sheets.
+
+## safety_v2 (`safety_v2.txt`), reason logged before running
+
+Reason: the two mistakes above. It adds that the small minimap and corner icons of normal gameplay are not a menu or a
+map, and describes a cutscene as characters talking or acting while the camera cuts, usually with no minimap. It was
+written after seeing set A, so set A is in-sample. Set B (4 cutscenes, 3 menus or maps, 4 stretches of action, from
+the answer keys) was chosen before either prompt saw it.
+
+| Prompt | A: phone | A: cutscene | A: clean blocked | B: cutscene | B: menu or map | B: clean blocked |
+|---|---|---|---|---|---|---|
+| safety_v1 | 33/33 | 1/3 | 2/28 | 8/31 | 8/17 | 0/29 |
+| safety_v2 | 33/33 | 3/3 | 1/28 | 23/31 | 10/17 | 0/29 |
+
+"Caught" = any blocking answer on the sheet. v2 is the one /launch uses. With the HUD rules on, cutscenes, menus and
+maps are already never_use (no minimap), so this matters most in NO-HUD mode, where 8 of 31 cutscene sheets and 7 of
+17 menu or map sheets of set B still get through the question alone (the index's own labels are the other guard).

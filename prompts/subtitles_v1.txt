@@ -1,0 +1,5 @@
+You are reading text from gameplay of the video game {GAME}.
+The picture is 4 strips stacked from top to bottom. Each strip is the bottom part of one frame, where the game shows subtitles, in time order: strip 1 is first, strip 4 is last. A fully black strip only means there was no frame.
+For each strip, write every word of text you can read in it exactly as it is written, keeping the spelling, the letters and any symbols such as * or !. Do not correct, shorten, translate or clean up the words. Write an empty string for a strip with no readable text.
+
+Answer in JSON with these fields: strip_1, strip_2, strip_3, strip_4.

@@ -37,6 +37,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import statistics
@@ -74,7 +75,8 @@ END_MARGIN = 0.1         # seconds kept clear of the end of the file
 # stars, the bars under the minimap and Michael's iFruit call screen; its thresholds were set on test1 and test2
 # (the 210 call-screen samples of 4 calls for the phone: face up to 6, battery 147 or more, panel 19-40, spread up
 # to 11.9, tint up to 8). ---
-PROFILE_DIR = HERE / "profiles"
+# GTA_CLIPPER_PROFILES moves the profile folder (launch.py --dry-run keeps its trial profile out of the repo).
+PROFILE_DIR = Path(os.environ.get("GTA_CLIPPER_PROFILES") or HERE / "profiles")
 DEFAULT_PROFILE = "gta5"
 HUD_FPS = 2              # HUD samples per second: one per timeline step
 CHANNELS = "rgb"         # names of the colour channels in a profile's bar rules
