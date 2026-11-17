@@ -302,7 +302,8 @@ def play_by_play_and_missing_story_parts_are_refused():
 @check
 def overlays_must_name_what_they_show():
     """a circle on a word that doesn't name its evidence, a hud card on a line that cites no stars, and a pill that
-    names nothing on screen ("KEEPS GOING") are refused; a freeze label must name its evidence"""
+    names nothing on screen ("KEEPS GOING") are refused; a freeze label must name its evidence; a badge is F3's
+    own count, so any plain number passes and anything else is refused"""
     pick = chase_pick()
     bad = story_short(pick)
     bad["lines"][3]["pops"][0]["on"] = "wall"
@@ -314,7 +315,13 @@ def overlays_must_name_what_they_show():
                                                                          if e["kind"] == "event"), "label": "wow"}
     problems, _, _ = truth.check_short(bad, pick, FACTS, TODAY)
     text = " ".join(problems)
-    return ("line 4: a circle names the evidence it rings" in text and "HUD card shows the wanted stars" in text
+    counted = story_short(pick)
+    counted["lines"][1]["pops"] = [{"kind": "badge", "on": "first", "text": "1"}]
+    counted["lines"][2]["pops"] = [{"kind": "badge", "on": "second", "text": "two!"}]
+    c_problems, _, _ = truth.check_short(counted, pick, FACTS, TODAY)
+    return (not any("line 2" in p and "badge" in p for p in c_problems)
+            and any("line 3: a badge is the count's number" in p for p in c_problems)
+            and "line 4: a circle names the evidence it rings" in text and "HUD card shows the wanted stars" in text
             and "'keeps going' doesn't name anything" in text and "must name what the freeze shows" in text)
 
 

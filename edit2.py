@@ -367,6 +367,11 @@ def place_footage(script, spans, anchors):
         length = shot["frames"] / FPS
         if kind == "footage":
             lo, hi = prev_end, w1 - length
+            if lo > hi + 1e-6:                 # the moment has run out: say so, and keep the time order
+                over = lo - hi
+                problems.append(f"the Short needs {over:.1f} s more footage than its moment has ({w0:.1f}-{w1:.1f} s); "
+                                f"cut about {math.ceil(over * 3.8)} words, or say less before the action")
+                hi = lo
             here = [x for x in anchors if a - 1e-6 <= x["start"] < b]
             for x in here:                     # on screen at the word's onset, within ANCHOR_SLACK_S
                 lo = max(lo, x["from_s"] - ANCHOR_SLACK_S - (x["start"] - a))
@@ -377,7 +382,7 @@ def place_footage(script, spans, anchors):
                                     f"screen with its evidence {x.get('evidence') or ''} ({x['from_s']:.1f}-{x['to_s']:.1f} s "
                                     f"of the recording) while the footage keeps its time order; reorder the lines or "
                                     "cite what is on screen then")
-                lo = min(prev_end, w1 - length)
+                lo = prev_end                  # keep the time order; the problem above names the words
             shot["src"] = round(max(lo, w0), 3)
             prev_end = shot["src"] + length
         elif kind == "break":
@@ -391,7 +396,7 @@ def place_footage(script, spans, anchors):
             first = shots[0]["src"]
             shot["src"] = round(max(0.0, first - length), 3)
         shots.append(shot)
-    if prev_end > w1 + 1e-3:
+    if prev_end > w1 + 1e-3 and not any("more footage than its moment has" in p for p in problems):
         problems.append(f"the Short needs footage to {prev_end:.1f} s, past its moment's end ({w1:.1f} s); cut words")
     action = moment.get("action_s")
     if isinstance(action, (int, float)) and shots and shots[0]["src"] + SETUP_S > action + 1e-6:

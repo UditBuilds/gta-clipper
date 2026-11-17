@@ -487,7 +487,7 @@ def pick_three(moments, session_s, ok=lambda m: (True, []), count=3, log=print):
                 if not checked[key][0]:
                     rejected.append({"video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
                                      "score": m["score"], "why": checked[key][1]})
-                    log(f"  {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} failed the safety checks: "
+                    log(f"  {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} was skipped (safety checks or the quality gate): "
                         + "; ".join(checked[key][1]))
             if checked[key][0]:
                 return m
@@ -1439,13 +1439,14 @@ def line_anchors(line, by_id):
     out, used = [], set()
     for w in truth.words_of(line.get("say", "")):
         low = w.lower().strip("'’")
-        if low in used or low in ANCHOR_STOP:
-            continue
+        family = next((tuple(words) for words, _ in truth.WORDS if low in words), None)
+        if low in used or low in ANCHOR_STOP or (family and family in used):
+            continue                         # one anchor per thing a line names ("wanted ... stars" is one thing)
         named = [e for e in items if truth.names_item(low, e)]
         if named:                            # the item of the word's own kind first ("police" -> police seen), then the
             e = min(named, key=lambda e: (anchor_rank(low, e), e["to_s"] - e["from_s"]))   # most exact time
             out.append({"word": w, "from_s": e["from_s"], "to_s": e["to_s"], "evidence": e["id"]})
-            used.add(low)
+            used.update({low, family} - {None})
     return out
 
 
@@ -1493,8 +1494,8 @@ def story_script(short, m, folder, dry_run):
             if side.get("note"):
                 brk["note"] = side["note"]
         if brk.get("kind", "freeze") == "freeze" and short["break"].get("evidence") in by_id and "at_s" not in brk:
-            e = by_id[short["break"]["evidence"]]
-            brk["at_s"] = e.get("at_s", (e["from_s"] + e["to_s"]) / 2)
+            e = by_id[short["break"]["evidence"]]       # the first moment the detail is on screen
+            brk["at_s"] = e.get("at_s", min(e["from_s"] + 0.5, e["to_s"]))
         script["break"] = brk
     return script
 

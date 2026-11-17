@@ -325,7 +325,10 @@ def overlay_problems(n, line, by_id, nohud, facts_text):
                     e["kind"] == "stars" for e in cited):
                 out.append(f"{where}: the HUD card shows the wanted stars, so it lands on a star word of a line that "
                            "cites the stars")
-        elif kind in ("stat", "badge"):
+        elif kind == "badge":                # F3's own count (1, 2, 3), not a claim about the footage
+            if not re.fullmatch(r"\d{1,2}", str(p.get("text", "")).strip()):
+                out.append(f"{where}: a badge is the count's number (\"1\", \"2\", \"3\"), not {p.get('text')!r}")
+        elif kind == "stat":
             text = str(p.get("text", ""))
             out += [m.replace(where, f"{where} {kind} pill") for m in word_problems(text, cited, nohud, where, facts_text)]
             numbers = spoken_numbers(text)
