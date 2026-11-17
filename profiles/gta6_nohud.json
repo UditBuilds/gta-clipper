@@ -1,0 +1,152 @@
+{
+  "name": "gta6_nohud",
+  "game": "GTA 6",
+  "notes": "launch.py's no-HUD fallback: a profile that matches no HUD on purpose. Its bar rules can never pass (a colour difference of 999 is more than 255), so the minimap is never seen, the HUD rules are off (index.py labels from the vision model only, clip.py scores on loudness and picture change), and stars and phone are off. Never calibrate over it.",
+  "frame": [
+    1920,
+    1080
+  ],
+  "stretch": {
+    "min_s": 1.5,
+    "pad_s": 0.5
+  },
+  "minimap": {
+    "box": [
+      96,
+      1014,
+      272,
+      6
+    ],
+    "bars": [
+      {
+        "name": "health",
+        "x_range": [
+          104,
+          224
+        ],
+        "any_of": [
+          [
+            {
+              "hi": "g",
+              "lo": [
+                "r",
+                "b"
+              ],
+              "min": 999
+            }
+          ]
+        ]
+      },
+      {
+        "name": "armour",
+        "x_range": [
+          240,
+          290
+        ],
+        "any_of": [
+          [
+            {
+              "hi": "g",
+              "lo": [
+                "r",
+                "b"
+              ],
+              "min": 999
+            }
+          ]
+        ]
+      },
+      {
+        "name": "special ability",
+        "x_range": [
+          306,
+          360
+        ],
+        "any_of": [
+          [
+            {
+              "hi": "g",
+              "lo": [
+                "r",
+                "b"
+              ],
+              "min": 999
+            }
+          ]
+        ]
+      }
+    ],
+    "min_sat": 0.3,
+    "min_bars": 2,
+    "min_distinct": 60.0,
+    "min_share": 0.2
+  },
+  "stars": {
+    "on": false,
+    "box": [
+      1676,
+      46,
+      152,
+      42
+    ],
+    "slots": 5,
+    "first_tip_x": 1696.5,
+    "tip_spacing": 28.6,
+    "tip_y": 54.0,
+    "radius": 15.5,
+    "inner": 0.42,
+    "min_score": 0.28,
+    "boost": 3.0
+  },
+  "phone": {
+    "on": false,
+    "box": [
+      1552,
+      656,
+      248,
+      240
+    ],
+    "cell": [
+      8,
+      4
+    ],
+    "dark": {
+      "area": [
+        1560,
+        660,
+        240,
+        20
+      ],
+      "max": 15.0
+    },
+    "bright": {
+      "area": [
+        1768,
+        684,
+        24,
+        12
+      ],
+      "min_mean": 70.0
+    },
+    "grey": {
+      "areas": [
+        [
+          1560,
+          820,
+          88,
+          40
+        ],
+        [
+          1720,
+          820,
+          72,
+          40
+        ]
+      ],
+      "min": 12.0,
+      "max": 50.0,
+      "max_spread": 20.0,
+      "max_tint": 10.0
+    }
+  }
+}

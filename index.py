@@ -366,22 +366,25 @@ def parse_answer(content):
             "confidence": round(min(1.0, max(0.0, float(conf))), 2)}
 
 
-def build_request(model, prompt, image_b64, capabilities):
-    body = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE, "format": SCHEMA,
-            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}], "options": dict(OPTIONS)}
+def build_request(model, prompt, image_b64, capabilities, schema=SCHEMA, options=OPTIONS):
+    body = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE, "format": schema,
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}], "options": dict(options)}
     if "thinking" in capabilities:
         body["think"] = False
     return body
 
 
-def ask_model(model, prompt, jpeg, capabilities, http=vlm.http_json):
+def ask_model(model, prompt, jpeg, capabilities, http=vlm.http_json, schema=SCHEMA, parse=parse_answer,
+              options=OPTIONS):
     """One frame, one question. A record with the answer (or the error), the raw reply and Ollama's timings.
-    One more try with another seed if the reply can't be used. Raises IndexError_ if Ollama stops answering."""
-    body = build_request(model, prompt, base64.b64encode(Path(jpeg).read_bytes()).decode("ascii"), capabilities)
+    One more try with another seed if the reply can't be used. Raises IndexError_ if Ollama stops answering.
+    schema, parse and options default to the index's own question; safety.py asks another one with its own."""
+    body = build_request(model, prompt, base64.b64encode(Path(jpeg).read_bytes()).decode("ascii"), capabilities,
+                         schema, options)
     t0 = time.perf_counter()
     rec = {"answer": None, "error": None}
     for attempt in range(2):
-        body["options"]["seed"] = OPTIONS["seed"] + attempt
+        body["options"]["seed"] = options["seed"] + attempt
         try:
             r = http(vlm.OLLAMA_URL + "/api/chat", body, timeout=CALL_TIMEOUT)
         except (urllib.error.URLError, OSError) as e:
@@ -392,7 +395,7 @@ def ask_model(model, prompt, jpeg, capabilities, http=vlm.http_json):
                    output_tokens=r.get("eval_count"), output_s=round(r.get("eval_duration", 0) / 1e9, 2),
                    attempts=attempt + 1)
         try:
-            rec["answer"], rec["error"] = parse_answer(rec["raw"]), None
+            rec["answer"], rec["error"] = parse(rec["raw"]), None
             break
         except ValueError as e:
             rec["error"] = f"unusable answer: {e}"
@@ -597,8 +600,9 @@ def update_library(library, index):
 
 
 def index_video(video, profile=clip.DEFAULT_PROFILE, model=MODEL, every=EVERY_S, width=FRAME_W, library=LIBRARY,
-                limit_s=None, ask=ask_model, ollama=vlm, log=print, ram=free_ram_gb):
-    """Index one recording; returns the index (also written to <library>/<stem>/index.json)."""
+                limit_s=None, ask=ask_model, ollama=vlm, log=print, ram=free_ram_gb, cache_dir=None):
+    """Index one recording; returns the index (also written to <library>/<stem>/index.json). The model's answers are
+    cached in cache_dir (default <library>/_cache): a trial library can share the main library's cache."""
     video = Path(video)
     if not video.is_file():
         raise IndexError_(f"video not found: {video}")
@@ -659,8 +663,9 @@ def index_video(video, profile=clip.DEFAULT_PROFILE, model=MODEL, every=EVERY_S,
     free = free_ram_gb()
     log(f"Asking {model} about {len(times)} sheets" + (f" ({free:.1f} GB of memory free)..." if free else "..."))
     try:
-        records, stats = label_frames(video, times, frame_dir, model, model_info, prompt, library / "_cache", every,
-                                      width, ask=ask, log=log, ram=ram, unload=ollama.unload)
+        records, stats = label_frames(video, times, frame_dir, model, model_info, prompt,
+                                      Path(cache_dir or library / "_cache"), every, width, ask=ask, log=log, ram=ram,
+                                      unload=ollama.unload)
     finally:
         ollama.unload(model)   # its memory goes back as soon as the sheets are done, or the run stops
 

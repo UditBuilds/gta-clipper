@@ -817,6 +817,30 @@ def run_star_check(stem, counts, library, log=print):
     return int(found.group(1)) if found else 0
 
 
+def auto_accept(session, port=0, browser=False, guided=True):
+    """The page's part done with no person (launch.py): every guess the scan made is taken as it is, the star
+    outline it fitted is confirmed, and the profile is saved even where a rule measures one-sided ("Save anyway").
+    Returns False, with nothing saved, when the profile can't be saved at all (no bars found, no game name): the
+    caller then runs without HUD rules. Use it as run(..., serve=auto_accept)."""
+    session.event("page_opened")
+    if not session.data.get("game"):
+        session.data["game"] = guess_game(session.name)
+    for f in session.data["frames"]:
+        for k in ("hud", "stars", "phone"):
+            if f["labels"].get(k) is None and (f.get("suggest") or {}).get(k) is not None:
+                f["labels"][k] = f["suggest"][k]
+    fit = session.data["drawing"]["stars"].get("fit")
+    if fit and not session.data["drawing"]["stars"].get("off"):
+        fit["confirmed"] = True
+    try:
+        session.save_profile(True)
+    except (cal.CalibError, ValueError, KeyError) as e:
+        session.event("auto_accept_failed", why=str(e))
+        session.save()
+        return False
+    return True
+
+
 def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=False, log=print, serve=None):
     """The guided calibration, start to finish. Returns the exit code: 0 PASS (also with stars still to do), 1 FAIL
     or nothing saved, 2 it could not start."""
