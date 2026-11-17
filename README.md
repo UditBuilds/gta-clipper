@@ -656,7 +656,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 34 checks, about 2 minutes, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 37 checks, about 2 minutes, no Ollama
 ```
 
 **What prepare does.**
