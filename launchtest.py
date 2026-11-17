@@ -18,6 +18,7 @@ import index
 import launch
 import safety
 import truth
+import truth
 from footagetest import made_up_index, made_up_timeline, seg
 
 HERE = Path(__file__).resolve().parent
@@ -874,6 +875,70 @@ def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
             and any(f.startswith("CRASH") for f in first["flags"])
             and again["status"] == "READY" and again["cold_open"] is None and abs(again["length_s"] - 18.0) < 0.2
             and swapped["hook"] == "He did not see that" and swapped["cold_open"])
+
+
+# --- 5. The NO-HUD fallback ---
+
+@check
+def the_no_hud_profiles_never_see_a_hud():
+    """gta5_nohud and gta6_nohud load, their bar rules fail for every colour (so the minimap is never seen and
+    index.py's HUD rules are off: no stars, no phone, no no-minimap stretches), and their stars and phone are off"""
+    steps = range(0, 256, 51)
+    colours = [(r, g, b) for r in steps for g in steps for b in steps]
+    out = True
+    for name in ("gta5_nohud", "gta6_nohud"):
+        prof = clip.load_profile(name)
+        never = not any(clip.bar_colour_ok(c, rule) for rule in prof.bar_rules for c in colours)
+        tl = index.hud_timeline([(i * 0.5, 0.0, False, False, 0) for i in range(40)], 20.0, prof)
+        out &= (never and not prof.stars_on and not prof.phone_on and not tl["on"] and not any(tl["stars"])
+                and not any(tl["no_minimap"]) and not any(tl["phone"]))
+    return out and clip.load_profile("gta6_nohud").game == "GTA 6"
+
+
+@check
+def a_failed_calibration_runs_the_whole_night_without_hud():
+    """when the guided calibration FAILs, every recording is indexed with gta6_nohud, the run says NO-HUD MODE and
+    why, no pick has a wanted-star item or a star-rise peak, and every pick is flagged"""
+    def run(tmp):
+        tmp = Path(tmp)
+        inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
+        for d in (inp, shorts, lib):
+            d.mkdir(exist_ok=True)
+        (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
+        for name in ("GTA_20261119000000.webm", "GTA_20261119010000.webm"):
+            (inp / name).write_bytes(b"x")
+        guided_run, _ = stand_in_guided(["FAIL"])
+        asked = []
+
+        def index_video(video, profile, every, library, cache_dir, log):
+            asked.append(profile)
+            idx = made_up_idx(Path(video).stem, video)
+            idx.pop("_timeline")
+            idx["profile"]["name"] = profile
+            return idx
+
+        old = launch.probe_duration
+        launch.probe_duration = lambda v: DURATION
+        try:
+            folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
+                                    log=lambda m: None, index_video=index_video, guided_run=guided_run,
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+        finally:
+            launch.probe_duration = old
+        return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked
+    old_env = launch.os.environ.get("GTA_CLIPPER_PROFILES")
+    try:
+        data, asked = with_profile_dirs(run)
+    finally:
+        if old_env is None:
+            launch.os.environ.pop("GTA_CLIPPER_PROFILES", None)
+    picks = data["picks"]
+    return (asked == ["gta6_nohud", "gta6_nohud"] and data["calibration"]["mode"] == "nohud"
+            and "FAIL" in data["calibration"]["why"] and all(r["mode"] == "nohud" for r in data["recordings"])
+            and picks and all(p["mode"] == "nohud" for p in picks)
+            and not any(e["kind"] == "stars" for p in picks for e in p["evidence"])
+            and not any(o["kind"] == "star rise" for p in picks for o in p.get("peak_options", []))
+            and all(any(f.startswith("NO-HUD MODE") for f in p["flags"]) for p in picks))
 
 
 # --- The whole prepare stage, with stand-ins ---
