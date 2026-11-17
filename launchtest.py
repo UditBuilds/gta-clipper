@@ -16,6 +16,8 @@ import clip
 import footage_short
 import index
 import launch
+import safety
+import truth
 from footagetest import made_up_index, made_up_timeline, seg
 
 HERE = Path(__file__).resolve().parent
@@ -377,6 +379,503 @@ def _recs_for(picks):
     return {"x": None}
 
 
+# --- 2. Safety ---
+
+def stand_in_checker(tmp, rules):
+    """A safety.Checker whose model answers by time: rules is [(from_s, to_s, key)], and a sheet says yes to key when
+    it overlaps from..to. A key of None gives no usable answer. The sheets asked about are recorded with their
+    spacing."""
+    asked = []
+
+    def sheets(path, a, b, every, work):
+        return [(f0, f1, f"{f0}|{f1}|{every}") for f0, f1, _ in safety.sheet_times(a, b, every)]
+
+    def ask(model, prompt, jpg, caps, schema=None, parse=None, options=None):
+        f0, f1, every = (float(x) for x in str(jpg).split("|"))
+        asked.append((f0, f1, every))
+        answer = {"note": "a made-up answer", **{k: False for k in safety.WHAT}}
+        for a, b, key in rules:
+            if f0 < b and a < f1:
+                if key is None:
+                    return {"answer": None, "error": "unusable answer: made up", "wall_s": 0.1}
+                answer[key] = True
+        return {"answer": parse(json.dumps(answer)), "error": None, "wall_s": 0.1}
+
+    checker = safety.Checker("GTA 6", tempfile.mkdtemp(dir=tmp), ask=ask, sheets=sheets,
+                             info={"digest": "x", "capabilities": []}, log=lambda m: None)
+    return checker, asked
+
+
+def shoot_moment(rec):
+    return next(m for m in launch.mine(rec) if 380 <= m["start_s"] <= 400)
+
+
+@check
+def safety_answers_must_be_complete():
+    """the safety answer needs a note and true/false for all six questions; anything else is unusable"""
+    good = safety.parse_answer(json.dumps({"note": "car on a road", **{k: False for k in safety.WHAT}}))
+    bad = 0
+    for reply in ("not json", "[]", json.dumps({"note": "x", "phone_screen": "yes"}),
+                  json.dumps({"note": "", **{k: False for k in safety.WHAT}})):
+        try:
+            safety.parse_answer(reply)
+        except ValueError:
+            bad += 1
+    return good["phone_screen"] is False and good["note"] == "car on a road" and bad == 4
+
+
+@check
+def safety_sheets_are_4_frames_a_second_apart():
+    """make_sheets() on a real 20 s video: 2..12 s at one frame a second is 3 sheets (4, 4 and 2 frames), each a
+    2x2 grid of 640 px frames"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src.mp4"
+        launch.subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=20",
+                               "-pix_fmt", "yuv420p", str(src)], capture_output=True)
+        sheets = safety.make_sheets(src, 2.0, 12.0, 1.0, Path(tmp) / "work")
+        size = launch.subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of",
+                                      "csv=p=0", str(sheets[0][2])], capture_output=True, text=True).stdout.strip()
+    return [(a, b) for a, b, _ in sheets] == [(2.0, 6.0), (6.0, 10.0), (10.0, 12.0)] and size == "1280,720"
+
+
+@check
+def a_phone_menu_cutscene_or_loading_screen_drops_the_footage_it_is_in():
+    """the vision model says phone on screen at 6:45-6:49 (inside the shootout moment's footage): the moment fails
+    with the reason; a phone only in footage no type shows changes nothing; a sheet with no usable answer counts as
+    unsafe; a menu or a cutscene fails it too. The phone is caught with no phone calibration (the profile has none)"""
+    rec = made_up_rec()
+    m = shoot_moment(rec)
+    with tempfile.TemporaryDirectory() as tmp:
+        checker, _ = stand_in_checker(tmp, [(405.0, 409.0, "phone_screen")])
+        bad = safety.check_moment(dict(m), rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(590.0, 600.0, "phone_screen")])
+        fine = safety.check_moment(dict(m), rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(410.0, 412.0, None)])
+        unanswered = safety.check_moment(dict(m), rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(395.0, 399.0, "menu_or_map"), (405.0, 409.0, "cutscene")])
+        menu = safety.check_moment(dict(m), rec, tmp, checker)
+    return (bad[0] is False and "phone on screen" in " ".join(bad[1]) and fine[0] is True
+            and unanswered[0] is False and "no usable answer" in " ".join(unanswered[1])
+            and menu[0] is False and "cutscene" in " ".join(menu[1]))
+
+
+@check
+def blood_in_the_first_7_s_moves_the_start_once_or_drops_the_type():
+    """blood at the very start of the ACTION window moves its start 7 s later and its end with it where the clean
+    footage allows (still round its moment, still 15 s or more); blood all through it drops the type; blood later in the Short is only a flag, and so are subtitles;
+    the first 7 s are looked at twice a second"""
+    rec = made_up_rec()
+    m = shoot_moment(rec)
+    a0, a1 = launch.type_options(rec, m)["action"]["window"]
+    with tempfile.TemporaryDirectory() as tmp:
+        checker, asked = stand_in_checker(tmp, [(a0, a0 + 2.0, "blood_or_gore")])
+        moved_m = dict(m)
+        moved = safety.check_moment(moved_m, rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(a0, a1, "blood_or_gore")])
+        gone_m = dict(m)
+        safety.check_moment(gone_m, rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(a1 - 3.0, a1, "blood_or_gore"), (a1 - 3.0, a1, "subtitles")])
+        later_m = dict(m)
+        later = safety.check_moment(later_m, rec, tmp, checker)
+    return (moved[0] and moved_m["safe_options"].get("action") == [round(a0 + 7.0, 2), round(max(a1, a0 + 22.0), 2)]
+            and moved_m["safety"]["types"]["action"]["moved_for_gore"]
+            and any(every == 0.5 for _, _, every in asked)
+            and "action" not in gone_m["safe_options"]
+            and later[0] and later_m["safe_options"]["action"] == [a0, a1]
+            and any(f.startswith("BLOOD") for f in later_m["safety"]["flags"])
+            and any(f.startswith("SUBTITLES") for f in later_m["safety"]["flags"]))
+
+
+@check
+def the_index_saying_blood_counts_as_gore_too():
+    """a line of the index ("a body on the ground with blood") in the first 7 s counts as gore even when the safety
+    question says no; "no blood" doesn't"""
+    rec = made_up_rec()
+    a0 = launch.type_options(rec, shoot_moment(rec))["action"]["window"][0]
+    sheet = max((s for s in rec["sheets"] if s["t"] <= a0), key=lambda s: s["t"])
+    sheet["notable"] = "Player stands over a body on the ground with blood"
+    hits = safety.index_gore(rec, a0, a0 + 7.0)
+    sheet["notable"] = "Player shoots at gang members, no blood"
+    none = safety.index_gore(rec, a0, a0 + 7.0)
+    return len(hits) == 1 and "body" in hits[0][2] and none == []
+
+
+@check
+def no_hud_mode_asks_twice_as_often():
+    """with the HUD rules off the safety question is the only guard, so it looks every half second, not every second"""
+    with tempfile.TemporaryDirectory() as tmp:
+        rec = made_up_rec("nohud")
+        checker, asked = stand_in_checker(tmp, [])
+        safety.check_moment(dict(shoot_moment(rec)), rec, tmp, checker)
+        rec2 = made_up_rec()
+        checker2, asked2 = stand_in_checker(tmp, [])
+        safety.check_moment(dict(shoot_moment(rec2)), rec2, tmp, checker2)
+    return {e for _, _, e in asked} == {0.5} and {e for _, _, e in asked2} == {1.0, 0.5}
+
+
+@check
+def the_type_keeps_to_what_the_safety_checks_left():
+    """when the safety checks dropped NARRATED from the chase moment, it becomes an ACTION CLIP; a start the checks
+    moved for gore is the start that is used, with its own evidence"""
+    rec = made_up_rec()
+    chase = next(m for m in launch.mine(rec) if 95 <= m["start_s"] <= 130)
+    opts = launch.type_options(rec, chase)
+    a0, a1 = opts["action"]["window"]
+    n0, n1 = opts["narrated"]["window"]
+    one = dict(chase, safe_options={"action": [a0, a1]})
+    moved = dict(chase, safe_options={"action": [a0, a1], "narrated": [n0 + 7.0, n1]})
+    out = launch.choose_types([one, moved], {"rec_a": rec})
+    return (out[0]["type"] == "action" and out[0]["window"] == [a0, a1] and out[1]["type"] == "narrated"
+            and out[1]["window"] == [n0 + 7.0, n1] and all(e["to_s"] > n0 + 7.0 for e in out[1]["evidence"]))
+
+
+@check
+def footage_an_earlier_short_showed_never_comes_back():
+    """every span in _used_footage.json counts, not only the last 5 Shorts' (a pinned one too): mine() leaves them
+    all out"""
+    with tempfile.TemporaryDirectory() as tmp:
+        for k in range(8):
+            footage_short.save_used(tmp, f"short{k}", [["rec_a", 100.0 + k, 101.0 + k]])
+        footage_short.save_used(tmp, "pinned", [["rec_a", 400.0, 430.0]])
+        used = launch.all_used_spans(tmp)
+    moments = launch.mine(made_up_rec(), used)
+    return (len(used) == 9 and all(m["end_s"] <= 100.0 or m["start_s"] >= 108.0 for m in moments)
+            and all(m["end_s"] <= 400.0 or m["start_s"] >= 430.0 for m in moments))
+
+
+@check
+def a_render_over_minus_1_dbtp_is_limited_and_measured_again():
+    """a made-up mp4 whose audio peaks over 0 dBTP is limited until ffmpeg's true-peak meter reads under -1.0 dBTP
+    (the picture copied as it is); a quiet one is left alone; one a limiter can't fix stops with SafetyError"""
+    with tempfile.TemporaryDirectory() as tmp:
+        loud, quiet = Path(tmp) / "loud.mp4", Path(tmp) / "quiet.mp4"
+        for out, vol in ((loud, "volume=24dB"), (quiet, "volume=-6dB")):
+            launch.subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=3",
+                                   "-f", "lavfi", "-i", "sine=f=997:d=3", "-af", f"{vol},aformat=channel_layouts=stereo",
+                                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                                   "-shortest", str(out)], capture_output=True)
+        before = safety.true_peak(loud)
+        fixed = safety.guard_true_peak(loud, log=lambda m: None)
+        after = safety.true_peak(loud)
+        left = safety.guard_true_peak(quiet, log=lambda m: None)
+        try:
+            safety.guard_true_peak(quiet, log=lambda m: None, measure=lambda p: 0.5,
+                                   limit=lambda s, d, target: shutil.copyfile(s, d))
+            stuck = False
+        except safety.SafetyError:
+            stuck = True
+        video = launch.subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+                                       "stream=codec_name", "-of", "csv=p=0", str(loud)], capture_output=True,
+                                      text=True).stdout.strip()
+    return (before > 0.0 and after < -1.0 and fixed["after"] == after and fixed["limited_to"] is not None
+            and left["passes"] == 0 and left["before"] < -1.0 and stuck and video == "h264")
+
+
+# --- 3. Truth rules and the render stage ---
+
+FACTS = {
+    "hollow": {"id": "hollow", "claim": "Wanted stars turn hollow when the police lose sight of you.",
+               "safe_wording": "stars reportedly turn hollow when the cops lose sight of you", "status": "reported",
+               "time_sensitive": False, "checked_on": "2026-11-17", "source": "https://example.com/a"},
+    "release": {"id": "release", "claim": "GTA 6 launches on November 19, 2026.", "safe_wording":
+                "launches on November 19, 2026", "status": "confirmed", "time_sensitive": True,
+                "checked_on": "2026-11-17", "source": "https://example.com/b"},
+    "leak": {"id": "leak", "claim": "A leak.", "safe_wording": "a leak", "status": "unverified",
+             "time_sensitive": False, "checked_on": None},
+}
+TODAY = "2026-11-19"
+
+
+def chase_pick(mode="hud"):
+    """The chase moment of the made-up recording as prepare would pick it: NARRATED, with its evidence."""
+    rec = made_up_rec(mode)
+    m = next(m for m in launch.mine(rec) if 95 <= m["start_s"] <= 130)
+    pick = launch.choose_types([dict(m)], {"rec_a": rec})[0]
+    pick.update(id="M1", short=1, path=rec["path"], mode=mode)
+    return pick
+
+
+def ev(pick, kind, value=None):
+    return next(e["id"] for e in pick["evidence"] if e["kind"] == kind and (value is None or value in str(e["value"])))
+
+
+def good_narrated(pick):
+    """A script that keeps every rule with the stand-in voice's timing (6 s a line from 1:43.5): each line cites
+    what is on screen while it is spoken."""
+    police, first, two, crash = ev(pick, "police"), ev(pick, "stars", "0 to 1"), ev(pick, "stars", "1 to 2"),         ev(pick, "event", "crash")
+    hook = "The cops are right behind me"
+    return {"short": 1, "moment": "M1", "type": "narrated", "hooks": [hook, "My first chase got loud", "Two stars came fast"],
+            "star": 0, "title": "My FIRST real chase went wrong fast", "description":
+            "The wanted level climbs while a police car follows me. Then it hits a wall behind me.",
+            "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
+            "lines": [{"say": hook, "claim": "on_screen", "evidence": [police], "facts": []},
+                      {"say": "Then my first wanted star shows up.", "claim": "on_screen", "evidence": [first],
+                       "facts": []},
+                      {"say": "A few seconds later I have 2 stars.", "claim": "on_screen", "evidence": [two],
+                       "facts": []},
+                      {"say": "In GTA 6 the stars reportedly turn hollow when the cops lose sight of you.",
+                       "claim": "fact", "evidence": [], "facts": ["hollow"]},
+                      {"say": "Then a police car crashes into a wall.", "claim": "on_screen", "evidence": [crash],
+                       "facts": []}]}
+
+
+@check
+def a_narrated_line_must_point_at_what_is_on_screen():
+    """the good script passes; a line with no claim type, an on_screen line with no evidence, an unknown evidence
+    id, and evidence that is not on screen while the line is spoken are each refused with a plain reason"""
+    pick = chase_pick()
+    good = good_narrated(pick)
+    ok, _, _ = truth.check_short(good, pick, FACTS, TODAY)
+    bad = json.loads(json.dumps(good))
+    bad["lines"][1].pop("claim")
+    bad["lines"][2]["evidence"] = []
+    bad["lines"][4]["evidence"] = ["E999"]
+    problems, _, _ = truth.check_short(bad, pick, FACTS, TODAY)
+    on_time = [(103.5 + 6 * k, 109.5 + 6 * k) for k in range(5)]
+    early = on_time[:4] + [(110.0, 116.0)]                      # the crash (2:12) is not on screen during line 5
+    timed, _, _ = truth.check_short(good, pick, FACTS, TODAY, on_time)
+    late, _, _ = truth.check_short(good, pick, FACTS, TODAY, early)
+    text = " ".join(problems)
+    return (ok == [] and timed == [] and "line 2: needs \"claim\"" in text
+            and "line 3: an on_screen line must cite" in text and "no evidence E999" in text
+            and any("line 5: none of its evidence" in p for p in late) and not any("line 2: none" in p for p in late))
+
+
+@check
+def words_and_numbers_need_their_evidence():
+    """"stars" needs a HUD star item, "crash" a crash, "police" police (or a chase, or stars); a number must be in
+    the evidence ("1 to 2 stars" is, "5 stars" is not) or in a listed fact; in NO-HUD mode no line may mention stars
+    at all"""
+    pick = chase_pick()
+    by = {e["id"]: e for e in pick["evidence"]}
+    seen_only = next(e["id"] for e in pick["evidence"] if e["kind"] == "seen")
+
+    def line(say, evidence):
+        return truth.line_problems(1, {"say": say, "claim": "on_screen", "evidence": evidence, "facts": []},
+                                   by, False, FACTS)
+    rise = ev(pick, "stars", "1 to 2")
+    good = line("My wanted level goes from 1 star to 2 stars.", [rise])
+    crash_no = line("Then I crash into a wall.", [rise])
+    five = line("I hit 5 stars here.", [rise])
+    cops_ok = line("The police are on me now.", [ev(pick, "activity", "chase")])
+    nohud = truth.line_problems(1, {"say": "Two stars already.", "claim": "on_screen", "evidence": [seen_only],
+                                    "facts": []}, by, True, FACTS)
+    return (good == [] and any("\"crash\"" in p for p in crash_no) and any("number 5" in p for p in five)
+            and cops_ok == [] and any("NO-HUD" in p for p in nohud))
+
+
+@check
+def claims_about_how_the_game_works_need_a_fact():
+    """"you can", "the game", "cops will", "lets you" are refused without a fact and pass with one; a reported fact
+    must keep its safe wording, an unverified one is refused, a stale time-sensitive one is refused"""
+    pick = chase_pick()
+    by = {e["id"]: e for e in pick["evidence"]}
+    rise = ev(pick, "stars", "1 to 2")
+    refused = [truth.line_problems(1, {"say": s, "claim": "on_screen", "evidence": [rise], "facts": []}, by, False,
+                                   FACTS)
+               for s in ("You can lose two stars by hiding.", "The game gives you a star for this.",
+                         "Cops will always follow you now.", "This lets you escape faster.")]
+    lines = [{"say": "Stars turn hollow when cops lose you.", "claim": "fact", "facts": ["hollow"], "evidence": []},
+             {"say": "This is a leak.", "claim": "fact", "facts": ["leak"], "evidence": []},
+             {"say": "It launches on November 19, 2026.", "claim": "fact", "facts": ["release"], "evidence": []}]
+    fresh, _ = truth.fact_problems(lines, FACTS, "2026-11-19")
+    stale, _ = truth.fact_problems(lines[2:], FACTS, "2026-11-25")
+    return (all(any("how the game works" in p for p in r) for r in refused)
+            and any("safe wording" in p for p in fresh) and any("unverified" in p for p in fresh)
+            and not any("line 3" in p for p in fresh) and any("last checked" in p for p in stale))
+
+
+@check
+def only_jason_and_lucia_may_be_named_and_no_spoilers():
+    """Jason, Lucia, GTA 6, GTA VI and PS5 pass anywhere (also in a hook or title); another capitalised name mid
+    sentence, a trailer name even in capitals, and a story or mission word are refused"""
+    def p(text):
+        return truth.name_problems(text, "", "x") + truth.spoiler_problems(text, "x")
+    return (p("Jason and Lucia drive through GTA 6 on PS5.") == [] and p("My first hour of GTA VI with Lucia.") == []
+            and p("Then Michael shows up.") and p("BOOBIE is here.") and p("This is the final mission.")
+            and p("The story ends here.") and p("Watch what happens next.") == [])
+
+
+@check
+def hooks_titles_and_descriptions_follow_the_rules():
+    """3 hooks of 3-6 words, no emoji, a starred index; the title by make_short's rules; exactly 2 sentences of
+    description; narrated line 1 is the starred hook word for word; an ACTION CLIP has no lines"""
+    pick = chase_pick()
+    good = good_narrated(pick)
+    bad = dict(good, hooks=["Too short", good["hooks"][1], "This one has way too many words in it now"], star=0,
+               description="One sentence only.", lines=[dict(good["lines"][0], say="Something else."), *good["lines"][1:]])
+    problems, _, _ = truth.check_short(bad, pick, FACTS, TODAY)
+    problems += truth.check_short(dict(good, star=5), pick, FACTS, TODAY)[0]
+    action = dict(pick, type="action")
+    with_lines, _, _ = truth.check_short(dict(good, type="action"), action, FACTS, TODAY)
+    text = " ".join(problems)
+    return ("hook 1: 2 words" in text and "hook 3: 10 words" in text and "star:" in text
+            and "1 sentence(s)" in text and "line 1 must be the starred hook" in text
+            and any("ACTION CLIP has no narration" in p for p in with_lines))
+
+
+@check
+def an_auto_peak_must_come_from_evidence():
+    """an ACTION CLIP's peak must name one of the moment's peak options (a star rise or a crash, explosion or stunt
+    sheet) and lie within 1 s of it inside the clip; no peak, or --no-cold-open, means no cold open"""
+    m = {"window": [400.0, 425.0], "peak_options": [{"evidence": "E5", "from_s": 408.0, "to_s": 414.0}]}
+    good = launch.check_peak({"peak": {"evidence": "E5", "at_s": 411.2}}, m, False)
+    far = launch.check_peak({"peak": {"evidence": "E5", "at_s": 420.0}}, m, False)
+    other = launch.check_peak({"peak": {"evidence": "E2", "at_s": 411.0}}, m, False)
+    none = launch.check_peak({}, m, False)
+    off = launch.check_peak({"peak": {"evidence": "E5", "at_s": 411.2}}, m, True)
+    return (good == (411.2, []) and far[0] is None and "within" in far[1][0] and other[0] is None
+            and "not one of" in other[1][0] and none == (None, []) and off == (None, []))
+
+
+def run_folder_with(tmp, picks, shorts, dry=False):
+    folder = Path(tmp) / "launch-2026-11-19"
+    folder.mkdir(parents=True)
+    cand = {"game": "gta6", "game_name": "GTA 6", "dry_run": dry, "picks": picks, "settings": {"library": str(tmp)},
+            "recordings": [{"name": "rec_a.webm", "path": picks[0]["path"], "duration_s": 600.0, "mode": "hud",
+                            "hud_check": None}],
+            "calibration": {"profile": "gta6", "why": "made up"}, "timing_s": {"index": 75.0}}
+    (folder / "candidates.json").write_text(json.dumps(cand), encoding="utf-8")
+    (folder / "shorts.json").write_text(json.dumps({"shorts": shorts}), encoding="utf-8")
+    return folder
+
+
+def stand_in_voice(path, root):
+    """Every line 6 s, shared by its beats; a 1.5 s loop ending."""
+    script = json.loads(Path(path).read_text(encoding="utf-8"))
+    lines = [[6.0 / len(l["beats"])] * len(l["beats"]) for l in script["lines"]]
+    return {"total_s": 6.0 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": {}}
+
+
+def stand_in_explainer(resolved, out):
+    script = json.loads(Path(resolved).read_text(encoding="utf-8"))
+    visuals = [{"line": n + 1, "source": f"{b['file']}@{b['at']}", "seconds": 6.0 / len(l["beats"]),
+                "source_start_s": float(b["at"]), "loop_tail": False}
+               for n, l in enumerate(script["lines"]) for b in l["beats"]]
+    (Path(out) / "log.json").write_text(json.dumps({"visuals": visuals, "durations": {"video_s": 24.0}}), encoding="utf-8")
+    made = launch.subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=108x192:d=1",
+                                  "-f", "lavfi", "-i", "sine=f=440:d=1", "-c:v", "libx264", "-c:a", "aac", "-shortest",
+                                  str(Path(out) / "short.mp4")], capture_output=True)
+    return made.returncode == 0
+
+
+@check
+def a_narrated_short_plays_its_moment_on_and_is_logged():
+    """render() with a stand-in voice and explainer: the footage plays on from beat to beat (each starts where the
+    one before ended) with its game sound, the timed check passes, claims.txt lists every line with its evidence,
+    upload.txt has the title, description and hashtags, render.json says READY, the shown footage is logged in
+    _used_footage.json, and review.html shows the video, the starred hook, the evidence and the commands"""
+    pick = chase_pick()
+    with tempfile.TemporaryDirectory() as tmp:
+        shorts = Path(tmp) / "shorts"
+        shorts.mkdir()
+        folder = run_folder_with(tmp, [pick], [good_narrated(pick)])
+        data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
+                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+        entry = data["shorts"][0]
+        out = Path(entry["folder"])
+        script = json.loads((out / "script_resolved.json").read_text(encoding="utf-8"))
+        claims = (out / "claims.txt").read_text(encoding="utf-8")
+        upload = (out / "upload.txt").read_text(encoding="utf-8")
+        used = json.loads((shorts / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
+        page = (folder / "review.html").read_text(encoding="utf-8")
+    ats = [float(b["at"]) for l in script["lines"] for b in l["beats"]]
+    steps = [b - a for a, b in zip(ats, ats[1:])]
+    return (entry["status"] == "READY" and ats[0] == pick["window"][0] and all(s > 0 for s in steps)
+            and all(b.get("sound") is True for l in script["lines"] for b in l["beats"])
+            and script["voice"] == "am_puck" and "Line 5 (on_screen): Then a police car crashes into a wall." in claims
+            and "REPORTED" in claims and "My FIRST real chase went wrong fast" in upload and "#GTAVI" in upload
+            and used["shorts"][0]["spans"][0][0] == "rec_a" and "<video" in page and "&#11088; The cops" in page
+            and "--hook 2" in page and any(f.startswith("REPORTED FACT") for f in entry["flags"]))
+
+
+@check
+def a_short_that_breaks_a_rule_is_not_rendered_and_says_why():
+    """a narrated Short whose line names a crash it can't show is FAILED with the reason on the review page and in
+    render.json, nothing is logged as used, and the other Short still renders; a dry run logs nothing either"""
+    pick = chase_pick()
+    second = dict(pick, short=2, id="M2")
+    bad = good_narrated(pick)
+    bad["lines"][1]["say"] = "A police car crashes right behind me."
+    good = dict(good_narrated(second), short=2, moment="M2")
+    with tempfile.TemporaryDirectory() as tmp:
+        shorts = Path(tmp) / "shorts"
+        shorts.mkdir()
+        folder = run_folder_with(tmp, [pick, second], [bad, good])
+        data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
+                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+        page = (folder / "review.html").read_text(encoding="utf-8")
+        used = json.loads((shorts / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as tmp:
+        shorts = Path(tmp) / "shorts"
+        shorts.mkdir()
+        folder = run_folder_with(tmp, [pick], [good_narrated(pick)], dry=True)
+        launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
+                      timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+        dry_logged = (shorts / footage_short.USED_FOOTAGE).exists()
+        dry_page = (folder / "review.html").read_text(encoding="utf-8")
+    first, second_e = data["shorts"]
+    return (first["status"] == "FAILED" and any("\"crash" in p for p in first["problems"])
+            and second_e["status"] == "READY" and len(used["shorts"]) == 1 and "NOT RENDERED" in page
+            and "Problems (not rendered)" in page and not dry_logged and "DRY RUN" in dry_page)
+
+
+def made_up_footage(path, seconds=60):
+    """A real video with sound: a moving test picture and a tone with loud bursts."""
+    return launch.subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=s=1280x720:r=30:d={seconds}", "-f", "lavfi",
+         "-i", f"sine=f=330:d={seconds}", "-af", "volume='if(lt(mod(t,10),1),8,1)':eval=frame",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(path)],
+        capture_output=True).returncode == 0
+
+
+@check
+def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
+    """render() of an ACTION CLIP on a real made-up video: the clip is cut to 1080x1920, the starred hook is burned
+    in, the auto peak gives a cold open (the Short is longer than its window by the cold open) and is flagged AUTO
+    PEAK with the command to drop it; the music bed is mixed under the game sound; the true peak is under -1.0 dBTP;
+    --short 1 --no-cold-open renders it again without the cold open, and --hook 1 swaps in the first hook"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src, music = Path(tmp) / "rec_b.mp4", Path(tmp) / "bed.wav"
+        if not made_up_footage(src):
+            return False
+        launch.subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=220:d=40", str(music)],
+                              capture_output=True)
+        pick = {"id": "M1", "short": 1, "type": "action", "video": "rec_b", "path": str(src), "mode": "hud",
+                "window": [20.0, 38.0], "flags": [], "type_why": "made up", "span": [0.0, 60.0],
+                "evidence": [{"id": "E1", "kind": "event", "value": "crash", "from_s": 28.0, "to_s": 34.0,
+                              "numbers": [], "source": "made up \"car crashes\""}],
+                "peak_options": [{"evidence": "E1", "from_s": 28.0, "to_s": 34.0}]}
+        short = {"short": 1, "type": "action", "hooks": ["He did not see that", "Wait for the crash", "That wall came fast"],
+                 "star": 1, "peak": {"evidence": "E1", "at_s": 30.0}, "title": "This CRASH came out of absolutely nowhere",
+                 "description": "A drive ends against a wall. It all happens in one second.",
+                 "hashtags": ["#GTA6", "#GTAVI", "#Shorts"]}
+        shorts = Path(tmp) / "shorts"
+        shorts.mkdir()
+        folder = run_folder_with(tmp, [pick], [short])
+        old = launch.pick_music
+        launch.pick_music = lambda seconds, seed: (music, "made up")
+        try:
+            first = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS,
+                                  checker=None, indexes=[])["shorts"][0]
+            tp = safety.true_peak(first["files"]["short.mp4"]) if first["status"] == "READY" else None
+            size = launch.subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
+                                          "stream=width,height", "-of", "csv=p=0", first["files"]["short.mp4"]],
+                                         capture_output=True, text=True).stdout.strip()
+            again = launch.render(folder, 1, None, True, shorts_dir=shorts, today=TODAY, log=lambda m: None,
+                                  facts=FACTS, checker=None, indexes=[])["shorts"][0]
+            swapped = launch.render(folder, 1, 1, False, shorts_dir=shorts, today=TODAY, log=lambda m: None,
+                                    facts=FACTS, checker=None, indexes=[])["shorts"][0]
+        finally:
+            launch.pick_music = old
+    return (first["status"] == "READY" and first["hook"] == "Wait for the crash" and first["cold_open"]
+            and first["length_s"] > 18.0 + 0.5 and tp is not None and tp < -1.0 and size == "1080,1920"
+            and any(f.startswith("AUTO PEAK") for f in first["flags"]) and first["music"] == "bed.wav"
+            and any(f.startswith("CRASH") for f in first["flags"])
+            and again["status"] == "READY" and again["cold_open"] is None and abs(again["length_s"] - 18.0) < 0.2
+            and swapped["hook"] == "He did not see that" and swapped["cold_open"])
+
+
 # --- The whole prepare stage, with stand-ins ---
 
 @check
@@ -415,7 +914,7 @@ def prepare_writes_candidates_with_evidence_and_logs_the_run():
             folder = launch.prepare("gta6", videos=[str(v) for v in vids] if dry else None, dry_run=dry,
                                     input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
                                     log=lambda m: None, index_video=index_video, guided_run=guided_run,
-                                    clip_runner=lambda v, p: None, check=False, sheets=False)
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
         finally:
             launch.probe_duration = old
         data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))

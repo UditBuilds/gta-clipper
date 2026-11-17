@@ -729,6 +729,10 @@ def footage_short(script_path, check_only=False, shorts_dir=SHORTS_DIR, root=mak
                          "add words, or change the speed, 1.1 at most)")
     spans = shown_spans(run_log, sorted({r["path"] for r in footage_rows}))
     not_ready += unclean(spans, pool)
+    # Footage a beat pinned with "file" + "at" is logged too (PR 25), so no later Short shows it again. It is not
+    # checked against the index (the script chose it), only remembered.
+    pinned = sorted({str(r["path"]) for r in rows if r["source"] == "named file" and r.get("start_s") is not None})
+    logged = spans + [s for s in shown_spans(run_log, pinned) if s not in spans]
     on_screen = {(s["line"], str(Path(s["video"]))) for s in spans if s["what"] == "a beat"}
     for r in footage_rows:
         if (r["line"], str(Path(r["path"]))) not in on_screen:
@@ -739,7 +743,7 @@ def footage_short(script_path, check_only=False, shorts_dir=SHORTS_DIR, root=mak
     (out / "picks.json").write_text(json.dumps(picks_file, indent=1, ensure_ascii=False), encoding="utf-8")
     ready = not not_ready
     if ready:
-        save_used(shorts_dir, name, [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in spans])
+        save_used(shorts_dir, name, [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in logged])
         picker.save_used(name, [p["file"] for p in rock if p.get("file")], used_log)
     log(f"Folder: {out}")
     for item in ("short.mp4", "picks.html", "picks.json", "script.json", "upload.txt", "claims.txt", "pacing.txt"):

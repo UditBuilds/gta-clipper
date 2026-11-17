@@ -51,6 +51,8 @@ import clip
 import footage_short
 import index
 import library
+import safety as safety_checks
+import truth
 import vlm
 
 HERE = Path(__file__).resolve().parent
@@ -645,8 +647,16 @@ def choose_types(picks, recs):
     better fit; one that fits neither gets whatever window it has (ACTION first) and a "weak moment" flag. Then, when
     all picks have one type and a pick could be the other, the pick with the smallest difference changes."""
     for m in picks:
-        opts = type_options(recs[m["video"]], m)
+        rec = recs[m["video"]]
+        opts = type_options(rec, m)
         m["anchor_s"] = opts["anchor_s"]
+        if "safe_options" in m:          # the safety checks dropped a type, or moved its start past gore
+            for k in ("action", "narrated"):
+                if k in opts and k not in m["safe_options"]:
+                    del opts[k]
+                elif k in opts and list(m["safe_options"][k]) != list(opts[k]["window"]):
+                    opts[k]["window"] = list(m["safe_options"][k])
+                    opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
         m["options"] = {k: v for k, v in opts.items() if k in ("action", "narrated")}
         fits = [k for k in ("action", "narrated") if opts.get(k, {}).get("fits")]
         if len(fits) == 1:
@@ -716,10 +726,11 @@ def preflight(model, log=print):
 
 
 def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run=False, input_dir=INPUT,
-            shorts_dir=SHORTS_DIR, library_dir=index.LIBRARY, day=None, slots=None, safety=None, log=print,
+            shorts_dir=SHORTS_DIR, library_dir=index.LIBRARY, day=None, slots=None, safety="auto", log=print,
             index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True):
-    """The prepare stage; returns the run folder (with candidates.json). index_video, guided_run, clip_runner and
-    safety are swapped for stand-ins by the tests; check=False skips the Ollama/memory pre-flight."""
+    """The prepare stage; returns the run folder (with candidates.json). safety "auto" asks the safety question
+    through Ollama (safety.Checker), None skips it. index_video, guided_run, clip_runner and safety are swapped for
+    stand-ins by the tests; check=False skips the Ollama/memory pre-flight."""
     t_start = time.perf_counter()
     timing = {}
     if game not in GAMES:
@@ -816,10 +827,16 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         m["id"] = f"M{k}"
     log(f"Moments: {len(moments)} found; the best: "
         + "; ".join(f"{m['id']} {m['video']} {hms(m['start_s'])} {m['category']} {m['score']:.1f}" for m in moments[:5]))
+    if safety == "auto":
+        safety = safety_checks.Checker(GAMES[game]["name"], Path(library_dir) / "_cache", log=log)
     ok = (lambda m: safety(m, recs[m["video"]], folder)) if safety else (lambda m: (True, []))
     picks, rejected = pick_three(moments, offset, ok, log=log)
     picks = choose_types(picks, recs)
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
+    if isinstance(safety, safety_checks.Checker):
+        timing["safety_model"] = round(safety.seconds, 1)
+        log(f"Safety checks: {safety.calls} model call(s), {safety.cached} cached, {safety.seconds:.0f} s")
+        safety_checks.vlm.unload(safety.model)
     if not picks:
         raise LaunchError("no moment passed the checks: nothing to make a Short from")
     if sheets:
@@ -829,6 +846,9 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             m["sheet"] = str(out) if moment_sheet(m["path"], m["window"][0], m["window"][1], out) else None
     for n, m in enumerate(picks, 1):
         m["short"] = n
+        m.setdefault("flags", []).extend((m.get("safety") or {}).get("flags", []))
+        if m["type"] == "action":
+            m["peak_options"] = peak_options(recs[m["video"]], m, folder, strips=sheets)
         if m["mode"] == "nohud":
             m.setdefault("flags", []).append("NO-HUD MODE: no wanted-star counts; narration may not mention stars")
     timing["total"] = round(time.perf_counter() - t_start, 1)
@@ -858,6 +878,568 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     return folder
 
 
+# ======================================================================================================================
+# render: Claude's shorts.json -> checked, rendered Shorts, upload.txt, claims.txt and review.html
+# ======================================================================================================================
+
+GTA_ROOT = footage_short.make_short.GTA_ROOT
+SHORTS_FILE = "shorts.json"              # in the run folder: what Claude wrote
+RENDER_LOG = "render.json"               # in the run folder: what render made of it
+END_PILL = "@NeonGetaway • Subscribe"
+NARRATED_LENGTH = (20.0, 35.0)
+GAME_LUFS, MUSIC_LUFS = -14.0, -28.0     # an ACTION CLIP: the game's sound (as loud as every Short), the music bed 14 LU under it
+MIX_LIMIT_DB = -1.5                      # the final mix goes through a true-peak limiter at this; the guard wants < -1
+MUSIC_FADE_IN_S, MUSIC_FADE_OUT_S = 0.5, 1.0
+PEAK_EVERY_S = 0.2                       # a peak strip: a frame every 0.2 s round the moment Claude picks the hit from
+PEAK_SLACK_S = 1.0                       # an AUTO PEAK must lie this close to the evidence it names
+HOOK_SECONDS = 3.0
+
+
+class RenderProblem(Exception):
+    """One Short can't be rendered as written; the text lists every problem (Claude fixes shorts.json and reruns)."""
+
+
+def peak_strip(path, a, b, out, every=PEAK_EVERY_S, cols=6, width=320):
+    """Frames every `every` s from a to b of a recording, each with its time on it: Claude picks the hit from it."""
+    return moment_sheet(path, a, b, out, every=every, cols=cols, width=width)
+
+
+def peak_options(rec, m, folder, strips=True):
+    """Where an ACTION CLIP's auto peak may be, from evidence only (the owner's rule): each star rise (the exact half
+    second the HUD changed) and each crash, explosion or stunt sheet, with a strip of frames 0.2 s apart round it.
+    Never clip.py's peak_time_s."""
+    out = []
+    w0, w1 = m["window"]
+    for e in m["evidence"]:
+        if e["kind"] == "stars" and "at_s" in e:
+            a, b = e["at_s"] - 1.5, e["at_s"] + 1.5
+        elif e["kind"] == "event" and e["value"] in ("crash", "explosion", "stunt"):
+            a, b = e["from_s"], e["to_s"]
+        else:
+            continue
+        a, b = max(w0, a), min(w1, b)
+        if b - a < 1.0:
+            continue
+        opt = {"evidence": e["id"], "kind": e["value"] if e["kind"] == "event" else "star rise", "from_s": round(a, 2),
+               "to_s": round(b, 2), "every_s": PEAK_EVERY_S, "at_s": e.get("at_s")}
+        if strips:
+            strip = Path(folder) / "moments" / f"{m['id']}_peak_{e['id']}.jpg"
+            opt["strip"] = str(strip) if peak_strip(m["path"], a, b, strip) else None
+        out.append(opt)
+    return out
+
+
+def latest_run(shorts_dir=SHORTS_DIR):
+    """The newest run folder that has candidates.json: the last one in _launch_runs.json, else the newest on disk."""
+    runs = [Path(r["folder"]) for r in load_runs(shorts_dir)["runs"] if r.get("status") in ("prepared", "rendered")]
+    runs = [r for r in runs if (r / "candidates.json").is_file()]
+    if runs:
+        return runs[-1]
+    found = sorted(Path(shorts_dir).glob("launch-*/candidates.json"), key=lambda p: p.stat().st_mtime)
+    if not found:
+        raise LaunchError(f"no /launch run in {shorts_dir}: run launch.py prepare first")
+    return found[-1].parent
+
+
+def moment_for(cand, short):
+    for m in cand["picks"]:
+        if short.get("short") == m["short"] or (short.get("moment") and short["moment"] == m["id"]):
+            return m
+    raise RenderProblem(f"short {short.get('short')}: no pick with that number (or moment id) in candidates.json")
+
+
+def check_peak(short, m, no_cold_open):
+    """(peak in the recording's seconds or None, problems). The peak must name an evidence item of the moment's
+    peak_options and lie within PEAK_SLACK_S of it, inside the clip."""
+    peak = short.get("peak")
+    if no_cold_open or peak is None:
+        return None, []
+    if not isinstance(peak, dict) or not isinstance(peak.get("at_s"), (int, float)) or isinstance(peak.get("at_s"), bool):
+        return None, ["peak: {\"evidence\": \"E4\", \"at_s\": seconds in the recording}, or null for no cold open"]
+    at = float(peak["at_s"])
+    opts = [o for o in m.get("peak_options", []) if o["evidence"] == peak.get("evidence")]
+    if not opts:
+        names = ", ".join(o["evidence"] for o in m.get("peak_options", [])) or "none: this moment gets no cold open"
+        return None, [f"peak: evidence {peak.get('evidence')!r} is not one of this moment's peak options ({names})"]
+    o = opts[0]
+    w0, w1 = m["window"]
+    if not (o["from_s"] - PEAK_SLACK_S <= at <= o["to_s"] + PEAK_SLACK_S and w0 + 0.5 <= at <= w1 - 0.8):
+        return None, [f"peak: {at:.1f} s is not within {PEAK_SLACK_S:g} s of {o['evidence']} "
+                      f"({o['from_s']:.1f}-{o['to_s']:.1f} s) inside the clip ({w0:.1f}-{w1:.1f} s)"]
+    return round(at, 2), []
+
+
+def tools():
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        raise LaunchError("ffmpeg and ffprobe must be on PATH")
+    return ffmpeg, ffprobe
+
+
+def pick_music(seconds, seed):
+    import explainer
+    music, note = explainer.pick_music("auto", GTA_ROOT, seconds, seed)
+    return (Path(music) if music else None), note
+
+
+def mix_music(src, music, dst, seconds, has_game):
+    """dst = src's picture as it is, with the game's sound at GAME_LUFS and a music bed MUSIC_LUFS under it (faded in
+    and out), through the true-peak limiter. No music: the game alone; no game sound: the music alone, a little up."""
+    inputs = ["-i", str(src)] + (["-stream_loop", "-1", "-i", str(music)] if music else [])
+    fade = (f"afade=t=in:d={MUSIC_FADE_IN_S:g},afade=t=out:st={max(0.0, seconds - MUSIC_FADE_OUT_S):.3f}:"
+            f"d={MUSIC_FADE_OUT_S:g}")
+    fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+    parts = []
+    if has_game:
+        parts.append(f"[0:a]{fmt},loudnorm=I={GAME_LUFS:g}:TP=-2:LRA=11,{fmt}[g]")
+    if music:
+        level = MUSIC_LUFS if has_game else GAME_LUFS - 4
+        parts.append(f"[1:a]{fmt},atrim=0:{seconds:.3f},loudnorm=I={level:g}:TP=-2:LRA=11,{fmt},{fade}[m]")
+    if has_game and music:
+        parts.append(f"[g][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+                     f"{safety_checks.limiter(MIX_LIMIT_DB)}[a]")
+    elif has_game or music:
+        parts.append(f"[{'g' if has_game else 'm'}]{safety_checks.limiter(MIX_LIMIT_DB)}[a]")
+    else:
+        shutil.copyfile(src, dst)
+        return
+    done = subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "0:v",
+                           "-c:v", "copy", "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                           "-t", f"{seconds:.3f}", "-movflags", "+faststart", str(dst)], capture_output=True, text=True)
+    if done.returncode:
+        raise RenderProblem(f"ffmpeg could not mix the music in: {done.stderr.strip()[-400:]}")
+
+
+def render_action(short, m, out_dir, hook, peak, log=print):
+    """An ACTION CLIP: the window cut to 1080x1920 exactly as clip.py cuts its clips, then hooks.py's banner (3 s),
+    cold open and punch-in zoom at the auto peak, then the music bed under the game's sound and the limiter. Returns
+    what was done."""
+    import hooks
+    ffmpeg, ffprobe = tools()
+    video = Path(m["path"])
+    info = clip.probe(ffprobe, video)
+    range_fix = clip.needs_range_fix(info["video_codec"], info["color_range"])
+    encoder, enc_args = clip.pick_encoder(ffmpeg)
+    w0, w1 = m["window"]
+    raw = out_dir / "clip_01.mp4"
+    clip.render(ffmpeg, video, {"start_s": w0, "duration_s": round(w1 - w0, 3)}, raw, False, enc_args,
+                info["has_audio"], range_fix)
+    typed = hook + (f" | peak: {peak - w0:.2f}" if peak is not None else "")
+    opts = {"style": hooks.DEFAULT_STYLE, "seconds": HOOK_SECONDS, "cold_open": True, "zoom": True}
+    try:
+        plan = hooks.plan_clip({"rank": 1, "file": raw.name}, typed, out_dir, ffmpeg, ffprobe, opts)
+        hooks.burn_clip(plan, out_dir, ffmpeg, enc_args)
+    except hooks.HookError as e:
+        raise RenderProblem(f"the hook could not be burned in: {e}") from None
+    final = out_dir / f"{plan['cid']}_final.mp4"
+    music, note = pick_music(plan["final_s"], short.get("title", ""))
+    mix_music(final, music, out_dir / "short.mp4", plan["final_s"], plan["has_game"])
+    for f in (raw, final, out_dir / f"{plan['cid']}_hook.ass"):
+        f.unlink(missing_ok=True)
+    return {"length_s": round(plan["final_s"], 2), "cold_open": plan["cold"], "zoom_at_s": plan["zoom"],
+            "music": music.name if music else None, "music_note": note, "encoder": encoder,
+            "shown": [[Path(m["path"]).stem, w0, w1]]}
+
+
+def layout(line, n, by_id):
+    """A narrated line's beats: lines about the stars float the footage as a 16:9 card (the HUD stays in view);
+    the others are full screen, then a card, alternating which comes first, so the picture changes."""
+    stars = any(by_id.get(i, {}).get("kind") == "stars" for i in line.get("evidence", []))
+    if stars:
+        return ["card"]
+    return ["full", "card"] if n % 2 == 0 else ["card", "full"]
+
+
+def narrated_script(short, m, ats=None):
+    """The explainer.py script for a narrated Short: the voice (am_puck), captions, music, sound effects and the
+    subscribe pill as every Short, over the moment's footage playing on in real time: each beat starts where the one
+    before it ended. ats: the start of every beat, per line; None puts every beat at the window's start (only for
+    timing, which doesn't depend on it)."""
+    by_id = {e["id"]: e for e in m["evidence"]}
+    lines = []
+    for n, line in enumerate(short["lines"]):
+        beats = []
+        for k, kind in enumerate(layout(line, n, by_id)):
+            at = ats[n][k] if ats else m["window"][0]
+            beat = {"beat": kind, "file": m["path"], "at": f"{at:.3f}", "sound": True}
+            if kind == "card":
+                beat["card_aspect"] = "16:9"
+            beats.append(beat)
+        out = {"say": line["say"], "beats": beats}
+        for key in ("green", "red"):
+            if isinstance(line.get(key), list):
+                out[key] = line[key]
+        lines.append(out)
+    speed = short.get("speed", 1.0)
+    return {"title": short["title"], "voice": "am_puck", "speed": speed if isinstance(speed, (int, float)) else 1.0,
+            "music": "auto", "sfx": True, "end_pill": END_PILL, "lines": lines}
+
+
+def render_narrated(short, m, out_dir, facts, today, indexes, log=print, timing=None, render=None):
+    """A NARRATED Short: time the voice, put each beat's footage where the one before ended, check every line
+    against the evidence on screen while it is spoken, render with explainer.py, then check what got on screen."""
+    import explainer
+    w0, w1 = m["window"]
+    path = out_dir / "script_timing.json"
+    path.write_text(json.dumps(narrated_script(short, m), indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        times = (timing or explainer.timing)(path, GTA_ROOT)
+    except explainer.ScriptError as e:
+        raise RenderProblem(f"explainer.py can't read the script: {e}") from None
+    finally:
+        path.unlink(missing_ok=True)
+    total = times["total_s"]
+    words = footage_short.make_short.spoken_words({"lines": short["lines"]})
+    problems = []
+    room = w1 - w0
+    top = min(NARRATED_LENGTH[1], room)
+    if not NARRATED_LENGTH[0] <= total <= top:
+        rate = words / max(total, 1.0)
+        change = round((min(max(total, NARRATED_LENGTH[0] + 2), top - 1) - total) * rate)
+        problems.append(f"the voice comes to {total:.1f} s with {words} words; this Short can be {NARRATED_LENGTH[0]:g}-"
+                        f"{top:.0f} s (its clean footage is {room:.0f} s). {'Add' if change > 0 else 'Cut'} about "
+                        f"{abs(change)} words")
+    ats, spans, t = [], [], w0
+    for n, line_lengths in enumerate(times["lines"]):
+        ats.append([])
+        start = t
+        for seconds in line_lengths:
+            ats[-1].append(round(t, 3))
+            t += seconds
+        spans.append((round(start, 2), round(t, 2)))
+    more, flags, claims = truth.check_short(short, m, facts, today, spans)
+    problems += more
+    if problems:
+        raise RenderProblem("\n  ".join(problems))
+    script = narrated_script(short, m, ats)
+    resolved = out_dir / "script_resolved.json"
+    resolved.write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+    if render:
+        render(resolved, out_dir)
+    else:
+        try:
+            explainer.render(resolved, GTA_ROOT, SHORTS_DIR, run_dir=out_dir)
+        except explainer.ScriptError as e:
+            raise RenderProblem(f"explainer.py can't render it: {e}") from None
+    run_log = json.loads((out_dir / "log.json").read_text(encoding="utf-8"))
+    shown = footage_short.shown_spans(run_log, [m["path"]])
+    bad = footage_short.unclean(shown, indexes)
+    if bad:
+        raise RenderProblem("what got on screen is not all clean footage:\n  " + "\n  ".join(bad))
+    (out_dir / "claims.txt").write_text(truth.claims_text(short, m, claims, facts), encoding="utf-8")
+    return {"length_s": round((run_log.get("durations") or {}).get("video_s", total), 2), "flags": flags,
+            "line_spans": spans, "music": Path((run_log.get("music") or {}).get("file") or "").name or None,
+            "shown": [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in shown]}
+
+
+def short_folder(folder, n, title):
+    return Path(folder) / f"{n}-{footage_short.make_short.slug_of(title or 'short')[:40]}"
+
+
+def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
+               checker=None, timing=None, narrated_render=None, action_render=None):
+    """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems)."""
+    m = moment_for(cand, short)
+    n = m["short"]
+    hooks_list = short.get("hooks") or []
+    star = short.get("star")
+    if hook_choice is not None:
+        star = hook_choice - 1
+        short = dict(short, star=star)
+    entry = {"short": n, "moment": m["id"], "type": m["type"], "status": "FAILED", "problems": [],
+             "flags": list(m.get("flags", [])), "hooks": hooks_list, "star": star, "title": short.get("title"),
+             "video": m["video"], "window": m["window"]}
+    out = short_folder(folder, n, short.get("title"))
+    entry["folder"] = str(out)
+    problems, flags, _ = truth.check_short(short, m, facts, today)
+    peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" else (None, []))
+    problems += peak_problems
+    if problems:
+        entry["problems"] = problems
+        return entry
+    out.mkdir(parents=True, exist_ok=True)
+    hook = hooks_list[star]
+    try:
+        if m["type"] == "action":
+            if peak is not None and checker is not None:
+                cold = safety_checks.first_seconds(m["window"][0], peak)[0]
+                gore = safety_checks.gore_in(checker, recs_stub(m), m["path"], [cold], out / "safety")
+                if gore:
+                    flags.append("NO COLD OPEN: the auto peak shows blood (" + "; ".join(safety_checks.fmt(gore)) + ")")
+                    peak = None
+            done = (action_render or render_action)(short, m, out, hook, peak, log)
+            if peak is not None:
+                flags.append(f"AUTO PEAK at {library.hms(peak)} ({peak:.1f} s of {m['video']}), from "
+                             f"{short['peak'].get('evidence')}: the cold open and the zoom use it. Wrong? Re-render "
+                             "without it (command below)")
+        else:
+            done = render_narrated(short, m, out, facts, today, indexes, log, timing, narrated_render)
+            flags += done.pop("flags", [])
+    except RenderProblem as e:
+        entry["problems"] = [str(e)]
+        return entry
+    tp = safety_checks.guard_true_peak(out / "short.mp4", log=lambda s: log("  " + s))
+    (out / "upload.txt").write_text(footage_short.make_short.upload_text(short), encoding="utf-8")
+    if any(e["kind"] == "event" and e["value"] == "crash" for e in m["evidence"]):
+        flags.append("CRASH: check that it looks cinematic, not clumsy")
+    flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue); listen once before uploading")
+    entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
+                 files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
+    return entry
+
+
+def recs_stub(m):
+    """What safety.gore_in needs to read the index's lines for one moment (they were saved with its evidence)."""
+    seen = [{"t": e["from_s"], "notable": e["value"]} for e in m["evidence"] if e["kind"] == "seen"]
+    return {"sheets": seen, "every": (seen[1]["t"] - seen[0]["t"]) if len(seen) > 1 else index.EVERY_S}
+
+
+def commands(folder, n):
+    py = r".\.venv-tts\Scripts\python.exe launch.py render"
+    return {"no_cold_open": f'{py} --run "{folder}" --short {n} --no-cold-open',
+            "hook": [f'{py} --run "{folder}" --short {n} --hook {k}' for k in (1, 2, 3)]}
+
+
+def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
+           facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None):
+    """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
+    Returns the render.json data; review.html is written next to it."""
+    import facts as facts_file
+    folder = Path(folder) if folder else latest_run(shorts_dir)
+    cand = read_json(folder / "candidates.json")
+    written = read_json(folder / SHORTS_FILE)
+    if cand is None:
+        raise LaunchError(f"no candidates.json in {folder}: run launch.py prepare first")
+    if not isinstance(written, dict) or not isinstance(written.get("shorts"), list):
+        raise LaunchError(f"{folder / SHORTS_FILE} is missing or has no \"shorts\" list (Claude writes it)")
+    today = today or date.today().isoformat()
+    facts = facts if facts is not None else facts_file.load_facts()
+    indexes = indexes if indexes is not None else library.load_library(cand["settings"]["library"])
+    if checker == "auto":
+        try:
+            checker = safety_checks.Checker(cand["game_name"], index.LIBRARY / "_cache", log=log)
+        except vlm.VlmError as e:
+            log(f"  Note: the auto peak's gore check is off ({e}); the cold open is flagged for a look")
+            checker = None
+    old = read_json(folder / RENDER_LOG) or {"shorts": []}
+    results = {e["short"]: e for e in old.get("shorts", [])}
+    for short in written["shorts"]:
+        if only is not None and short.get("short") != only:
+            continue
+        log(f"Short {short.get('short')}: {short.get('title')}")
+        try:
+            entry = render_one(short, cand, folder, facts, today, indexes, hook_choice if only else None,
+                               no_cold_open and only is not None, log, checker, timing, narrated_render, action_render)
+        except RenderProblem as e:
+            entry = {"short": short.get("short"), "status": "FAILED", "problems": [str(e)], "flags": []}
+        entry["commands"] = commands(folder, entry["short"])
+        results[entry["short"]] = entry
+        if entry["status"] == "READY":
+            log(f"  READY: {entry['files']['short.mp4']}  ({entry['length_s']:.1f} s, true peak "
+                f"{entry['true_peak']['after']:+.1f} dBTP)")
+            if not cand.get("dry_run"):
+                footage_short.save_used(shorts_dir, Path(entry["folder"]).name + "@" + folder.name, entry["shown"])
+        else:
+            log("  FAILED:\n    " + "\n    ".join(entry["problems"]))
+    data = {"folder": str(folder), "rendered": datetime.now().isoformat(timespec="seconds"),
+            "dry_run": cand.get("dry_run"), "shorts": [results[k] for k in sorted(results)]}
+    write_json(folder / RENDER_LOG, data)
+    page = write_review(folder, cand, written, data)
+    if not cand.get("dry_run"):
+        note_run(shorts_dir, folder, [r["path"] for r in cand["recordings"]], "rendered")
+    log(f"Review page: {page}")
+    return data
+
+
+def esc(text):
+    import html
+    return html.escape(str(text if text is not None else ""))
+
+
+def rel(folder, path):
+    """A path for the page: relative to the run folder when it is inside it, else a file:/// link."""
+    from urllib.parse import quote
+    p = Path(path)
+    try:
+        return quote(p.resolve().relative_to(Path(folder).resolve()).as_posix())
+    except ValueError:
+        return "file:///" + quote(str(p.resolve()).replace("\\", "/"), safe="/:")
+
+
+def evidence_picture(folder, e):
+    """The evidence item's picture copied next to the page (index sheets live in the library); None without one."""
+    src = e.get("picture")
+    if not src or not Path(src).is_file():
+        return None
+    out = Path(folder) / "evidence" / f"{Path(src).parent.parent.name}_{Path(src).name}"
+    out.parent.mkdir(exist_ok=True)
+    if not out.exists():
+        shutil.copyfile(src, out)
+    return rel(folder, out)
+
+
+def write_review(folder, cand, written, data):
+    """review.html in the run folder: what to do, then one card per Short with the video, its flags, the 3 hooks
+    (starred one marked, a command to swap), the script next to its evidence, the evidence pictures, the upload text
+    and the commands to fix things. Plain English: the owner reads it at 3 AM."""
+    folder = Path(folder)
+    shorts = {s.get("short"): s for s in written.get("shorts", [])}
+    cards = []
+    for entry in data["shorts"]:
+        n = entry["short"]
+        m = next((p for p in cand["picks"] if p["short"] == n), {})
+        short = shorts.get(n, {})
+        ok = entry["status"] == "READY"
+        by_id = {e["id"]: e for e in m.get("evidence", [])}
+        video = (f'<video controls preload="metadata" src="{rel(folder, entry["files"]["short.mp4"])}"></video>'
+                 if ok else '<div class="novideo">NOT RENDERED</div>')
+        flags = "".join(f'<li class="{"red" if f.split(":")[0] in RED_FLAGS else "amber"}">{esc(f)}</li>'
+                        for f in entry.get("flags", []))
+        problems = "".join(f"<li>{esc(p)}</li>" for p in entry.get("problems", []))
+        star = entry.get("star") if isinstance(entry.get("star"), int) else short.get("star")
+        hooks_html = "".join(
+            f'<li class="{"star" if k == star else ""}">{"&#11088; " if k == star else ""}{esc(h)}'
+            + ("" if k == star else f'<br><code class="cmd">{esc(entry["commands"]["hook"][k])}</code>') + "</li>"
+            for k, h in enumerate(entry.get("hooks") or short.get("hooks") or []))
+        lines = []
+        for k, line in enumerate(short.get("lines") or [], 1):
+            chips = "".join(f'<span class="chip">{esc(i)} {esc(by_id[i]["kind"])}: {esc(by_id[i]["value"])} '
+                            f'<small>{library.hms(by_id[i]["from_s"])}</small></span>'
+                            for i in line.get("evidence", []) if i in by_id)
+            spans = entry.get("line_spans") or []
+            when = (f' <small>(footage {library.hms(spans[k - 1][0])}-{library.hms(spans[k - 1][1])})</small>'
+                    if k - 1 < len(spans) else "")
+            facts_html = f' <span class="chip fact">facts: {esc(", ".join(line["facts"]))}</span>' if line.get("facts") else ""
+            lines.append(f'<li><b>{esc(line.get("say"))}</b>{when}<br><span class="claim">{esc(line.get("claim"))}</span> '
+                         f'{chips}{facts_html}</li>')
+        cited = [by_id[i] for line in short.get("lines") or [] for i in line.get("evidence", []) if i in by_id]
+        shown = cited or [e for e in m.get("evidence", []) if e["kind"] in ("event", "stars", "police")] or \
+            [e for e in m.get("evidence", []) if e["kind"] == "seen"]
+        pics = []
+        for e in list({e["id"]: e for e in shown}.values())[:8]:
+            pic = evidence_picture(folder, e)
+            img = f'<img loading="lazy" src="{pic}" alt="{esc(e["id"])}">' if pic else '<div class="nopic">HUD reading</div>'
+            pics.append(f'<figure>{img}<figcaption>{esc(e["id"])} {esc(e["kind"])}: {esc(e["value"])}<br>'
+                        f'<small>{library.hms(e["from_s"])}-{library.hms(e["to_s"])} &middot; {esc(e["source"])}</small>'
+                        f'</figcaption></figure>')
+        sheet = f'<img class="sheet" loading="lazy" src="{rel(folder, m["sheet"])}" alt="frames of the footage">' \
+            if m.get("sheet") else ""
+        upload = ""
+        if ok and Path(entry["files"].get("upload.txt", "")).is_file():
+            upload = Path(entry["files"]["upload.txt"]).read_text(encoding="utf-8")
+        tp = entry.get("true_peak") or {}
+        meta = (f'{esc(entry.get("type", "").upper())} &middot; {esc(m.get("video"))} '
+                f'{library.hms(m.get("window", [0, 0])[0])}-{library.hms(m.get("window", [0, 0])[1])} &middot; '
+                + (f'{entry["length_s"]:.1f} s &middot; true peak {tp.get("after", 0):+.1f} dBTP &middot; ' if ok else "")
+                + f'{"NO-HUD MODE" if m.get("mode") == "nohud" else "HUD rules on"} &middot; why this type: '
+                f'{esc(m.get("type_why"))}')
+        source = rel(folder, m["path"]) + f'#t={m["window"][0]:.1f},{m["window"][1]:.1f}' if m.get("path") else ""
+        claims = (f' &middot; <a href="{rel(folder, entry["files"]["claims.txt"])}">claims.txt</a>'
+                  if ok and "claims.txt" in entry.get("files", {}) else "")
+        cards.append(f"""
+<article class="{'ok' if ok else 'bad'}">
+ <h2>Short {n}: {esc(entry.get('title') or short.get('title'))} <span class="status">{esc(entry['status'])}</span></h2>
+ <p class="meta">{meta}</p>
+ <div class="grid">
+  <div>{video}<p><a href="{source}">Play the source footage</a>{claims}</p></div>
+  <div>
+   {'<h3>Problems (not rendered)</h3><ul class="problems">' + problems + '</ul>' if problems else ''}
+   <h3>Flags: check these</h3><ul class="flags">{flags or '<li class="ok">none</li>'}</ul>
+   <h3>Hooks (&#11088; = on the Short)</h3><ul class="hooks">{hooks_html}</ul>
+   {'<h3>Script and its evidence</h3><ol class="lines">' + ''.join(lines) + '</ol>' if lines else ''}
+   {f'<h3>Upload text</h3><pre class="upload">{esc(upload)}</pre><button data-copy="{esc(upload)}">Copy upload text</button>' if upload else ''}
+   {f'<h3>Cold open wrong?</h3><code class="cmd">{esc(entry["commands"]["no_cold_open"])}</code>' if entry.get('peak_s') is not None else ''}
+  </div>
+ </div>
+ <h3>Evidence</h3><div class="pics">{''.join(pics)}</div>
+ {f'<h3>The footage, a frame every 2 s</h3>{sheet}' if sheet else ''}
+</article>""")
+    run = cand
+    recs = "".join(f"<li>{esc(r['name'])} ({library.hms(r['duration_s'])}): "
+                   f"{'NO-HUD MODE' if r['mode'] == 'nohud' else 'HUD rules on'}"
+                   + (f" &middot; {esc('; '.join(r['hud_check']['reasons']))}" if (r.get('hud_check') or {}).get('reasons')
+                      else "") + "</li>" for r in run["recordings"])
+    timing = ", ".join(f"{k} {v / 60:.1f} min" if v >= 60 else f"{k} {v:.0f} s" for k, v in run.get("timing_s", {}).items())
+    page = REVIEW_PAGE.format(
+        title=esc(folder.name), dry=('<p class="dry">DRY RUN: nothing was logged as used footage; these Shorts are '
+                                    'for testing.</p>' if run.get("dry_run") else ""),
+        calibration=esc(f"{run['calibration']['profile']}: {run['calibration']['why']}"), recordings=recs,
+        timing=esc(timing), cards="".join(cards),
+        ready=sum(1 for e in data["shorts"] if e["status"] == "READY"), total=len(data["shorts"]))
+    out = folder / "review.html"
+    out.write_text(page, encoding="utf-8")
+    return out
+
+
+RED_FLAGS = ("NO-HUD MODE", "WEAK MOMENT", "BLOOD", "SUBTITLES", "AUTO PEAK", "NO COLD OPEN", "REPORTED FACT")
+
+REVIEW_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch review {title}</title>
+<style>
+:root {{ --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e6e8ec; --muted:#9aa3b2; --red:#ef4444; --amber:#f59e0b;
+  --green:#22c55e; }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, "Segoe UI", sans-serif; }}
+main {{ max-width:1200px; margin:0 auto; padding:16px; }}
+h1 {{ font-size:22px; margin:0 0 6px; }} h2 {{ font-size:19px; margin:0 0 4px; }} h3 {{ font-size:14px; margin:14px 0 4px;
+  color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }}
+.steps {{ background:#13233a; border:1px solid #2b4a75; border-radius:8px; padding:12px 16px; }}
+.steps li {{ margin:4px 0; }}
+.dry {{ background:#3a2a10; border:1px solid var(--amber); border-radius:6px; padding:8px 12px; }}
+article {{ background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--green); border-radius:8px;
+  padding:14px; margin:18px 0; }}
+article.bad {{ border-left-color:var(--red); }}
+.status {{ font-size:13px; padding:2px 8px; border-radius:10px; background:#1f3a29; color:#86efac; vertical-align:middle; }}
+article.bad .status {{ background:#3a1518; color:#fca5a5; }}
+.meta {{ color:var(--muted); font-size:13px; margin:0 0 8px; }}
+.grid {{ display:grid; grid-template-columns:minmax(0, 340px) 1fr; gap:18px; }}
+video {{ width:100%; max-width:340px; aspect-ratio:9/16; background:#000; border-radius:6px; }}
+.novideo {{ aspect-ratio:9/16; display:grid; place-items:center; background:#0b0d12; border-radius:6px; color:var(--red); }}
+ul, ol {{ margin:0; padding-left:20px; }}
+.flags li.red {{ color:#fca5a5; }} .flags li.amber {{ color:#fde68a; }} .flags li.ok {{ color:#86efac; }}
+.problems li {{ color:#fca5a5; }}
+.hooks li.star {{ font-weight:700; color:#fde68a; }}
+.lines li {{ margin:6px 0; }} .claim {{ font-size:12px; color:var(--muted); }}
+.chip {{ display:inline-block; font-size:12px; background:#222838; border:1px solid var(--line); border-radius:10px;
+  padding:0 7px; margin:2px 2px 0 0; }} .chip.fact {{ background:#2a2338; }}
+code.cmd {{ display:block; font-size:12px; background:#0b0d12; border:1px solid var(--line); border-radius:4px; padding:4px 6px;
+  margin:3px 0; overflow-x:auto; white-space:nowrap; }}
+pre.upload {{ white-space:pre-wrap; background:#0b0d12; border:1px solid var(--line); border-radius:4px; padding:8px; }}
+button {{ font:inherit; color:var(--text); background:#222838; border:1px solid var(--line); border-radius:4px; padding:4px 12px;
+  cursor:pointer; }}
+.pics {{ display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:10px; }}
+figure {{ margin:0; }} figure img {{ width:100%; border-radius:4px; display:block; }}
+.nopic {{ height:120px; display:grid; place-items:center; background:#0b0d12; border-radius:4px; color:var(--muted); }}
+figcaption {{ font-size:12px; color:var(--muted); }}
+img.sheet {{ width:100%; border-radius:4px; }}
+a {{ color:#93c5fd; }}
+@media (max-width:800px) {{ .grid {{ grid-template-columns:1fr; }} }}
+</style></head><body><main>
+<h1>Launch review: {title}</h1>
+{dry}
+<div class="steps"><b>What to do (about 5 minutes per Short). {ready} of {total} Shorts are ready.</b>
+<ol>
+<li>Watch the Short with the sound on.</li>
+<li>Read its flags. Red ones need a look before you upload.</li>
+<li>For a narrated Short, read each line next to its evidence: every line must be true of what you see.</li>
+<li>Wrong hook or cold open? Copy the command under it, paste it in PowerShell in C:\\AI\\gta-clipper, press Enter, then
+reload this page.</li>
+<li>Upload it yourself with the upload text (Copy button). Nothing is uploaded automatically.</li>
+</ol></div>
+<p class="meta">Profile {calibration}. Recordings:</p><ul class="meta">{recordings}</ul>
+<p class="meta">Time: {timing}</p>
+{cards}
+</main>
+<script>
+document.querySelectorAll("button[data-copy]").forEach(b => b.addEventListener("click", () => {{
+  navigator.clipboard.writeText(b.dataset.copy).then(() => {{ b.textContent = "Copied"; }});
+}}));
+</script>
+</body></html>
+"""
+
+
 def all_used_spans(shorts_dir):
     """Every (video, start, end) any earlier Short showed (all of them, not only the last few: /launch never shows
     footage twice)."""
@@ -880,12 +1462,23 @@ def main():
     p.add_argument("--dry-run", action="store_true",
                    help="a trial: its own folder, profile and library; _used_footage.json is neither read nor written")
     p.add_argument("--date", help="the date in the folder name (default today)")
+    r = sub.add_parser("render", help="check shorts.json, render every Short, write review.html")
+    r.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
+    r.add_argument("--short", type=int, help="only this Short (its number on the review page)")
+    r.add_argument("--hook", type=int, choices=(1, 2, 3), help="with --short: use this hook instead of the starred one")
+    r.add_argument("--no-cold-open", action="store_true", help="with --short: no cold open and no zoom")
     args = ap.parse_args()
     try:
         if args.stage == "prepare":
             prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input, day=args.date,
                     slots=args.star_slots, log=lambda m: print(m, flush=True))
-    except (LaunchError, index.IndexError_) as e:
+        else:
+            if (args.hook or args.no_cold_open) and args.short is None:
+                ap.error("--hook and --no-cold-open need --short N")
+            data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True))
+            if any(e["status"] != "READY" for e in data["shorts"]):
+                sys.exit(1)
+    except (LaunchError, index.IndexError_, safety_checks.SafetyError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
 
