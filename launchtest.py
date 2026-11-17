@@ -677,23 +677,29 @@ def ev(pick, kind, value=None):
 
 
 def good_narrated(pick):
-    """A script that keeps every rule with the stand-in voice's timing (6 s a line from 1:43.5): each line cites
-    what is on screen while it is spoken."""
+    """A script that keeps every rule with the stand-in voice's timing (5.8 s a line from 1:43.5): each line cites
+    what is on screen while it is spoken. Since PR 26 it also keeps the story rules: a format, what each line
+    teaches, no play-by-play, one payoff and a last line that loops into the hook."""
     police, first, two, crash = ev(pick, "police"), ev(pick, "stars", "0 to 1"), ev(pick, "stars", "1 to 2"),         ev(pick, "event", "crash")
+    late = next(e["id"] for e in pick["evidence"] if e["kind"] == "police" and e["from_s"] >= 130)
     hook = "The cops are right behind me"
     return {"short": 1, "moment": "M1", "type": "narrated", "hooks": [hook, "My first chase got loud", "Two stars came fast"],
             "star": 0, "title": "My FIRST real chase went wrong fast", "description":
             "The wanted level climbs while a police car follows me. Then it hits a wall behind me.",
-            "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
-            "lines": [{"say": hook, "claim": "on_screen", "evidence": [police], "facts": []},
-                      {"say": "Then my first wanted star shows up.", "claim": "on_screen", "evidence": [first],
-                       "facts": []},
+            "hashtags": ["#GTA6", "#GTAVI", "#Shorts"], "format": "F3",
+            "format_why": "the chase shows the police, two star rises and a crash",
+            "lines": [{"say": hook, "claim": "on_screen", "evidence": [police], "facts": [],
+                       "teaches": "the police are on me from the start"},
+                      {"say": "Then the first wanted star shows up.", "claim": "on_screen", "evidence": [first],
+                       "facts": [], "teaches": "when the first wanted star arrives"},
                       {"say": "A few seconds later I have 2 stars.", "claim": "on_screen", "evidence": [two],
-                       "facts": []},
+                       "facts": [], "teaches": "how fast the second star follows"},
                       {"say": "In GTA 6 the stars reportedly turn hollow when the cops lose sight of you.",
-                       "claim": "fact", "evidence": [], "facts": ["hollow"]},
+                       "claim": "fact", "evidence": [], "facts": ["hollow"], "teaches": "what hollow stars mean"},
                       {"say": "Then a police car crashes into a wall.", "claim": "on_screen", "evidence": [crash],
-                       "facts": []}]}
+                       "facts": [], "payoff": True, "teaches": "the chase ends with a police car crash"},
+                      {"say": "And it all starts when", "claim": "on_screen", "evidence": [late], "facts": [],
+                       "teaches": "the loop back to the police behind me", "loop": True}]}
 
 
 @check
@@ -832,15 +838,15 @@ def run_folder_with(tmp, picks, shorts, dry=False):
 
 
 def stand_in_voice(path, root):
-    """Every line 6 s, shared by its beats; a 1.5 s loop ending."""
+    """Every line 5.8 s, shared by its beats; a 1.5 s loop ending."""
     script = json.loads(Path(path).read_text(encoding="utf-8"))
-    lines = [[6.0 / len(l["beats"])] * len(l["beats"]) for l in script["lines"]]
-    return {"total_s": 6.0 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": {}}
+    lines = [[5.8 / len(l["beats"])] * len(l["beats"]) for l in script["lines"]]
+    return {"total_s": 5.8 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": {}}
 
 
 def stand_in_explainer(resolved, out):
     script = json.loads(Path(resolved).read_text(encoding="utf-8"))
-    visuals = [{"line": n + 1, "source": f"{b['file']}@{b['at']}", "seconds": 6.0 / len(l["beats"]),
+    visuals = [{"line": n + 1, "source": f"{b['file']}@{b['at']}", "seconds": 5.8 / len(l["beats"]),
                 "source_start_s": float(b["at"]), "loop_tail": False}
                for n, l in enumerate(script["lines"]) for b in l["beats"]]
     (Path(out) / "log.json").write_text(json.dumps({"visuals": visuals, "durations": {"video_s": 24.0}}), encoding="utf-8")
@@ -862,7 +868,8 @@ def a_narrated_short_plays_its_moment_on_and_is_logged():
         shorts.mkdir()
         folder = run_folder_with(tmp, [pick], [good_narrated(pick)])
         data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
-                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()],
+                             engine="v1")
         entry = data["shorts"][0]
         out = Path(entry["folder"])
         script = json.loads((out / "script_resolved.json").read_text(encoding="utf-8"))
@@ -894,7 +901,8 @@ def a_short_that_breaks_a_rule_is_not_rendered_and_says_why():
         shorts.mkdir()
         folder = run_folder_with(tmp, [pick, second], [bad, good])
         data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
-                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+                             timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()],
+                             engine="v1")
         page = (folder / "review.html").read_text(encoding="utf-8")
         used = json.loads((shorts / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory() as tmp:
@@ -902,7 +910,8 @@ def a_short_that_breaks_a_rule_is_not_rendered_and_says_why():
         shorts.mkdir()
         folder = run_folder_with(tmp, [pick], [good_narrated(pick)], dry=True)
         launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
-                      timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()])
+                      timing=stand_in_voice, narrated_render=stand_in_explainer, indexes=[made_up_idx()],
+                             engine="v1")
         dry_logged = (shorts / footage_short.USED_FOOTAGE).exists()
         dry_page = (folder / "review.html").read_text(encoding="utf-8")
     first, second_e = data["shorts"]
