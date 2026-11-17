@@ -5,9 +5,12 @@
    menu or map, loading or black, cutscene, blood or gore, subtitles. The first four block the footage they are in;
    the phone is caught this way with no phone calibration at all. Subtitles and blood after the first 7 s are flags
    for the owner.
-2. Blood or gore in the first 7 s of a Short: the first 7 s of each type's footage are asked at 2 frames a second, and
-   the index's own lines ("blood", "body") count too. Gore there moves the start 7 s later (once), or drops that type.
-   The cold open (the auto peak) is checked again at render time with first_seconds().
+2. Blood or gore, or swearing in the subtitles, in the first 7 s of a Short: the first 7 s of each type's footage
+   are asked about at 2 frames a second, the index's own lines ("blood", "body") count too, and the subtitle band of
+   every second is read by the model (subtitles_v1.txt) and matched against PROFANITY in code. Any of it there moves
+   the start 7 s later (once), or drops that type. Swearing later in the Short is a PROFANITY flag. The cold open (the
+   auto peak) and a later start (start_s) are checked again at render time. Swearing that is only spoken in the game's
+   sound is NOT checked: there is no speech-to-text here, and every Short says so.
 3. Footage an earlier Short showed (_used_footage.json, pinned footage too) is never used: launch.mine() leaves it
    out and check_moment() checks again.
 4. Audio true peak below -1.0 dBTP on every render: guard_true_peak() measures with ffmpeg's EBU R128 meter
@@ -43,6 +46,20 @@ EVERY_NOHUD_S = 0.5       # ...every half second when the HUD rules are off
 FIRST_S = 7.0             # no blood or gore in a Short's first seconds
 FIRST_EVERY_S = 0.5
 GORE_WORDS = ("blood", "bleeding", "dead body", "body on the ground", "body on ground", "corpse", "gore", "wound")
+# Swear words, matched in the subtitles the model reads. Strong and moderate words and slurs; mild ones (damn, hell,
+# crap) are left out. A word with a * in it ("f**k", "sh*t") is a censored swear and counts too.
+PROFANITY = re.compile(
+    r"(?<![a-z])(f+u+c+k\w*|\w*fuck\w*|motherf\w*|sh+i+t+\w*|bullshit\w*|bitch\w*|cunt\w*|asshole\w*|ass|asses|"
+    r"dick|dicks|dickhead\w*|cock|cocks|cocksucker\w*|puss(?:y|ies)|bastard\w*|slut\w*|whore\w*|wank\w*|twat\w*|"
+    r"prick\w*|nigg\w*|fag|fags|faggot\w*|retard\w*)(?![a-z])"
+    r"|[a-z]+\*+[a-z*]*", re.IGNORECASE)
+SUBTITLE_VERSION = "subtitles_v1"
+SUBTITLE_SCHEMA = {"type": "object", "properties": {f"strip_{k}": {"type": "string"} for k in range(1, 5)},
+                   "required": [f"strip_{k}" for k in range(1, 5)]}
+SUBTITLE_OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 200}
+SUBTITLE_BAND = (0.12, 0.80, 0.76, 0.18)   # x, y, width, height of the frame where subtitles are, as shares
+SUBTITLE_W = 1280                          # a strip's width on the sheet (about the band's own size at 1080p)
+SUBTITLE_EVERY_S = 1.0                     # subtitles stay up for seconds, so one look a second reads them all
 SHEET_W = 640             # width of one frame on a sheet
 TRUE_PEAK_MAX = -1.0      # dBTP
 LIMIT_TRIES = (-2.0, -3.0, -4.0)   # true-peak targets tried in turn when a render is too loud
@@ -75,6 +92,22 @@ def load_prompt(game, version=PROMPT_VERSION):
     return index.load_prompt(game, version)
 
 
+def profanity(text):
+    """The swear words in a text (PROFANITY), lower case, in order; [] for none."""
+    return [m.group(0).lower() for m in PROFANITY.finditer(text or "")]
+
+
+def parse_subtitles(content):
+    """The model's reading of a subtitle sheet as [text of strip 1, ..., strip 4]; ValueError if it isn't that."""
+    try:
+        a = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"reply is not JSON ({e})") from None
+    if not isinstance(a, dict) or not all(isinstance(a.get(f"strip_{k}"), str) for k in range(1, 5)):
+        raise ValueError("reply needs strip_1 to strip_4 as text")
+    return [" ".join(a[f"strip_{k}"].split()) for k in range(1, 5)]
+
+
 def sheet_times(a, b, every):
     """The frame times of a..b, one every `every` seconds, in sheets of 4: [(first, end, [times])]."""
     times, t = [], a
@@ -84,17 +117,22 @@ def sheet_times(a, b, every):
     return [(ts[0], round(min(b, ts[-1] + every), 3), ts) for ts in (times[k:k + 4] for k in range(0, len(times), 4))]
 
 
-def make_sheets(path, a, b, every, out_dir, width=SHEET_W):
+def make_sheets(path, a, b, every, out_dir, width=SHEET_W, subtitles=False):
     """JPEG sheets of a..b of a recording (2x2, a frame every `every` s, in reading order; the last one may end in
-    black): [(from_s, to_s, file)]. One ffmpeg run for the whole stretch."""
+    black): [(from_s, to_s, file)]. One ffmpeg run for the whole stretch. subtitles=True: each frame is cut to its
+    subtitle band (SUBTITLE_BAND, at full size) and 4 of them are stacked, for reading the words."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plan = sheet_times(a, b, every)
-    stem = f"{Path(path).stem}_{a:.1f}_{b:.1f}_{every:g}".replace(".", "_")
+    stem = f"{Path(path).stem}_{a:.1f}_{b:.1f}_{every:g}{'_sub' if subtitles else ''}".replace(".", "_")
     info = clip.probe(shutil.which("ffprobe"), Path(path))
     conv = "in_color_matrix=bt709:in_range=tv:" if clip.needs_range_fix(info["video_codec"], info["color_range"]) else ""
-    graph = (f"select='gte(t-{a:.3f},selected_n*{every:g})',scale={width}:-2:{conv}out_color_matrix=bt601:"
-             f"out_range=pc,tile=2x2")
+    if subtitles:
+        x, y, w, h = SUBTITLE_BAND
+        shape = f"crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={SUBTITLE_W}:-2:{conv}out_color_matrix=bt601:out_range=pc,tile=1x4"
+    else:
+        shape = f"scale={width}:-2:{conv}out_color_matrix=bt601:out_range=pc,tile=2x2"
+    graph = f"select='gte(t-{a:.3f},selected_n*{every:g})',{shape}"
     done = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-t", f"{b - a + 0.05:.3f}", "-copyts",
                            "-i", str(path), "-vf", graph, "-fps_mode", "passthrough", "-q:v", "4",
                            "-start_number", "0", str(out_dir / f"{stem}_%03d.jpg")], capture_output=True, text=True)
@@ -112,6 +150,7 @@ class Checker:
                  log=print, version=PROMPT_VERSION):
         self.version = version
         self.prompt, self.sha = load_prompt(game, version)
+        self.sub_prompt, self.sub_sha = load_prompt(game, SUBTITLE_VERSION)
         self.cache_dir, self.model, self.ask, self.sheets, self.log = Path(cache_dir), model, ask, sheets, log
         self.info = info if info is not None else vlm.check_ollama(model)
         self.calls, self.cached, self.seconds = 0, 0, 0.0
@@ -140,6 +179,32 @@ class Checker:
                 self.cached += 1
             out.append({"from_s": f0, "to_s": f1, "file": str(jpg), "answer": rec.get("answer"),
                         "error": rec.get("error")})
+        return out
+
+    def read(self, path, a, b, work):
+        """[(time, words)] for every second of a..b: the subtitle band read by the model ("" where there is no text).
+        A sheet with no usable reading gives "<unreadable>" for its seconds, which counts as unsafe (see swearing)."""
+        out = []
+        for f0, f1, jpg in self.sheets(path, a, b, SUBTITLE_EVERY_S, work, subtitles=True):
+            video = Path(path)
+            fields = {"video": video.name, "video_bytes": video.stat().st_size if video.exists() else None,
+                      "from_ms": round(f0 * 1000), "to_ms": round(f1 * 1000), "every_s": SUBTITLE_EVERY_S,
+                      "band": list(SUBTITLE_BAND), "strip_width": SUBTITLE_W, "model": self.model,
+                      "model_digest": self.info.get("digest"), "prompt_version": SUBTITLE_VERSION,
+                      "prompt_sha256": self.sub_sha, "schema": SUBTITLE_SCHEMA, "options": SUBTITLE_OPTIONS}
+            rec = vlm.cache_load(self.cache_dir, fields)
+            if rec is None:
+                rec = self.ask(self.model, self.sub_prompt, jpg, self.info.get("capabilities", []),
+                               schema=SUBTITLE_SCHEMA, parse=parse_subtitles, options=SUBTITLE_OPTIONS)
+                self.calls += 1
+                self.seconds += rec.get("wall_s") or 0.0
+                if rec.get("error") is None:
+                    vlm.cache_save(self.cache_dir, fields, rec)
+            else:
+                self.cached += 1
+            times = [t for t0, t1, ts in sheet_times(f0, f1, SUBTITLE_EVERY_S) for t in ts]
+            texts = rec.get("answer") or ["<unreadable>"] * len(times)
+            out += list(zip(times, texts))
         return out
 
     def __call__(self, m, rec, folder):
@@ -188,14 +253,33 @@ def gore_in(checker, rec, path, spans, work):
     return hits
 
 
+def swearing_in(checker, path, spans, work):
+    """Swear words in the subtitles of these stretches, read once a second: [(from_s, to_s, what)]. Unreadable
+    subtitles count as a hit: unchecked words are not safe words."""
+    hits = []
+    for a, b in spans:
+        for t, text in checker.read(path, a, b, work):
+            if text == "<unreadable>":
+                hits.append((t, t + SUBTITLE_EVERY_S, "subtitles the model could not read"))
+            elif profanity(text):
+                hits.append((t, t + SUBTITLE_EVERY_S, f"swearing in the subtitles (\"{', '.join(profanity(text))}\")"))
+    return hits
+
+
+def bad_start(checker, rec, path, spans, work):
+    """What may not be in a Short's first 7 s: blood or gore (the model, the index's lines) or swearing in the
+    subtitles. [(from_s, to_s, what)]."""
+    return gore_in(checker, rec, path, spans, work) + swearing_in(checker, path, spans, work)
+
+
 def fmt(hits):
     return [f"{what} at {library.hms(a)}-{library.hms(b)}" for a, b, what in hits]
 
 
 def check_moment(m, rec, folder, checker):
     """(passes, reasons) for one moment, and m["safety"] with what was found. Each type's footage (and the loop
-    ending's lead for NARRATED) is asked about; a blocking answer anywhere in it drops that type, gore in its first
-    7 s moves its start 7 s later once (or drops it). The types that pass go into m["safe_options"] as
+    ending's lead for NARRATED) is asked about; a blocking answer anywhere in it drops that type; gore or swearing in
+    the subtitles of its first 7 s moves its start 7 s later once (or drops it); swearing later is a PROFANITY flag. The types that pass go into m["safe_options"] as
     {type: [start, end]}, which launch.choose_types() keeps to."""
     import launch                                        # launch imports this module's Checker; no cycle at load
     opts = launch.type_options(rec, m)
@@ -226,7 +310,7 @@ def check_moment(m, rec, folder, checker):
             continue
         need = launch.ACTION_LEN[0] if k == "action" else launch.NARRATED_MIN_S
         start, end, moved = a, b, False
-        gore = gore_in(checker, rec, rec["path"], first_seconds(start), work)
+        gore = bad_start(checker, rec, rec["path"], first_seconds(start), work)
         # Once, 7 s later: the end moves too where the clean stretch allows, so it stays long enough, and an action
         # clip must still hold its moment. The footage it gains at the end is asked about as well.
         later, longer = round(start + FIRST_S, 2), round(max(end, start + FIRST_S + need), 2)
@@ -235,10 +319,10 @@ def check_moment(m, rec, folder, checker):
             extra = found(checker.look(rec["path"], end, longer, every, work), BLOCKING) if longer > end else []
             if not extra:
                 start, end, moved = later, longer, True
-                gore = gore_in(checker, rec, rec["path"], first_seconds(start), work)
+                gore = bad_start(checker, rec, rec["path"], first_seconds(start), work)
         if gore:
-            report["types"][k] = {"dropped": fmt(gore), "why": "blood or gore in the first 7 s"}
-            reasons.append(f"{k}: blood or gore in the first 7 s ({'; '.join(fmt(gore))})")
+            report["types"][k] = {"dropped": fmt(gore), "why": "blood, gore or swearing in the first 7 s"}
+            reasons.append(f"{k}: blood, gore or swearing in the first 7 s ({'; '.join(fmt(gore))})")
             continue
         safe[k] = [start, end]
         report["types"][k] = {"window": [start, end], "moved_for_gore": moved}
@@ -247,6 +331,13 @@ def check_moment(m, rec, folder, checker):
                                "can swear)")
     for a, b, what in found(sheets, ("blood_or_gore",)):
         report["flags"].append(f"BLOOD at {library.hms(a)}-{library.hms(b)} (after the first 7 s): check it")
+    # Swearing anywhere else: the subtitle band is read wherever the safety question saw subtitles.
+    if safe:
+        lo2, hi2 = min(w[0] for w in safe.values()), max(w[1] for w in safe.values())
+        spans = [(max(lo2, s["from_s"]), min(hi2, s["to_s"])) for s in sheets
+                 if (s.get("answer") or {}).get("subtitles") and s["from_s"] < hi2 and lo2 < s["to_s"]]
+        for a, b, what in swearing_in(checker, rec["path"], spans, work):
+            report["flags"].append(f"PROFANITY at {library.hms(a)}: {what}")
     m["safety"], m["safe_options"] = report, safe
     return bool(safe), reasons
 

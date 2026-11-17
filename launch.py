@@ -1190,17 +1190,18 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     hook = hooks_list[star]
     try:
         if short.get("start_s") is not None and checker is not None:
-            gore = safety_checks.gore_in(checker, recs_stub(m), m["path"],
-                                         safety_checks.first_seconds(m["window"][0]), out / "safety")
+            gore = safety_checks.bad_start(checker, recs_stub(m), m["path"],
+                                           safety_checks.first_seconds(m["window"][0]), out / "safety")
             if gore:
-                raise RenderProblem("start_s: the new first 7 s show blood (" + "; ".join(safety_checks.fmt(gore))
-                                    + "); pick another start")
+                raise RenderProblem("start_s: the new first 7 s show blood or swearing ("
+                                    + "; ".join(safety_checks.fmt(gore)) + "); pick another start")
         if m["type"] == "action":
             if peak is not None and checker is not None:
                 cold = safety_checks.first_seconds(m["window"][0], peak)[0]
-                gore = safety_checks.gore_in(checker, recs_stub(m), m["path"], [cold], out / "safety")
+                gore = safety_checks.bad_start(checker, recs_stub(m), m["path"], [cold], out / "safety")
                 if gore:
-                    flags.append("NO COLD OPEN: the auto peak shows blood (" + "; ".join(safety_checks.fmt(gore)) + ")")
+                    flags.append("NO COLD OPEN: the auto peak shows blood or swearing ("
+                                 + "; ".join(safety_checks.fmt(gore)) + ")")
                     peak = None
             done = (action_render or render_action)(short, m, out, hook, peak, log)
             if peak is not None:
@@ -1217,7 +1218,8 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     (out / "upload.txt").write_text(footage_short.make_short.upload_text(short), encoding="utf-8")
     if any(e["kind"] == "event" and e["value"] == "crash" for e in m["evidence"]):
         flags.append("CRASH: check that it looks cinematic, not clumsy")
-    flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue); listen once before uploading")
+    flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is NOT "
+                 "checked (no speech-to-text): listen once before uploading")
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
@@ -1406,7 +1408,8 @@ def write_review(folder, cand, written, data):
     return out
 
 
-RED_FLAGS = ("NO-HUD MODE", "WEAK MOMENT", "BLOOD", "SUBTITLES", "AUTO PEAK", "NO COLD OPEN", "REPORTED FACT")
+RED_FLAGS = ("NO-HUD MODE", "WEAK MOMENT", "BLOOD", "SUBTITLES", "PROFANITY", "AUTO PEAK", "NO COLD OPEN",
+             "REPORTED FACT", "SOUND")
 
 REVIEW_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

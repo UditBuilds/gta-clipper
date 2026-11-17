@@ -697,6 +697,12 @@ the game works without a fact ("you can", "the game", "cops will"), any name but
   [prompts/LOG.md](prompts/LOG.md#safety-prompt-versions-pr-25-launch).
 - No blood in the first 7 s: those seconds are asked twice a second, and the index's own lines count too. Blood there
   moves the start 7 s later once, or drops that type. The AUTO PEAK's cold open is checked again at render time.
+- No swearing in the subtitles of the first 7 s: the model reads the subtitle band once a second (full size, 4 strips
+  a sheet, `prompts/subtitles_v1.txt`) and code matches the words against a list of strong and moderate swear words
+  and slurs (not damn or hell). It moves the start or drops the type like blood; swearing later is a PROFANITY flag.
+  On the dry run's river chase it read every subtitle line word for word, "Fuck! Fuck!" at 4:12, "Watch your ass" at
+  4:37 and "Shhiitttt!!" at 4:41 included (17 calls, 61 s for 68 s of footage). Spoken swearing in the game's sound
+  is not checked: there is no speech-to-text, and every Short's SOUND flag says so.
 - Footage an earlier Short showed, pinned footage included (footage_short.py now logs it too), is never used again.
 - Every render, here and in /new-short and /footage-short (explainer.py), is measured with ffmpeg's true-peak meter;
   over -1.0 dBTP, the sound alone goes through a limiter run at 192 kHz and is measured again, or the render fails.

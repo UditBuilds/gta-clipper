@@ -382,17 +382,28 @@ def _recs_for(picks):
 
 # --- 2. Safety ---
 
-def stand_in_checker(tmp, rules):
+def stand_in_checker(tmp, rules, subs=()):
     """A safety.Checker whose model answers by time: rules is [(from_s, to_s, key)], and a sheet says yes to key when
-    it overlaps from..to. A key of None gives no usable answer. The sheets asked about are recorded with their
-    spacing."""
-    asked = []
+    it overlaps from..to. A key of None gives no usable answer. subs is [(from_s, to_s, words)]: the subtitles the
+    model reads in that stretch (None: no usable reading). The sheets asked about are recorded with their spacing."""
+    asked, read = [], []
 
-    def sheets(path, a, b, every, work):
-        return [(f0, f1, f"{f0}|{f1}|{every}") for f0, f1, _ in safety.sheet_times(a, b, every)]
+    def sheets(path, a, b, every, work, subtitles=False):
+        return [(f0, f1, f"{f0}|{f1}|{every}|{int(subtitles)}") for f0, f1, _ in safety.sheet_times(a, b, every)]
 
     def ask(model, prompt, jpg, caps, schema=None, parse=None, options=None):
-        f0, f1, every = (float(x) for x in str(jpg).split("|"))
+        f0, f1, every, sub = (float(x) for x in str(jpg).split("|"))
+        if sub:
+            read.append((f0, f1))
+            times = [x for _, _, ts in safety.sheet_times(f0, f1, every) for x in ts]
+            strips = []
+            for x in times + [None] * (4 - len(times)):
+                words = next((w for a, b, w in subs if x is not None and a <= x < b), "")
+                if words is None:
+                    return {"answer": None, "error": "unusable answer: made up", "wall_s": 0.1}
+                strips.append(words)
+            return {"answer": parse(json.dumps({f"strip_{k + 1}": s for k, s in enumerate(strips)})), "error": None,
+                    "wall_s": 0.1}
         asked.append((f0, f1, every))
         answer = {"note": "a made-up answer", **{k: False for k in safety.WHAT}}
         for a, b, key in rules:
@@ -404,6 +415,7 @@ def stand_in_checker(tmp, rules):
 
     checker = safety.Checker("GTA 6", tempfile.mkdtemp(dir=tmp), ask=ask, sheets=sheets,
                              info={"digest": "x", "capabilities": []}, log=lambda m: None)
+    checker.read_log = read
     return checker, asked
 
 
@@ -485,6 +497,70 @@ def blood_in_the_first_7_s_moves_the_start_once_or_drops_the_type():
             and later[0] and later_m["safe_options"]["action"] == [a0, a1]
             and any(f.startswith("BLOOD") for f in later_m["safety"]["flags"])
             and any(f.startswith("SUBTITLES") for f in later_m["safety"]["flags"]))
+
+
+@check
+def swear_words_are_found_and_mild_words_are_not():
+    """PROFANITY finds strong and moderate swearing, stretched and censored spellings and slurs, and leaves mild words
+    (damn, hell) and innocent words that hold one (class, assist, cockpit, Dickens) alone; the model's reading of a
+    subtitle sheet must be 4 strips of text"""
+    found = [safety.profanity(s) for s in ("Hey, they on us! Fuck! Fuck!", "Watch your ass.", "Shhiitttt!!",
+                                            "What the f**k", "motherfucker", "Bullshit.")]
+    clean = [safety.profanity(s) for s in ("What the hell!? damn", "pass the class, assist", "cockpit", "Dickens",
+                                            "Take out the Cops before getting to the rendezvous point.", "")]
+    good = safety.parse_subtitles(json.dumps({"strip_1": "Hey  there", "strip_2": "", "strip_3": "x", "strip_4": ""}))
+    bad = 0
+    for reply in ("nope", json.dumps({"strip_1": "a"}), json.dumps({f"strip_{k}": 1 for k in range(1, 5)})):
+        try:
+            safety.parse_subtitles(reply)
+        except ValueError:
+            bad += 1
+    return (all(found) and found[0] == ["fuck", "fuck"] and found[3] == ["f**k"] and not any(clean)
+            and good == ["Hey there", "", "x", ""] and bad == 3)
+
+
+@check
+def swearing_in_the_first_7_s_moves_the_start_or_drops_the_type():
+    """subtitles that swear in the first 7 s of the ACTION window move its start 7 s later, like blood; swearing all
+    through its first 14 s drops it; swearing later in the Short is only a PROFANITY flag; unreadable subtitles in the
+    first 7 s count as swearing (unchecked words are not safe)"""
+    rec = made_up_rec()
+    m = shoot_moment(rec)
+    a0, a1 = launch.type_options(rec, m)["action"]["window"]
+    with tempfile.TemporaryDirectory() as tmp:
+        checker, _ = stand_in_checker(tmp, [], subs=[(a0, a0 + 2.0, "Hey! Fuck!")])
+        moved_m = dict(m)
+        moved = safety.check_moment(moved_m, rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [], subs=[(a0, a0 + 16.0, "Shit, shit, shit")])
+        gone_m = dict(m)
+        safety.check_moment(gone_m, rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [(a1 - 4.0, a1, "subtitles")], subs=[(a1 - 3.0, a1, "Watch your ass.")])
+        later_m = dict(m)
+        later = safety.check_moment(later_m, rec, tmp, checker)
+        checker, _ = stand_in_checker(tmp, [], subs=[(a0, a0 + 2.0, None)])
+        blind_m = dict(m)
+        safety.check_moment(blind_m, rec, tmp, checker)
+    return (moved[0] and moved_m["safe_options"]["action"][0] == round(a0 + 7.0, 2)
+            and "action" not in gone_m["safe_options"]
+            and later[0] and later_m["safe_options"]["action"] == [a0, a1]
+            and any(f.startswith("PROFANITY") and "ass" in f for f in later_m["safety"]["flags"])
+            and blind_m["safe_options"].get("action", [a0])[0] != a0)
+
+
+@check
+def subtitle_sheets_cut_the_band_at_full_size():
+    """make_sheets(subtitles=True) on a real 1920x1080 video: each frame is cut to its subtitle band and 4 are
+    stacked, 1280 px wide, one a second"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src.mp4"
+        launch.subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=10",
+                               "-pix_fmt", "yuv420p", str(src)], capture_output=True)
+        sheets = safety.make_sheets(src, 1.0, 9.0, 1.0, Path(tmp) / "work", subtitles=True)
+        w, h = (int(v) for v in launch.subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(sheets[0][2])],
+            capture_output=True, text=True).stdout.strip().split(","))
+    band_h = round(1280 * (1080 * safety.SUBTITLE_BAND[3]) / (1920 * safety.SUBTITLE_BAND[2]))
+    return [(a, b) for a, b, _ in sheets] == [(1.0, 5.0), (5.0, 9.0)] and w == 1280 and abs(h - 4 * band_h) <= 8
 
 
 @check

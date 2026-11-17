@@ -67,9 +67,9 @@ its strip, and set `at_s` to the recording time printed on the frame where the h
 the landing, or the star rise's own `at_s`). Unsure, or no `peak_options`: `"peak": null` (no cold open, no zoom).
 
 **A later start (optional, every Short).** `"start_s": 255.0` starts the Short later inside its `window` (it must
-keep 15 s for an ACTION CLIP, 24 s for a NARRATED one, and an ACTION CLIP's peak). Use it when the first seconds of
-the sheet show subtitles with a swear word, a menu edge, or nothing happening. Read the subtitles on the sheet: mission
-dialogue can swear, and the game's own sound says the same words.
+keep 15 s for an ACTION CLIP, 24 s for a NARRATED one, and an ACTION CLIP's peak). prepare already moves a start
+past swearing it reads in the subtitles of the first 7 s, and flags swearing later as PROFANITY; use start_s for what
+it can't know, such as a dull opening or a swear word you can hear in the game sound.
 
 **NARRATED lines.** The voice says about 4 words a second (measured in the dry run: 3.8-4.0), so 20-35 s is about 80-135 words; aim for 100-125, and it must fit the window (`window[1] - window[0]`
 seconds). The footage plays on in real time under the voice from `window[0]`, so a line is on screen at about

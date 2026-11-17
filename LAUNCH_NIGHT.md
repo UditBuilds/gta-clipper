@@ -1,17 +1,23 @@
 # Launch night runbook (GTA 6, Wed Nov 19, 12:00 AM IST)
 
 One page. Do the steps in order. Claude makes the Shorts; you play, review and upload.
+Every PS5 menu path below was written from memory, not checked on a console: each says **(check on your PS5)**.
 
 ## Before midnight (once)
 
-1. **PS5 capture settings** (Settings > Captures and Broadcasts > Captures):
+1. **PS5 capture settings** (Settings > Captures and Broadcasts > Captures; **check on your PS5**):
    - Video clip format: **WebM, 1080p**. HDR **off** while recording (the tools can't fix HDR colours).
-   - **Include your microphone audio: Off. Include party audio: Off.** (Your earbuds' volume doesn't change what is
-     recorded.)
-   - **Max recording length**: start a test recording and check how long the PS5 lets it run. Plan to stop and start
-     a new recording **every 55 minutes or less**, so each part is its own file.
-2. **In the game's audio settings** (open them the first time you play): **radio volume 0**, and voice chat or phone
-   volume 0 if the game has them. Licensed songs in the game sound can get a Short blocked.
+   - **Include your microphone audio: Off. Include party audio: Off.** (In the same Captures menu; **check on your
+     PS5**. Your earbuds' volume doesn't change what is recorded.)
+   - **Max recording length**: start a test recording (Create button > Start New Recording; **check on your PS5**)
+     and see how long the PS5 lets it run. Plan to stop and start a new recording **every 55 minutes or less**, so each
+     part is its own file.
+2. **In GTA 6's settings** (open them the first time you play):
+   - Audio: **radio volume 0**, and voice chat or phone volume 0 if the game has them. Licensed songs in the game
+     sound can get a Short blocked.
+   - Display (or Accessibility): **SUBTITLES OFF**. Burned-in mission dialogue can swear. With subtitles on, /launch
+     reads them and moves or drops a Short that swears in its first 7 s; with them off there is nothing to read.
+     Either way, **spoken** swearing in the game sound is not checked: listen to each Short once (its SOUND flag).
 3. **Laptop**: open the Ollama app. Close ComfyUI and anything else that uses the GPU. Keep 40 GB free on C:.
    In PowerShell:
    ```powershell
@@ -31,9 +37,10 @@ One page. Do the steps in order. Claude makes the Shorts; you play, review and u
 ## The split night (recommended)
 
 1. **About 1:00 AM**: stop recording part 1. Start a new recording at once and keep playing.
-2. Copy part 1 to the laptop (Media Gallery > select the clip > Copy to USB drive; on the laptop):
+2. Copy part 1 to the laptop (Media Gallery > select the clip > Copy to USB drive; **check on your PS5**). On the
+   laptop (the folder the PS5 writes on the stick is `PS5\CREATE\Video Clips\<game>`; **check on your PS5**):
    ```powershell
-   Copy-Item "E:\PS5\CREATE\Video Clips\*\*.webm" C:\AI\gta\input\     # E: = the USB stick; check the folder names
+   Copy-Item "E:\PS5\CREATE\Video Clips\*\*.webm" C:\AI\gta\input\     # E: = the USB stick
    ```
 3. Run /launch on part 1 (step "Make the Shorts" below). It takes about 70 minutes for 1 hour of footage
    (about 40 of them the index), so part 1's Shorts are ready well before the 4:30 AM slot.
