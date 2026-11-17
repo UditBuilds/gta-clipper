@@ -1,0 +1,254 @@
+{
+  "topic": "GTA 6 launch checklist: do these before it unlocks",
+  "topic_score": {
+    "score": 5,
+    "why": "Every player needs to be ready for launch day: free space, the update, and the PS5 system update."
+  },
+  "title": "GTA 6 launch checklist: do THIS first",
+  "description": "Pre-loading does not let you play early, and a GTA 6 update of about 1 GB is reportedly already out for PS5. You need up to 212 GB of free space, and PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time on November 19.",
+  "hashtags": [
+    "#GTA6",
+    "#GTAVI",
+    "#GTA6Launch",
+    "#Shorts"
+  ],
+  "voice": "am_puck",
+  "speed": 1.1,
+  "music": "Twin Lynches - Density & Time.mp3",
+  "sfx": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "lines": [
+    {
+      "say": "Pre-loading does not let you play early.",
+      "facts": [
+        "preload-no-early-play"
+      ],
+      "beats": [
+        {
+          "beat": "card",
+          "card": "PRE-LOAD|~EARLY PLAY~",
+          "label": {
+            "text": "Not early access",
+            "style": "no"
+          }
+        },
+        {
+          "beat": "full",
+          "query": "helicopter"
+        }
+      ],
+      "green": [],
+      "red": [
+        "PLAY EARLY"
+      ]
+    },
+    {
+      "say": "First, you need up to 212 GB of free space.",
+      "facts": [
+        "storage-212-gb"
+      ],
+      "beats": [
+        {
+          "beat": "full",
+          "query": "bridge ocean"
+        },
+        {
+          "beat": "count",
+          "card": "212 GB",
+          "label": {
+            "text": "Free space",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "212 GB"
+      ],
+      "red": []
+    },
+    {
+      "say": "A GTA 6 update of about 1 GB is reportedly already out for PS5.",
+      "facts": [
+        "update-1002"
+      ],
+      "beats": [
+        {
+          "beat": "banner",
+          "text": "The update",
+          "query": "boat ocean"
+        },
+        {
+          "beat": "count",
+          "card": "1 GB",
+          "label": {
+            "text": "Update, reported",
+            "style": "info"
+          }
+        },
+        {
+          "beat": "card",
+          "card": "UPDATE|*1.002.000*",
+          "label": {
+            "text": "PS5, reported",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "1 GB"
+      ],
+      "red": []
+    },
+    {
+      "say": "Install it before launch night, so you're not stuck downloading on the day.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "full",
+          "query": "car neon"
+        },
+        {
+          "beat": "snippet",
+          "text": "Install it before launch night.",
+          "highlight": [
+            "before launch night"
+          ],
+          "label": {
+            "text": "Advice",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "BEFORE LAUNCH NIGHT"
+      ],
+      "red": []
+    },
+    {
+      "say": "On PS5, the update reportedly requires the latest PS5 system update.",
+      "facts": [
+        "ps5-firmware-1422"
+      ],
+      "beats": [
+        {
+          "beat": "card",
+          "card": "PS5|*14.22.00.00*",
+          "label": {
+            "text": "Firmware, reported",
+            "style": "info"
+          }
+        },
+        {
+          "beat": "full",
+          "query": "police car night"
+        }
+      ],
+      "green": [
+        "LATEST PS5 SYSTEM UPDATE"
+      ],
+      "red": []
+    },
+    {
+      "say": "The update reportedly rolled out in waves.",
+      "facts": [
+        "update-waves"
+      ],
+      "beats": [
+        {
+          "beat": "full",
+          "query": "motorcycle road"
+        },
+        {
+          "beat": "snippet",
+          "text": "Rolled out in waves, first to about half of players.",
+          "highlight": [
+            "waves"
+          ],
+          "label": {
+            "text": "Reported",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "WAVES"
+      ],
+      "red": []
+    },
+    {
+      "say": "Tip: turn on auto-downloads and keep your console in rest mode.",
+      "facts": [],
+      "beats": [
+        {
+          "beat": "banner",
+          "text": "Pro tip",
+          "query": "pool palm trees"
+        },
+        {
+          "beat": "snippet",
+          "text": "Turn on auto-downloads. Keep your console in rest mode.",
+          "highlight": [
+            "auto-downloads",
+            "rest mode"
+          ],
+          "label": {
+            "text": "Tip",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "AUTO-DOWNLOADS"
+      ],
+      "red": []
+    },
+    {
+      "say": "PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time.",
+      "facts": [
+        "unlock-time"
+      ],
+      "beats": [
+        {
+          "beat": "banner",
+          "text": "Launch night",
+          "query": "Jason Lucia"
+        },
+        {
+          "beat": "full",
+          "query": "city skyline"
+        },
+        {
+          "beat": "snippet",
+          "text": "PlayStation Store listings reportedly show GTA 6 unlocking at midnight local time.",
+          "highlight": [
+            "midnight local time"
+          ],
+          "label": {
+            "text": "PS Store, reported",
+            "style": "info"
+          }
+        }
+      ],
+      "green": [
+        "MIDNIGHT LOCAL TIME"
+      ],
+      "red": []
+    },
+    {
+      "say": "Remember, pre-loading does not let you play early.",
+      "facts": [
+        "preload-no-early-play"
+      ],
+      "beats": [
+        {
+          "beat": "full",
+          "query": "city skyline night"
+        }
+      ],
+      "green": [],
+      "red": [
+        "PLAY EARLY"
+      ]
+    }
+  ]
+}
