@@ -2864,25 +2864,30 @@ def write_png(path, pixels):
 _LAYER_LOCK = threading.Lock()
 
 
-def card_layer(folder, frame):
+def card_layer(folder, frame, radius=CARD_RADIUS, border=CARD_BORDER, shadow=None, margin=CARD_MARGIN):
     """The framed card's layer and its picture's mask, as PNGs in folder, drawn once per size: a white box with rounded
     corners over its hard shadow, with CARD_MARGIN of room on every side; and the picture's own rounded corners, a
-    little tighter, so the white shows as a border all round."""
+    little tighter, so the white shows as a border all round. radius, border, shadow (dx, dy, blur, alpha) and margin
+    are look C's unless a caller asks for others (edit2.py's PIP card, PR 26); look C's files keep their names."""
     import numpy as np
+    dx, dy, blur, strength = shadow or (CARD_SHADOW_DX, CARD_SHADOW_DY, CARD_SHADOW_BLUR, CARD_SHADOW_ALPHA)
     ow, oh = frame["outer"][2:]
     cw, ch = frame["content"][2:]
-    layer, mask = Path(folder) / f"card_{ow}x{oh}.png", Path(folder) / f"mask_{cw}x{ch}.png"
+    inner = max(radius - border, 4)
+    look_c = (radius, border, shadow, margin) == (CARD_RADIUS, CARD_BORDER, None, CARD_MARGIN)
+    tag = "" if look_c else f"_r{radius}m{margin}s{dx:g}_{dy:g}_{blur:g}_{strength:g}"
+    layer = Path(folder) / f"card_{ow}x{oh}{tag}.png"
+    mask = Path(folder) / (f"mask_{cw}x{ch}.png" if look_c else f"mask_{cw}x{ch}_r{inner}.png")
     with _LAYER_LOCK:
         if not layer.is_file():
-            lw, lh, m = ow + 2 * CARD_MARGIN, oh + 2 * CARD_MARGIN, CARD_MARGIN
-            box = rounded_rect(lw, lh, m, m, ow, oh, CARD_RADIUS)
-            shadow = soften(rounded_rect(lw, lh, m + CARD_SHADOW_DX, m + CARD_SHADOW_DY, ow, oh, CARD_RADIUS),
-                            CARD_SHADOW_BLUR).clip(0, 1) * CARD_SHADOW_ALPHA
-            alpha = box + shadow * (1 - box)
+            lw, lh, m = ow + 2 * margin, oh + 2 * margin, margin
+            box = rounded_rect(lw, lh, m, m, ow, oh, radius)
+            drop = soften(rounded_rect(lw, lh, m + dx, m + dy, ow, oh, radius), blur).clip(0, 1) * strength
+            alpha = box + drop * (1 - box)
             white = 255 * box / np.maximum(alpha, 1e-6)          # white over black, as straight alpha
             write_png(layer, np.dstack([white, white, white, alpha * 255]).round().clip(0, 255).astype(np.uint8))
         if not mask.is_file():
-            corners = rounded_rect(cw, ch, 0, 0, cw, ch, max(CARD_RADIUS - CARD_BORDER, 4))
+            corners = rounded_rect(cw, ch, 0, 0, cw, ch, inner)
             write_png(mask, (corners * 255).round().astype(np.uint8))
     return layer, mask
 
