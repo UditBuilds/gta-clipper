@@ -66,9 +66,14 @@ sentence case otherwise. Description: **exactly 2 sentences**, no hashtags. 3-5 
 its strip, and set `at_s` to the recording time printed on the frame where the hit happens (the impact, the explosion,
 the landing, or the star rise's own `at_s`). Unsure, or no `peak_options`: `"peak": null` (no cold open, no zoom).
 
+**A later start (optional, every Short).** `"start_s": 255.0` starts the Short later inside its `window` (it must
+keep 15 s for an ACTION CLIP, 24 s for a NARRATED one, and an ACTION CLIP's peak). Use it when the first seconds of
+the sheet show subtitles with a swear word, a menu edge, or nothing happening. Read the subtitles on the sheet: mission
+dialogue can swear, and the game's own sound says the same words.
+
 **NARRATED lines.** 20-35 s of voice is about 55-95 words, and it must fit the window (`window[1] - window[0]`
 seconds). The footage plays on in real time under the voice from `window[0]`, so a line is on screen at about
-`window[0] + (words before it / all words) x voice length`: **put the lines in the time order of their evidence**, and
+`window[0] + (words before it / all words) x voice length` (`start_s` instead of `window[0]` when you set it): **put the lines in the time order of their evidence**, and
 each line must cite evidence shown while it is spoken. Every line has:
 - `"claim": "on_screen"` (what the footage shows) with `"evidence"` ids, or
 - `"claim": "fact"` (how the game works) with `"facts"` from `facts.json`: `confirmed`, or `reported` in its exact

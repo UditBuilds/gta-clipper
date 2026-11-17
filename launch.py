@@ -973,6 +973,20 @@ def check_peak(short, m, no_cold_open):
     return round(at, 2), []
 
 
+def trimmed(m, start):
+    """(the moment with its footage starting at `start` instead, problems). shorts.json may start a Short later
+    inside its window (to skip a swear word in the subtitles or a dull opening), keeping ACTION_LEN[0] / NARRATED_MIN_S
+    of footage; evidence and peak options that end before the new start drop out (their ids stay the same)."""
+    w0, w1 = m["window"]
+    need = ACTION_LEN[0] if m["type"] == "action" else NARRATED_MIN_S
+    if isinstance(start, bool) or not isinstance(start, (int, float)) or not w0 <= start <= w1 - need:
+        return m, [f"start_s: {start!r} must be a time from {w0:.1f} to {w1 - need:.1f} s of the recording (the Short "
+                   f"keeps {need:g} s of footage or more)"]
+    start = round(float(start), 2)
+    return dict(m, window=[start, w1], evidence=[e for e in m["evidence"] if e["to_s"] > start],
+                peak_options=[o for o in m.get("peak_options", []) if o["to_s"] > start + 0.5]), []
+
+
 def tools():
     ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
@@ -1155,7 +1169,12 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
              "video": m["video"], "window": m["window"]}
     out = short_folder(folder, n, short.get("title"))
     entry["folder"] = str(out)
-    problems, flags, _ = truth.check_short(short, m, facts, today)
+    problems = []
+    if short.get("start_s") is not None:
+        m, problems = trimmed(m, short["start_s"])
+        entry["window"] = m["window"]
+    more, flags, _ = truth.check_short(short, m, facts, today)
+    problems += more
     peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" else (None, []))
     problems += peak_problems
     if problems:
@@ -1164,6 +1183,12 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     out.mkdir(parents=True, exist_ok=True)
     hook = hooks_list[star]
     try:
+        if short.get("start_s") is not None and checker is not None:
+            gore = safety_checks.gore_in(checker, recs_stub(m), m["path"],
+                                         safety_checks.first_seconds(m["window"][0]), out / "safety")
+            if gore:
+                raise RenderProblem("start_s: the new first 7 s show blood (" + "; ".join(safety_checks.fmt(gore))
+                                    + "); pick another start")
         if m["type"] == "action":
             if peak is not None and checker is not None:
                 cold = safety_checks.first_seconds(m["window"][0], peak)[0]

@@ -716,6 +716,20 @@ def hooks_titles_and_descriptions_follow_the_rules():
 
 
 @check
+def a_short_may_start_later_inside_its_window():
+    """start_s moves a Short's start later (to skip a swear word in the subtitles) and drops the evidence that ends
+    before it; a start that leaves less than the type's minimum, or isn't a number, is refused"""
+    pick = chase_pick()
+    w0, w1 = pick["window"]
+    later, ok = launch.trimmed(pick, w0 + 6.0)
+    _, too_late = launch.trimmed(pick, w1 - 10.0)
+    _, word = launch.trimmed(pick, "soon")
+    return (ok == [] and later["window"] == [w0 + 6.0, w1] and all(e["to_s"] > w0 + 6.0 for e in later["evidence"])
+            and len(later["evidence"]) < len(pick["evidence"]) and pick["window"] == [w0, w1]
+            and "start_s" in too_late[0] and "start_s" in word[0])
+
+
+@check
 def an_auto_peak_must_come_from_evidence():
     """an ACTION CLIP's peak must name one of the moment's peak options (a star rise or a crash, explosion or stunt
     sheet) and lie within 1 s of it inside the clip; no peak, or --no-cold-open, means no cold open"""
