@@ -71,7 +71,7 @@ keep 15 s for an ACTION CLIP, 24 s for a NARRATED one, and an ACTION CLIP's peak
 the sheet show subtitles with a swear word, a menu edge, or nothing happening. Read the subtitles on the sheet: mission
 dialogue can swear, and the game's own sound says the same words.
 
-**NARRATED lines.** 20-35 s of voice is about 55-95 words, and it must fit the window (`window[1] - window[0]`
+**NARRATED lines.** The voice says about 4 words a second (measured in the dry run: 3.8-4.0), so 20-35 s is about 80-135 words; aim for 100-125, and it must fit the window (`window[1] - window[0]`
 seconds). The footage plays on in real time under the voice from `window[0]`, so a line is on screen at about
 `window[0] + (words before it / all words) x voice length` (`start_s` instead of `window[0]` when you set it): **put the lines in the time order of their evidence**, and
 each line must cite evidence shown while it is spoken. Every line has:

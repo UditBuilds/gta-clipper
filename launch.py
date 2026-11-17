@@ -1059,13 +1059,19 @@ def render_action(short, m, out_dir, hook, peak, log=print):
             "shown": [[Path(m["path"]).stem, w0, w1]]}
 
 
+WORDS_PER_BEAT = 7          # the voice says about 4 words a second, so a beat of about 7 words lasts 1.5-2 s
+
+
 def layout(line, n, by_id):
-    """A narrated line's beats: lines about the stars float the footage as a 16:9 card (the HUD stays in view);
-    the others are full screen, then a card, alternating which comes first, so the picture changes."""
+    """A narrated line's beats: a line about the stars floats the footage as one 16:9 card (the HUD stays in view);
+    the others switch between full screen and a card about every WORDS_PER_BEAT words (the explainer's 1.5-2 s), at
+    least twice, starting with a different one on every other line, so the picture keeps changing."""
     stars = any(by_id.get(i, {}).get("kind") == "stars" for i in line.get("evidence", []))
     if stars:
         return ["card"]
-    return ["full", "card"] if n % 2 == 0 else ["card", "full"]
+    count = max(2, math.ceil(len(str(line.get("say", "")).split()) / WORDS_PER_BEAT))
+    kinds = ("full", "card") if n % 2 == 0 else ("card", "full")
+    return [kinds[k % 2] for k in range(count)]
 
 
 def narrated_script(short, m, ats=None):
