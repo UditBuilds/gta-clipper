@@ -131,5 +131,26 @@
         {"id": "chase-crash-police", "want": "a crash in a chase with police in the picture", "query": {"activity": ["chase"], "police": true, "text": ["crash", "collision", "smash", "wreck"], "min_len": 4}}
       ]
     }
+  ],
+  "experiments_note": "EXPERIMENTS TO PLAY on launch night (PR 26), one per story format. Each says what to do, what must be on screen so the Short can prove it (the HUD visible, the camera on it, wait for the result), and a library.py query that finds it after indexing. F1 also lists the GTA 5 footage the library already has for the same topic. Nothing here is a fact about GTA 6.",
+  "experiments": [
+    {"id": "f2-lose-stars-car-swap", "format": "F2", "try": "Get 2-3 wanted stars, get out, take a different car in view of the camera, drive off; keep going until the stars are gone (or 60 s)", "proof": "the stars on the HUD the whole time; the car swap on camera; the moment the stars go", "query": {"activity": ["driving", "on_foot"], "after": ["chase"], "max_stars": 0, "min_len": 6}},
+    {"id": "f2-lose-stars-outfit", "format": "F2", "try": "Get 1-2 stars, change outfit (a store or the wardrobe if the game allows it mid-chase), walk out and stand still for 20 s", "proof": "the stars before and after; the new outfit on camera; menus are never used, so show the walk out", "query": {"activity": ["on_foot"], "max_stars": 0, "min_len": 6}},
+    {"id": "f2-hide-in-water", "format": "F2", "try": "Get 2 stars near water, jump or drive in, stay under or swim away from the shore", "proof": "the stars on the HUD, the water, the stars going (or not)", "query": {"activity": ["swimming", "boat"], "min_len": 4}},
+    {"id": "f4-first-car", "format": "F4", "try": "Your first drive: get the camera behind the car for 15 s on an open road, then a slow turn", "proof": "the car and the road clearly in view, no menus", "query": {"activity": ["driving"], "min_len": 15}},
+    {"id": "f4-first-chase", "format": "F4", "try": "Your first wanted level in a car: keep the chase going 30 s with the police in the picture", "proof": "stars on the HUD, police cars in view", "query": {"activity": ["chase"], "min_stars": 1, "min_len": 15}},
+    {"id": "f4-first-beach", "format": "F4", "try": "Your first time at the beach: walk onto the sand, turn the camera slowly across the water and the skyline", "proof": "a slow, clear view: sand, water, people, buildings", "query": {"text": ["beach", "sand", "ocean", "shore"], "min_len": 6}},
+    {"id": "f4-first-switch", "format": "F4", "try": "Your first Jason/Lucia switch: before it, stand still for 3 s; after it, 10 s of the other character in view", "proof": "both characters before and after (the switch screen itself is never used)", "query": {"text": ["switch", "swap", "character"], "min_len": 4}},
+    {"id": "f1-police-chase", "format": "F1", "try": "A chase at 3+ stars with the police cars in view for 15 s", "proof": "the police cars and the stars, so they can be set beside GTA 5's", "query": {"activity": ["chase"], "police": true, "min_len": 10},
+     "gta5_library": ["Grand Theft Auto V_20261026160754 1:54-3:34 chase at night in the rain, 3+ stars", "Grand Theft Auto V_20261026163544 2:33-4:02 chase, 3+ stars", "Grand Theft Auto V_20261026163544 4:09-4:54 the river-truck chase, 4 stars"]},
+    {"id": "f1-losing-the-stars", "format": "F1", "try": "Lose a wanted level after a chase and keep driving 10 s", "proof": "the stars going from lit to gone on the HUD", "query": {"activity": ["driving", "on_foot"], "after": ["chase"], "max_stars": 0, "min_len": 6},
+     "gta5_library": ["Grand Theft Auto V_20261026163544 4:54-5:10 driving right after the chase, no stars", "test1 1:52-2:06 driving after a chase, no stars"]},
+    {"id": "f1-night-rain-drive", "format": "F1", "try": "A night drive in the city, ideally in the rain, 15 s with the lights and the wet road in view", "proof": "night, rain or wet streets, the city lights", "query": {"activity": ["driving"], "text": ["night", "rain", "neon"], "min_len": 10},
+     "gta5_library": ["Grand Theft Auto V_20261026160754 0:08-1:54 rainy night drive", "Grand Theft Auto V_20261026163544 15:25-17:54 driving in the rain"]},
+    {"id": "f1-shootout", "format": "F1", "try": "A short shootout with cover, 10 s, the camera behind the character", "proof": "the gun, the cover, the enemies in view", "query": {"activity": ["shootout"], "min_len": 8},
+     "gta5_library": ["Grand Theft Auto V_20261026163544 0:33-1:30 shootout", "Grand Theft Auto V_20261026163544 18:00-18:38 shootout"]},
+    {"id": "f1-sports-car", "format": "F1", "try": "Drive a sports car for 15 s, camera behind, then a hard turn", "proof": "the car clearly in view", "query": {"activity": ["driving", "chase"], "text": ["sports car"], "min_len": 8},
+     "gta5_library": ["Grand Theft Auto V_20261026160754 0:08-1:54 a sports car in the rain", "test1 2:36-2:46 sports car in a chase"]},
+    {"id": "f3-three-things-chase", "format": "F3", "try": "One chase that shows three different things: a star rise, police in view, and a crash, a helicopter or a jump", "proof": "each of the three clearly on screen, the HUD visible", "query": {"activity": ["chase"], "min_stars": 2, "min_len": 20}}
   ]
 }

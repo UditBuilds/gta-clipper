@@ -415,6 +415,22 @@ def the_v2_render_checks_timing_and_logs_the_story():
             and any("a story Short is 25-40 s" in p for p in second["problems"]) and "F3" in page)
 
 
+@check
+def the_launch_night_experiments_cover_every_format():
+    """shotlist.json's experiments: each names a story format, what to try and what must be on screen as proof, and a
+    query library.py accepts; every format has at least one; every F1 lists the GTA 5 footage the library already has;
+    the topics stay as they were (nothing here is a claim about GTA 6)"""
+    import library
+    data = library.load_shotlist()
+    exps = data.get("experiments") or []
+    for e in exps:
+        library.check_query(e["query"])
+    return (exps and {e["format"] for e in exps} == set(truth.FORMATS)
+            and all(e["format"] in truth.FORMATS and e["try"].strip() and e["proof"].strip() for e in exps)
+            and all(e.get("gta5_library") for e in exps if e["format"] == "F1")
+            and "claim" not in json.dumps(data["topics"]).lower())
+
+
 def main():
     ok = True
     for fn in CHECKS:
