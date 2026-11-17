@@ -1,6 +1,6 @@
 """Safety checks for /launch (PR 25), all in code: what a Short may never show, and what its sound may never do.
 
-1. A safety question to the vision model (prompts/safety_v1.txt) on every finalist's footage, as 4-frame sheets:
+1. A safety question to the vision model (prompts/safety_v2.txt) on every finalist's footage, as 4-frame sheets:
    a frame every second (every half second in NO-HUD mode, where this is the only check). It asks: phone on screen,
    menu or map, loading or black, cutscene, blood or gore, subtitles. The first four block the footage they are in;
    the phone is caught this way with no phone calibration at all. Subtitles and blood after the first 7 s are flags
@@ -30,7 +30,7 @@ import index
 import library
 import vlm
 
-PROMPT_VERSION = "safety_v1"
+PROMPT_VERSION = "safety_v2"     # prompts/LOG.md: v2 catches more cutscenes (set B 23/31 vs 8/31)
 BLOCKING = ("phone_screen", "menu_or_map", "loading_or_black", "cutscene")
 WHAT = {"phone_screen": "phone on screen", "menu_or_map": "menu or map", "loading_or_black": "loading or black screen",
         "cutscene": "cutscene", "blood_or_gore": "blood or gore", "subtitles": "subtitles"}
