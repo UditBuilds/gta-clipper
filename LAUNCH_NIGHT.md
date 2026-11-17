@@ -35,11 +35,12 @@ One page. Do the steps in order. Claude makes the Shorts; you play, review and u
    ```powershell
    Copy-Item "E:\PS5\CREATE\Video Clips\*\*.webm" C:\AI\gta\input\     # E: = the USB stick; check the folder names
    ```
-3. Run /launch on part 1 (step "Make the Shorts" below). It takes about 45 minutes for 1 hour of footage.
+3. Run /launch on part 1 (step "Make the Shorts" below). It takes about 70 minutes for 1 hour of footage
+   (about 40 of them the index), so part 1's Shorts are ready well before the 4:30 AM slot.
 4. Later, stop part 2, copy it the same way and run /launch again. It **skips part 1** (already done), **never uses
    part 1's footage again**, and writes a new folder (`launch-2026-11-19-part2`).
 
-One long run works too: about 90 minutes of waiting for 2 hours of footage.
+One long run works too, but it takes about 1 hour 45 minutes for 2 hours of footage.
 
 ## Make the Shorts
 
