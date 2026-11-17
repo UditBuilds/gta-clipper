@@ -736,3 +736,87 @@ every guess accepted (PASS on the 25 min recording):
 says the same words), music in the game sound, whether a crash looks cinematic, and whether a star-rise cold open is
 exciting (it often isn't). GTA 6's HUD is unknown until launch night: if the calibration fails, the night runs in
 NO-HUD mode.
+
+## The story layer: Shorts that teach one thing (PR 26)
+
+The /launch dry-run Shorts of PR 25 worked, but I couldn't post them: the gameplay was cut 7+ times every 10 s with
+nothing on top, and the narration only described what happened. The S4 sample fixed the pacing, but a viewer still
+couldn't follow it (a mission, a joke break, a circle that meant nothing). So a Short now has to **teach one thing**,
+and my footage is the **proof**, not the content. The reference is a frame-by-frame breakdown of a top GTA 6 Shorts
+channel (`docs/reference/`, not in the repo); the plan is [docs/S4_PLAN.md](docs/S4_PLAN.md).
+
+**Edit engine v2 (`edit2.py`)**, used by /launch for every narrated Short (`--engine v1` keeps PR 25's):
+
+- **One moment, in time order.** The background is cut from one stretch of one recording, into shots of 3.5-5.0 s
+  cut where a word starts. Each shot starts at or after the end of the one before, so it may skip ahead but never
+  goes back. The payoff gets one held shot (up to 6 s).
+- **Words match the picture.** Every word that names something its line's evidence shows (stars, police, a crash, a
+  thing the vision model saw) is on screen within 0.5 s of the word's start. The engine places the footage to make
+  that true or names the word it can't.
+- **Context first.** The first 2 s show the situation before the action.
+- **A pop-in layer that explains**, 1.5-2 s apart (up to 3 s, every gap over 2 s logged with why), each with its own
+  sound:
+  - a rounded card of the HUD with the wanted stars ringed and zoomed;
+  - a red ring that follows a car or a police car frame by frame (a template match; no ring if it's lost);
+  - pills that name what's on screen;
+  - F3's number badges.
+- **The break** freezes on the key detail (ringed and labelled) or splits the screen, never with joke text.
+- **The ending:** a silent subscribe pill and a loop back to the first frame. Yellow captions at Y 740 (picked from
+  the sample).
+
+```powershell
+.\.venv-tts\Scripts\python.exe edit2.py examples\s4_sample.json --plan               # timeline, anchors, gaps
+.\.venv-tts\Scripts\python.exe launch.py frame --short 1 --at 113.5                  # a gridded frame to read a box from
+.\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v1     # PR 25's render
+.\.venv-tts\Scripts\python.exe storytest.py                                          # 16 checks, about 1.5 minutes
+```
+
+**The rules in code.**
+
+- **truth.py:** every line either teaches (`on_screen` or `fact`, with `teaches`: what the viewer learns) or asks (a
+  question with the line that answers it). It refuses:
+  - play-by-play ("I drive ...", "So I cut across ...");
+  - more or fewer than one payoff;
+  - a last line without `loop` or ending in a full stop;
+  - a spoken call to action;
+  - an F2 line that says why without the change and the result cited in order;
+  - a circle, HUD card, pill or freeze label that doesn't name what it shows;
+  - mission footage without `mission_ok`.
+- **launch.py (render):** the payoff must start at 45-75 % and a story Short must last 25-40 s.
+- **launch.py (prepare): the quality gate.** A moment with nothing to teach and no payoff is skipped, and so is
+  mission footage without a payoff that needs no story. /launch then makes 1-3 Shorts, not always 3.
+
+**Formats** (each pick's `format_options` comes from its evidence; Claude picks one and says why):
+
+| Format | What it teaches |
+|---|---|
+| **F1** GTA 5 vs GTA 6 | what changed |
+| **F2** Test | the answer, on the HUD: the stars rise, then are all gone |
+| **F3** Three things | 3 different things the moment shows |
+| **F4** First look | the session's first boat, flight, swim, chase or shootout (GTA 6 only) |
+
+For F1, the other side is my GTA 5 library clip of the same kind; a dry run uses Rockstar's official picture,
+flagged DRYRUN STAND-IN, and render refuses that outside a dry run. LAUNCH_NIGHT.md and `shotlist.json`
+(`experiments`) list 13 things to play on purpose for each format.
+
+**The dry run (Nov 18)** on the 4 GTA V recordings:
+
+- Prepare took 26.1 min (index answers cached).
+- The gate skipped 3 mission moments, the S4 sample's river-truck chase among them.
+- Of the 3 picks:
+  - **Short 1 (F3, READY):** "Can you get three stars instantly?", a rainy night drive, police lights pulling up,
+    then the HUD going from 0 to 3 stars, frozen and labelled. 28.6 s, payoff at 70 %, 9 pop-ins, background shots
+    3.7 s on average, true peak -1.4 dBTP.
+  - **Short 2 (action clip, READY):** a gun-out run, a star and a carjack, 20.0 s.
+  - **Short 3 (left out):** a mission motorbike ride whose "crash" was really the bike riding into a tunnel. Nothing
+    true to teach.
+- The render's checks sent Short 1 back three times before it was right: a stunt word ("jumps"), two anchors on one
+  instant, and the moment running out of footage. Each fix is in code or in launch.md.
+
+**Not in this PR:**
+
+- **Spoken swearing is still not checked.** faster-whisper is approved but not installed yet, so every Short's
+  SOUND flag still says to listen once.
+- **Action clips have none of the v2 extras** (slow-mo on the impact, a ring on the stars, a replay ending).
+- **The split-screen break and a real F1 (GTA 6 vs my GTA 5 clip) haven't run on real footage.**
+- **F4 can only run on GTA 6.**

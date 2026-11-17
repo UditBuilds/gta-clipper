@@ -381,6 +381,29 @@ def a_dry_run_stand_in_is_flagged_and_never_used_for_real():
 
 
 @check
+def only_an_f1_short_uses_the_other_side():
+    """a pick that offers F1 but is made as F3 shows none of the other side: no pip or split gets its file, render
+    doesn't refuse it outside a dry run, and no stand-in flag (the dry run's F3 Short 1 had one)"""
+    side = launch.compare_side(launch.COMPARE_TOPICS[0], set(), "a city street at night", "gta5", True)
+    if side is None:
+        return False
+    pick = dict(chase_pick(), format_options=[{"format": "F1", "why": "x", "compare": side},
+                                              {"format": "F3", "why": "y"}])
+    f3, f1 = story_short(pick, format="F3"), story_short(pick, format="F1")
+    script = launch.story_script(f3, pick, Path("."), True)
+    files = [p.get("file") for l in script["lines"] for p in l["pops"]] + [(script.get("break") or {}).get("file")]
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            launch.render_story(f3, pick, Path(tmp), FACTS, TODAY, [], Path(tmp), False, synth=fake_synth,
+                                v2_render=lambda *a, **k: {})
+            refused_for_it = False
+        except launch.RenderProblem as e:
+            refused_for_it = "DRYRUN STAND-IN" in str(e)
+    return (launch.compare_of(pick, f3) is None and launch.compare_of(pick, f1) is side
+            and side["file"] not in files and not refused_for_it)
+
+
+@check
 def the_v2_render_checks_timing_and_logs_the_story():
     """render() with engine v2 (a made-up voice and render): every named thing is placed on screen with its word,
     the payoff lands at 45-75 %, the Short is READY with its format on the review page; a payoff too late or a Short

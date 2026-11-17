@@ -1424,8 +1424,11 @@ ANCHOR_STOP = {"with", "from", "into", "that", "this", "there", "their", "they",
                "camera", "player", "character", "scene", "image", "frame", "appears", "visible", "near", "next"}
 
 
-def compare_of(m):
-    """The F1 other side this pick offers, or None."""
+def compare_of(m, short):
+    """The F1 other side this pick offers, or None. Only an F1 Short uses it: a pick that could also be F1 but is made
+    as F3 shows none of it, so it gets no stand-in flag and its GTA 5 clip is not logged as shown."""
+    if short.get("format") != "F1":
+        return None
     return next((f["compare"] for f in m.get("format_options") or [] if f["format"] == "F1"), None)
 
 
@@ -1465,7 +1468,7 @@ def story_script(short, m, folder, dry_run):
     its pops (an F1 pip or split gets the other side's file, label and the DRYRUN STAND-IN note), the break, the
     yellow captions, am_puck and the silent subscribe pill."""
     by_id = {e["id"]: e for e in m["evidence"]}
-    side = compare_of(m)
+    side = compare_of(m, short)
     profile = Path(folder) / "profiles" / f"{m['profile']}.json"
     lines = []
     for line in short["lines"]:
@@ -1526,7 +1529,7 @@ def render_story(short, m, out_dir, facts, today, indexes, folder, dry_run, log=
     setup first), then the timing rules (25-40 s, the payoff at 45-75 %), then it renders and what got on screen is
     checked against the index."""
     import edit2
-    side = compare_of(m)
+    side = compare_of(m, short)
     if side and side.get("standin") and not dry_run:
         raise RenderProblem("a DRYRUN STAND-IN is never used outside a dry run")
     script = story_script(short, m, folder, dry_run)
