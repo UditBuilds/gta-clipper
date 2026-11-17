@@ -43,19 +43,6 @@
       ]
     },
     {
-      "say": "Let me explain. Here's the checklist.",
-      "facts": [],
-      "beats": [
-        {
-          "beat": "banner",
-          "text": "The checklist",
-          "query": "palm trees sunset"
-        }
-      ],
-      "green": [],
-      "red": []
-    },
-    {
       "say": "First, you need up to 212 GB of free space.",
       "facts": [
         "storage-212-gb"
