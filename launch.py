@@ -68,7 +68,11 @@ LOOP_LEAD_S = 2.0                        # a narrated Short's loop ending replay
 # --- Is the HUD reading trustworthy? (hud_check) ---
 GAMEPLAY = ("driving", "on_foot", "shootout", "chase", "flying", "boat", "swimming")
 NO_HUD_LABELS = ("cutscene", "menu_map", "loading")
-AGREE_MIN = 0.8          # of the sheets the model calls gameplay, at least this share must show the minimap
+# Of the sheets the model calls gameplay, at least this share must show the minimap. It was 0.8 until the first dry
+# run (Nov 17): the hand-made gta5.json itself scored 0.72-0.89 on the 4 dev recordings, because the model calls
+# about a quarter of the cutscenes in story-heavy footage gameplay. 0.5 still catches a profile that misses the
+# minimap half the time, with room for a cutscene-heavy first hour.
+AGREE_MIN = 0.5
 AGREE_MIN_SHEETS = 10    # ...checked once there are this many
 HIDDEN_MIN = 0.5         # of the sheets it calls a cutscene, menu or loading, at least this share must show none
 HIDDEN_MIN_SHEETS = 5
