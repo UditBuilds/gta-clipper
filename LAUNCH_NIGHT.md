@@ -50,7 +50,8 @@ claude
 In Claude Code type `/model sonnet`, then `/launch`. It asks you nothing. When it is done it prints the review page:
 `C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).
 
-Faster index: FILLED IN AFTER THE DRY RUN.
+The index stays at one sheet every 6 s. One every 12 s was measured on Nov 17: about 40 % faster, but it found
+only 3 of the 5 answer-key moments of test1 (6 s: 5 of 5), so it is not used.
 
 ## Review and upload (about 5 minutes per Short)
 
