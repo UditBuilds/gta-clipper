@@ -26,13 +26,36 @@ Every PS5 menu path below was written from memory, not checked on a console: eac
    .\.venv-tts\Scripts\python.exe launchtest.py      # about 2 minutes; the last line must say RESULT: PASS
    ```
 
-## While you play: what to try (it gives /launch good moments)
+## EXPERIMENTS TO PLAY (each one can become a Short that teaches one thing)
 
-- Get a wanted level, then lose it by **switching cars** or **changing your outfit**.
-- **First-hour moments**: the first drive, the first star, the first gun, the swamp, the beach, the neon.
-- **Jason and Lucia**: play both, switch between them, get them both in the picture.
-- **Big chases**: 3 or more stars, 30 seconds or longer, a helicopter, a crash with the police in view.
-- Cutscenes, menus, maps and the phone are never used, so don't worry about them, but they don't help either.
+/launch only makes a Short when the footage has a point: something a stranger learns, a test with its answer, or a
+clear payoff. Play a few of these on purpose. For every one: **keep the HUD on screen, keep the camera on what
+matters, and wait for the result** (the Short shows it as proof). Cutscenes, menus, maps and the phone are never
+used. The full list, with what must be on screen, is in `shotlist.json` (`experiments`).
+
+**F2 Tests ("can you ...?", the HUD gives the answer)**
+- **Swap cars to lose the cops:** get 2-3 stars, get out, take another car *on camera*, drive off, keep going until
+  the stars are gone (or 60 s).
+- **Change outfit to lose the cops:** 1-2 stars, change clothes if the game lets you, walk out, stand still 20 s.
+- **Hide in the water:** 2 stars near water, jump or drive in, swim away from the shore.
+- The Short can only say *why* the stars went if the change and the result are both on screen, in order. So film the
+  swap, then the stars going.
+
+**F4 First looks (what it looks like in GTA 6)**
+- **First car:** camera behind it, 15 s on an open road, then a slow turn.
+- **First chase:** your first wanted level in a car, 30 s, police in view.
+- **First beach:** walk onto the sand and turn the camera slowly across the water and the skyline.
+- **First Jason/Lucia switch:** stand still 3 s before it, then 10 s of the other character in view.
+
+**F1 GTA 5 vs GTA 6 (the same kind of moment in both games)**: your GTA 5 recordings already have these, so play
+the GTA 6 version:
+- **A police chase at 3+ stars, police in view 15 s** (GTA 5: the rainy night chase, the river-truck chase).
+- **Losing the stars after a chase, then 10 s of driving** (GTA 5: right after the river chase).
+- **A night drive in the rain, city lights in view** (GTA 5: the rainy night drive).
+- **A short shootout from cover** and **a sports car with a hard turn** (GTA 5 has both).
+
+**F3 Three things**: one chase that shows three different things: a star rise, police in view, and a crash, a
+helicopter or a jump.
 
 ## The split night (recommended)
 
@@ -55,7 +78,8 @@ One long run works too, but it takes about 1 hour 45 minutes for 2 hours of foot
 cd C:\AI\gta-clipper
 claude
 ```
-In Claude Code type `/model sonnet`, then `/launch`. It asks you nothing. When it is done it prints the review page:
+In Claude Code type `/model sonnet`, then `/launch`. It asks you nothing. It makes **1 to 3** Shorts (a moment with
+nothing to teach is skipped: fewer good Shorts beat 3 weak ones). When it is done it prints the review page:
 `C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).
 
 The index stays at one sheet every 6 s. One every 12 s was measured on Nov 17: about 40 % faster, but it found
@@ -64,7 +88,7 @@ only 3 of the 5 answer-key moments of test1 (6 s: 5 of 5), so it is not used.
 ## Review and upload (about 5 minutes per Short)
 
 Open review.html and follow the steps at its top: watch with sound, read the red flags, read each narrated line next
-to its evidence, fix a hook or a cold open with the command under it, then upload with the upload text. **Nothing is
+to its evidence and what it teaches (the format and its reason are under each Short's title), fix a hook or a cold open with the command under it, then upload with the upload text. **Nothing is
 uploaded automatically.** The Shorts are in order, best first.
 
 Upload slots: **about 4:30 AM IST** and **about 10:30 PM IST**.

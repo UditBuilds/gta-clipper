@@ -1,0 +1,21 @@
+{
+  "title": "S4 sample: truck in the river",
+  "voice": "am_puck",
+  "caption_style": "yellow",
+  "music": "auto",
+  "game_audio": true,
+  "end_pill": "@NeonGetaway • Subscribe",
+  "profile": "gta5",
+  "moment": {"file": "C:/AI/gta/input/Grand Theft Auto V_20261026163544.webm", "window": [258.0, 276.0],
+             "focus": 0.53},
+  "break": {"after_line": 3, "kind": "freeze", "at_s": 270.6, "hud": "stars", "label": "4 wanted stars"},
+  "lines": [
+    {"say": "Four stars and a truck in the river.",
+     "pops": [{"kind": "pip", "on": "stars", "hud": "stars"}]},
+    {"say": "The cops are right in front of me.",
+     "pops": [{"kind": "circle", "on": "cops", "box": [983, 497, 55, 55], "at": 260.0}]},
+    {"say": "So I cut across the concrete and drive straight back into the water."},
+    {"say": "Water flies everywhere, and the truck just keeps going.", "payoff": true},
+    {"say": "It comes out under the bridge, and I am still at", "loop": true}
+  ]
+}

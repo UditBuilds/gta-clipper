@@ -487,7 +487,7 @@ def pick_three(moments, session_s, ok=lambda m: (True, []), count=3, log=print):
                 if not checked[key][0]:
                     rejected.append({"video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
                                      "score": m["score"], "why": checked[key][1]})
-                    log(f"  {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} failed the safety checks: "
+                    log(f"  {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} was skipped (safety checks or the quality gate): "
                         + "; ".join(checked[key][1]))
             if checked[key][0]:
                 return m
@@ -691,6 +691,225 @@ def choose_types(picks, recs):
     return [m for m in picks if m["type"]]
 
 
+# --- 6b. The story layer (PR 26): what each pick can teach, and the quality gate ---
+
+MISSION_SHARE = 0.3      # subtitles (mission dialogue or objectives) in this share of a moment's sheets: mission footage
+LOST_STEADY_S = 3.0      # the stars count as lost when the HUD shows none for this long
+# F1 topics: what the moment's evidence must show (words in its lines, or an activity label), and the Rockstar query
+# for a dry run's stand-in "GTA 6" side (None: Rockstar's media has no picture of it, so only a real run's GTA 5
+# library clip can be the other side).
+COMPARE_TOPICS = (
+    ("the city at night", ("night",), (), "city skyline night"),
+    ("helicopters", ("helicopter",), ("flying",), "helicopter"),
+    ("the beach", ("beach",), ("swimming",), "beach"),
+    ("sports cars", ("sports car",), (), "sports car"),
+    ("police chases", ("police",), ("chase",), None),
+)
+FIRST_LOOK = ("boat", "flying", "swimming", "chase", "shootout")   # F4: the session's first of these (GTA 6 only)
+
+
+def mission_share(m, window):
+    """The share of the safety sheets over the window that saw subtitles (mission dialogue or objectives)."""
+    a, b = window
+    sheets = [s for s in (m.get("safety") or {}).get("sheets") or [] if s["from_s"] < b and a < s["to_s"]]
+    subs = [s for s in sheets if (s.get("answer") or {}).get("subtitles")]
+    return len(subs) / len(sheets) if sheets else 0.0
+
+
+def stars_lost(rec, after_s, end_s):
+    """The first time after after_s (before end_s) that the HUD shows no stars for LOST_STEADY_S, having shown some
+    since after_s, or None."""
+    count, steady = rec["count"], round(LOST_STEADY_S / STEP)
+    i0, i1 = int(after_s / STEP), min(rec["n"], int(end_s / STEP))
+    seen = False
+    for i in range(i0, i1):
+        if count[i]:
+            seen = True
+        elif seen and i + steady <= rec["n"] and not any(count[i:i + steady]):
+            return round(i * STEP, 2)
+    return None
+
+
+def rockstar_standin(query, tags=None):
+    """A Rockstar picture for a dry run's stand-in GTA 6 side: the best tag match that is a still with no names
+    but Jason's and Lucia's, no paid-edition item and no text overlay; (relative path, its tags) or None."""
+    import picker
+    import tag_media
+    tags = tags if tags is not None else tag_media.load_tags()
+    best = None
+    for rel, e in tags.items():
+        if e.get("kind") != "image" or "Ultimate_Edition" in rel or e.get("overlay") or e.get("type") == "edition":
+            continue
+        if any(n.lower() not in ("jason", "lucia") for n in e.get("names") or []):
+            continue
+        hit = picker.match(query, e)
+        if hit["matched"] and (best is None or hit["score"] > best[0]):
+            best = (hit["score"], rel, e)
+    return (best[1], best[2]) if best and best[0] >= 3.0 else None
+
+
+def compare_side(topic, labels, words, game, dry_run, indexes=None, tags=None, used=()):
+    """The other side of an F1 for a topic: in a dry run, Rockstar's official picture (flagged DRYRUN STAND-IN); on
+    launch night (GTA 6), the owner's best GTA 5 library clip of the same kind. Evidence ids R1 / C1. None if there
+    is none."""
+    name, need_words, need_labels, query = topic
+    if dry_run:
+        if game != "gta5" or not query:
+            return None
+        found = rockstar_standin(query, tags)
+        if not found:
+            return None
+        rel, e = found
+        path = GTA_ROOT / "rockstar" / rel
+        return {"topic": name, "side": "GTA 6", "standin": True, "file": str(path), "at": 0,
+                "label": "GTA 6", "note": "ROCKSTAR · DRYRUN STAND-IN",
+                "evidence": [{"id": "R1", "kind": "rockstar", "value": e.get("description", ""), "from_s": 0.0,
+                              "to_s": 0.0, "numbers": [], "picture": str(path),
+                              "source": f"Rockstar's official media {rel} (tags: {e.get('main_subject')}; "
+                                        f"{', '.join(e.get('subjects', [])[:6])})"}]}
+    if game != "gta6" or indexes is None:
+        return None
+    try:
+        rows = library.find(indexes, profile="gta5", min_len=6, **({"activity": list(need_labels)} if need_labels
+                                                                     else {"text": list(need_words)}))
+    except library.LibraryError:
+        return None
+    rows = [r for r in rows if not any(v == r["video"] and r["start_s"] < e and s < r["end_s"] for v, s, e in used)]
+    if not rows:
+        return None
+    best = max(rows, key=lambda r: footage_short.score(r, {}, {}, False))
+    return {"topic": name, "side": "GTA 5", "standin": False, "file": best["path"], "at": best["start_s"],
+            "label": "GTA 5", "note": None,
+            "evidence": [{"id": "C1", "kind": "compare", "value": f"GTA 5: {best['activity']}"
+                          + "".join(f"; {h['text']}" for h in (best.get("text_hits") or [])[:2]),
+                          "from_s": best["start_s"], "to_s": best["end_s"], "numbers": [],
+                          "source": f"GTA 5 library: {best['video']} {hms(best['start_s'])}-{hms(best['end_s'])}"}]}
+
+
+def format_options(rec, m, items, window, game, dry_run, session_firsts=(), compare=None):
+    """What a narrated Short of this moment can teach, as formats with their reason. Only from evidence:
+      F2 a test whose answer is on the HUD: the wanted stars rise, then are all gone (can you lose them?);
+      F3 3 things: three different things the footage shows (a star rise, stars showing, police, crashes ...);
+      F1 GTA 5 vs GTA 6: the other game's side of a topic the moment shows (compare);
+      F4 first look (GTA 6 only): the session's first boat, flight, swim, chase or shootout."""
+    opts = []
+    if rec["mode"] == "hud":
+        rises = [e for e in items if e["kind"] == "stars" and "at_s" in e]
+        for r in rises:
+            lost = stars_lost(rec, r["at_s"], window[1])
+            if lost:
+                opts.append({"format": "F2", "why": f"{r['value']} at {hms(r['at_s'])}, then no stars from {hms(lost)}: "
+                                                    f"a test with its answer on the HUD (can you lose them?)",
+                             "lost_at_s": lost, "rise": r["id"]})
+                break
+    n = distinct_items(items)
+    if n >= 3:
+        things = sorted({e["value"] if e["kind"] != "stars" else ("star rise" if "at_s" in e else "stars showing")
+                         for e in items if e["kind"] in ("stars", "police", "event")
+                         or (e["kind"] == "activity" and e["value"] not in ("driving", "on_foot", "other"))})
+        opts.append({"format": "F3", "why": f"{n} different things on screen: {', '.join(things)}"})
+    if compare:
+        opts.append({"format": "F1", "why": f"{compare['topic']}: the moment shows it and "
+                                            + ("Rockstar's media has it (DRYRUN STAND-IN)" if compare["standin"]
+                                               else "the GTA 5 library has a clip of it"), "compare": compare})
+    if game == "gta6":
+        firsts = [e["value"] for e in items if e["kind"] == "activity" and e["value"] in FIRST_LOOK
+                  and (m["video"], e["value"]) in session_firsts]
+        if firsts:
+            opts.append({"format": "F4", "why": f"the session's first {firsts[0]}"})
+    return opts
+
+
+def session_firsts(recs, recordings):
+    """{(recording, activity label): the second it first shows up} for the FIRST_LOOK labels, over the session in
+    order: the session's first boat, flight, swim, chase and shootout."""
+    out, seen = {}, set()
+    for v in recordings:
+        rec = recs.get(Path(v).stem)
+        if not rec:
+            continue
+        for s in rec["idx"]["segments"]:
+            if s["never_use"] or s["activity"] not in FIRST_LOOK or s["activity"] in seen:
+                continue
+            seen.add(s["activity"])
+            out[(rec["stem"], s["activity"])] = s["start_s"]
+    return out
+
+
+def settle_story_types(picks):
+    """The type each pick keeps after the quality gate: a NARRATED Short needs a format, an ACTION CLIP a payoff. A
+    pick whose type has neither changes to the other type when that one has it (and is safe); one with neither is
+    dropped. F1's other side goes into the pick's evidence (R1 / C1), so lines can cite it."""
+    out = []
+    for m in picks:
+        point = m.get("point")
+        if point is None:                            # no gate ran (tests of the older steps)
+            out.append(m)
+            continue
+        want = {"narrated": bool(point["formats"]), "action": bool(point["action_payoff"])}
+        if not want.get(m["type"]):
+            other = "action" if m["type"] == "narrated" else "narrated"
+            chosen = m["options"].get(other)
+            if not (want[other] and chosen):
+                continue
+            m["type_why"] = f"changed to {other}: " + ("no format fits a narrated Short" if other == "action" else
+                                                       "an action clip needs a crash, explosion, stunt or star rise")
+            m["type"], m["window"], m["evidence"] = other, chosen["window"], chosen["evidence"]
+        if m["type"] == "narrated":
+            for f in m["format_options"]:
+                if f["format"] == "F1":
+                    m["evidence"] = m["evidence"] + f["compare"]["evidence"]
+        if m.get("mission"):
+            m.setdefault("flags", []).append("MISSION FOOTAGE: subtitles in much of it; its point must be clear "
+                                             "without the story (shorts.json says why in mission_ok)")
+        out.append(m)
+    return out
+
+
+def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
+    """(passes, why) and m's "format_options", "point" and "mission": the owner's quality gate. A moment passes when a
+    narrated Short of it can teach something (a format) or an action clip has a payoff (a crash, explosion or stunt,
+    or a star rise). Mission footage passes only with a payoff that needs no story: a star rise or one of those
+    events."""
+    opts = type_options(rec, m)
+    for k in ("action", "narrated"):           # as choose_types() will: the safety checks' windows
+        if k in opts and "safe_options" in m:
+            if k not in m["safe_options"]:
+                del opts[k]
+            elif list(m["safe_options"][k]) != list(opts[k]["window"]):
+                opts[k]["window"] = list(m["safe_options"][k])
+                opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
+    nar = opts.get("narrated")
+    formats = []
+    if nar:
+        words = " ".join(str(e["value"]).lower() for e in nar["evidence"])
+        labels = {e["value"] for e in nar["evidence"] if e["kind"] == "activity"}
+        compare = None
+        for topic in COMPARE_TOPICS:
+            if any(w in words for w in topic[1]) or labels & set(topic[2]):
+                compare = (find_compare or (lambda t, l, w: None))(topic, labels, words)
+                if compare:
+                    break
+        formats = format_options(rec, m, nar["evidence"], nar["window"], game, dry_run, session_firsts, compare)
+    act = opts.get("action")
+    payoff = []
+    if act:
+        payoff = sorted({e["value"] for e in act["evidence"] if e["kind"] == "event"
+                         and e["value"] in ("crash", "explosion", "stunt")}
+                        | {"star rise" for e in act["evidence"] if e["kind"] == "stars" and "at_s" in e})
+    window = (nar or act or {"window": [m["start_s"], m["end_s"]]})["window"]
+    m["mission"] = mission_share(m, window) >= MISSION_SHARE
+    m["format_options"], m["point"] = formats, {"formats": [f["format"] for f in formats], "action_payoff": payoff}
+    if m["mission"]:
+        clear = payoff or any(f["format"] == "F2" for f in formats)
+        if not clear:
+            return False, ["mission footage with no point that is clear without the story (no star rise, test or "
+                           "crash/explosion/stunt)"]
+    if not formats and not payoff:
+        return False, ["no clear point: nothing to teach (no format fits) and no payoff for an action clip"]
+    return True, []
+
+
 # --- 7. Frames to look at ---
 
 def moment_sheet(path, start, end, out, every=2.0, cols=4, width=400):
@@ -833,9 +1052,29 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         + "; ".join(f"{m['id']} {m['video']} {hms(m['start_s'])} {m['category']} {m['score']:.1f}" for m in moments[:5]))
     if safety == "auto":
         safety = safety_checks.Checker(GAMES[game]["name"], Path(library_dir) / "_cache", log=log)
-    ok = (lambda m: safety(m, recs[m["video"]], folder)) if safety else (lambda m: (True, []))
+    safe = (lambda m: safety(m, recs[m["video"]], folder)) if safety else (lambda m: (True, []))
+    firsts = session_firsts(recs, recordings)
+    found = {}
+
+    def find_compare(topic, labels, words):
+        if topic[0] not in found:
+            main = None
+            if game == "gta6" and not dry_run:
+                try:
+                    main = library.load_library(index.LIBRARY)
+                except library.LibraryError:
+                    main = None
+            found[topic[0]] = compare_side(topic, labels, words, game, dry_run, main, used=used)
+        return found[topic[0]]
+
+    def ok(m):
+        """The safety checks, then the owner's quality gate (PR 26): a moment with no clear point is skipped."""
+        passes, why = safe(m)
+        if not passes:
+            return passes, why
+        return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
     picks, rejected = pick_three(moments, offset, ok, log=log)
-    picks = choose_types(picks, recs)
+    picks = settle_story_types(choose_types(picks, recs))
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
     if isinstance(safety, safety_checks.Checker):
         timing["safety_model"] = round(safety.seconds, 1)
@@ -931,6 +1170,24 @@ def peak_options(rec, m, folder, strips=True):
             opt["strip"] = str(strip) if peak_strip(m["path"], a, b, strip) else None
         out.append(opt)
     return out
+
+
+def grid_frame(path, at, out, width=960):
+    """One frame of a recording at `at` seconds, 960 px wide, with a grid every 192 px of the recording (a tenth of
+    its width) and every 108 px down, each line labelled in the recording's own pixels: Claude reads a circle's box
+    or a freeze's detail off it (x, y, w, h in those pixels)."""
+    font = "C\\:/Windows/Fonts/arial.ttf"
+    k = width / 1920
+    labels = "".join(f",drawtext=fontfile='{font}':text='{x}':x={x * k + 3:.0f}:y=3:fontsize=16:fontcolor=yellow:"
+                     f"box=1:boxcolor=black@0.6" for x in range(192, 1920, 192))
+    labels += "".join(f",drawtext=fontfile='{font}':text='{y}':x=3:y={y * k + 3:.0f}:fontsize=16:fontcolor=yellow:"
+                      f"box=1:boxcolor=black@0.6" for y in range(108, 1080, 108))
+    graph = (f"scale={width}:-2,drawgrid=w={192 * k:.0f}:h={108 * k:.0f}:t=1:c=yellow@0.5{labels},"
+             f"drawtext=fontfile='{font}':text='{at:.2f} s':x=w-tw-6:y=h-th-6:fontsize=22:fontcolor=white:box=1:"
+             f"boxcolor=black@0.7")
+    done = subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(path),
+                           "-frames:v", "1", "-vf", graph, "-q:v", "3", str(out)], capture_output=True, text=True)
+    return done.returncode == 0 and Path(out).is_file()
 
 
 def latest_run(shorts_dir=SHORTS_DIR):
@@ -1156,12 +1413,187 @@ def render_narrated(short, m, out_dir, facts, today, indexes, log=print, timing=
             "shown": [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in shown]}
 
 
+# --- Engine v2 (PR 26): the story layer ---
+
+STORY_LENGTH = (25.0, 40.0)              # a narrated story Short's length (the formats' 25-40 s)
+ENGINES = ("v2", "v1")                   # v1: PR 25's explainer.py render, kept with --engine v1
+# Words that never anchor a line to a 'seen' item, however often the model's own lines use them.
+ANCHOR_STOP = {"with", "from", "into", "that", "this", "there", "their", "they", "then", "than", "what", "when",
+               "where", "while", "your", "have", "been", "just", "like", "over", "onto", "through", "right", "behind",
+               "front", "some", "also", "very", "still", "here", "game", "gta", "screen", "shows", "seen", "view",
+               "camera", "player", "character", "scene", "image", "frame", "appears", "visible", "near", "next"}
+
+
+def compare_of(m, short):
+    """The F1 other side this pick offers, or None. Only an F1 Short uses it: a pick that could also be F1 but is made
+    as F3 shows none of it, so it gets no stand-in flag and its GTA 5 clip is not logged as shown."""
+    if short.get("format") != "F1":
+        return None
+    return next((f["compare"] for f in m.get("format_options") or [] if f["format"] == "F1"), None)
+
+
+def line_anchors(line, by_id):
+    """The words of an on_screen line that name one of its own footage evidence items, each with that item's time:
+    edit2 puts the item on screen within 0.5 s of the word (the owner's rule 4). Star, police, crash ... words go by
+    truth.WORDS; other words by the item's own words ('seen' lines), leaving out ANCHOR_STOP."""
+    if line.get("claim") != "on_screen":
+        return []
+    items = [by_id[i] for i in line.get("evidence", []) if i in by_id and by_id[i]["kind"] not in ("rockstar", "compare")]
+    out, used = [], set()
+    for w in truth.words_of(line.get("say", "")):
+        low = w.lower().strip("'’")
+        family = next((tuple(words) for words, _ in truth.WORDS if low in words), None)
+        if low in used or low in ANCHOR_STOP or (family and family in used):
+            continue                         # one anchor per thing a line names ("wanted ... stars" is one thing)
+        named = [e for e in items if truth.names_item(low, e)]
+        if named:                            # the item of the word's own kind first ("police" -> police seen), then the
+            e = min(named, key=lambda e: (anchor_rank(low, e), e["to_s"] - e["from_s"]))   # most exact time
+            out.append({"word": w, "from_s": e["from_s"], "to_s": e["to_s"], "evidence": e["id"]})
+            used.update({low, family} - {None})
+    return out
+
+
+def anchor_rank(word, item):
+    """0 when the item is of the kind a word's family is mainly about (a star word and a HUD star item, a police word
+    and a police item), else 1."""
+    for words, kinds in truth.WORDS:
+        if word in words:
+            kind, value = kinds[0]
+            return 0 if item["kind"] == kind and (value is None or item["value"] == value) else 1
+    return 0
+
+
+def story_script(short, m, folder, dry_run):
+    """The edit2 script for a narrated story Short: the moment's window as one continuous event, each line's anchors,
+    its pops (an F1 pip or split gets the other side's file, label and the DRYRUN STAND-IN note), the break, the
+    yellow captions, am_puck and the silent subscribe pill."""
+    by_id = {e["id"]: e for e in m["evidence"]}
+    side = compare_of(m, short)
+    profile = Path(folder) / "profiles" / f"{m['profile']}.json"
+    lines = []
+    for line in short["lines"]:
+        pops = []
+        for p in line.get("pops", []) or []:
+            p = {k: v for k, v in p.items() if k not in ("compare",)}
+            if p.get("kind") == "pip" and line_compare(line) and side:
+                p.update(file=side["file"], at=side["at"], label=side["label"])
+                if side.get("note"):
+                    p["note"] = side["note"]
+            pops.append(p)
+        lines.append({"say": line["say"], "anchors": line_anchors(line, by_id), "pops": pops,
+                      "payoff": bool(line.get("payoff")), "loop": bool(line.get("loop"))})
+    script = {"title": short["title"], "voice": "am_puck", "caption_style": short.get("caption_style", "yellow"),
+              "music": "auto", "game_audio": True, "end_pill": END_PILL,
+              "profile": str(profile if profile.is_file() else m["profile"]),
+              "moment": {"file": m["path"], "window": list(m["window"]), "focus": short.get("focus", 0.5),
+                         "action_s": m.get("anchor_s")}, "lines": lines}
+    brk = short.get("break")
+    if isinstance(brk, dict):
+        brk = {k: v for k, v in brk.items() if k not in ("compare", "evidence")}
+        if brk.get("kind") == "split" and side:
+            own = "GTA 5" if side["label"] == "GTA 6" else "GTA 6"
+            brk.update(file=side["file"], at=side["at"], label=brk.get("label") or own,
+                       bottom_label=brk.get("bottom_label") or side["label"])
+            if side.get("note"):
+                brk["note"] = side["note"]
+        if brk.get("kind", "freeze") == "freeze" and short["break"].get("evidence") in by_id and "at_s" not in brk:
+            e = by_id[short["break"]["evidence"]]       # the first moment the detail is on screen
+            brk["at_s"] = e.get("at_s", min(e["from_s"] + 0.5, e["to_s"]))
+        script["break"] = brk
+    return script
+
+
+def line_compare(line):
+    return any(str(i).startswith(("R", "C")) for i in line.get("evidence", []))
+
+
+def story_spans(tl, m, side):
+    """What a v2 render puts on screen, for the clean-footage check and the used-footage log: every footage shot,
+    the loop ending and the freeze's frame from the moment, and an F1 clip from the GTA 5 library."""
+    stem = Path(m["path"]).stem
+    out = []
+    for s in tl["shots"]:
+        end = s["src"] + (s["frames"] / 30.0 if s["kind"] != "break" else 0.04)
+        what = {"footage": "a background shot", "loop": "the loop ending", "break": "the break"}[s["kind"]]
+        out.append({"video": m["path"], "stem": stem, "start_s": round(s["src"], 3), "end_s": round(end, 3),
+                    "line": None, "what": what})
+    if side and not side.get("standin"):
+        out.append({"video": side["file"], "stem": Path(side["file"]).stem, "start_s": side["at"],
+                    "end_s": side["at"] + 6.0, "line": None, "what": "the GTA 5 side"})
+    return out
+
+
+def render_story(short, m, out_dir, facts, today, indexes, folder, dry_run, log=print, synth=None, v2_render=None):
+    """A NARRATED story Short through edit2 (engine v2): the script is checked (truth.py, the story rules), the voice
+    is made and the timeline planned (one moment in order, every named thing on screen within 0.5 s of its word, the
+    setup first), then the timing rules (25-40 s, the payoff at 45-75 %), then it renders and what got on screen is
+    checked against the index."""
+    import edit2
+    side = compare_of(m, short)
+    if side and side.get("standin") and not dry_run:
+        raise RenderProblem("a DRYRUN STAND-IN is never used outside a dry run")
+    script = story_script(short, m, folder, dry_run)
+    try:
+        loaded = edit2.load(script)
+        tl = edit2.plan(loaded, synth)
+    except (edit2.EditError, explainer_error()) as e:
+        raise RenderProblem(f"edit2 can't make it: {e}") from None
+    problems = list(tl["problems"])
+    total = tl["total_s"]
+    if not STORY_LENGTH[0] <= total <= STORY_LENGTH[1]:
+        words = sum(len(edit2.line_tokens(l["say"])) for l in short["lines"])
+        problems.append(f"the Short comes to {total:.1f} s with {words} words; a story Short is {STORY_LENGTH[0]:g}-"
+                        f"{STORY_LENGTH[1]:g} s ({'add' if total < STORY_LENGTH[0] else 'cut'} words)")
+    payoff = next((k for k, l in enumerate(short["lines"]) if l.get("payoff")), None)
+    payoff_at = None
+    if payoff is not None:
+        payoff_at = round(tl["line_starts"][payoff] / total, 3)
+        if not truth.PAYOFF_AT[0] <= payoff_at <= truth.PAYOFF_AT[1]:
+            problems.append(f"line {payoff + 1}: the payoff starts {payoff_at:.0%} into the Short; it belongs at "
+                            f"{truth.PAYOFF_AT[0]:.0%}-{truth.PAYOFF_AT[1]:.0%} (move words before or after it)")
+    more, flags, claims = truth.check_short(short, m, facts, today, tl["line_spans"])
+    problems += more
+    if problems:
+        raise RenderProblem("\n  ".join(dict.fromkeys(problems)))
+    (out_dir / "script_v2.json").write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        data = (v2_render or edit2.render_plan)(loaded, tl, out_dir, log=lambda s: log("  " + s))
+    except edit2.EditError as e:
+        raise RenderProblem(f"edit2 can't render it: {e}") from None
+    shown = story_spans(tl, m, side)
+    bad = footage_short.unclean(shown, indexes)
+    if bad:
+        raise RenderProblem("what got on screen is not all clean footage:\n  " + "\n  ".join(bad))
+    if side and side.get("standin"):
+        flags.append(f"DRYRUN STAND-IN: the GTA 6 side of this F1 is Rockstar's official picture "
+                     f"({Path(side['file']).name}), only for the dry run")
+    skipped = [p for p in data.get("pops", []) if p.get("skipped")]
+    if skipped:
+        flags.append("CIRCLE LEFT OUT: " + "; ".join(f"line {p['line']} on {p['word']!r}" for p in skipped)
+                     + " (its target couldn't be followed)")
+    gaps = data.get("gaps_over_2s") or []
+    (out_dir / "claims.txt").write_text(truth.claims_text(short, m, claims, facts), encoding="utf-8")
+    return {"length_s": round(data.get("length_s", total), 2), "flags": flags, "format": short.get("format"),
+            "payoff_at": payoff_at, "line_spans": tl["line_spans"], "music": Path((data.get("music") or {}).get("file")
+                                                                                   or "").name or None,
+            "anchors": [{k: x[k] for k in ("line", "word", "shown_s", "from_s", "to_s", "ok")} for x in tl["anchors"]],
+            "gaps_over_2s": gaps, "pops": len(data.get("pops", [])) - len(skipped),
+            "pop_interval_s": data.get("pop_interval_s"), "background_avg_s": (data.get("background") or {}).get("average_s"),
+            "shown": [[s["stem"], s["start_s"], s["end_s"]] for s in shown]}
+
+
+def explainer_error():
+    import explainer
+    return explainer.ScriptError
+
+
 def short_folder(folder, n, title):
     return Path(folder) / f"{n}-{footage_short.make_short.slug_of(title or 'short')[:40]}"
 
 
 def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
-               checker=None, timing=None, narrated_render=None, action_render=None):
+               checker=None, timing=None, narrated_render=None, action_render=None, engine="v2", synth=None,
+               v2_render=None):
     """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems)."""
     m = moment_for(cand, short)
     n = m["short"]
@@ -1208,8 +1640,12 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
                 flags.append(f"AUTO PEAK at {library.hms(peak)} ({peak:.1f} s of {m['video']}), from "
                              f"{short['peak'].get('evidence')}: the cold open and the zoom use it. Wrong? Re-render "
                              "without it (command below)")
-        else:
+        elif engine == "v1":
             done = render_narrated(short, m, out, facts, today, indexes, log, timing, narrated_render)
+            flags += done.pop("flags", [])
+        else:
+            done = render_story(short, m, out, facts, today, indexes, folder, cand.get("dry_run"), log, synth,
+                                v2_render)
             flags += done.pop("flags", [])
     except RenderProblem as e:
         entry["problems"] = [str(e)]
@@ -1238,7 +1674,8 @@ def commands(folder, n):
 
 
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
-           facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None):
+           facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
+           engine="v2", synth=None, v2_render=None):
     """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
     Returns the render.json data; review.html is written next to it."""
     import facts as facts_file
@@ -1266,7 +1703,8 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
         log(f"Short {short.get('short')}: {short.get('title')}")
         try:
             entry = render_one(short, cand, folder, facts, today, indexes, hook_choice if only else None,
-                               no_cold_open and only is not None, log, checker, timing, narrated_render, action_render)
+                               no_cold_open and only is not None, log, checker, timing, narrated_render, action_render,
+                               engine, synth, v2_render)
         except RenderProblem as e:
             entry = {"short": short.get("short"), "status": "FAILED", "problems": [str(e)], "flags": []}
         entry["commands"] = commands(folder, entry["short"])
@@ -1347,8 +1785,15 @@ def write_review(folder, cand, written, data):
             when = (f' <small>(footage {library.hms(spans[k - 1][0])}-{library.hms(spans[k - 1][1])})</small>'
                     if k - 1 < len(spans) else "")
             facts_html = f' <span class="chip fact">facts: {esc(", ".join(line["facts"]))}</span>' if line.get("facts") else ""
-            lines.append(f'<li><b>{esc(line.get("say"))}</b>{when}<br><span class="claim">{esc(line.get("claim"))}</span> '
-                         f'{chips}{facts_html}</li>')
+            role = ("PAYOFF &middot; " if line.get("payoff") else "") + ("LOOP &middot; " if line.get("loop") else "")
+            teaches = (f'<br><span class="claim">teaches: {esc(line["teaches"])}</span>' if line.get("teaches") else
+                       f'<br><span class="claim">answered by line {esc(line.get("answered_by"))}</span>'
+                       if line.get("claim") == "ask" else "")
+            off = [x for x in entry.get("anchors") or [] if x["line"] == k and not x["ok"]]
+            lines.append(f'<li><b>{esc(line.get("say"))}</b>{when}<br><span class="claim">{role}{esc(line.get("claim"))}'
+                         f'</span> {chips}{facts_html}{teaches}'
+                         + "".join(f'<br><span class="claim red">"{esc(x["word"].lower())}" not on screen with its '
+                                   f'evidence</span>' for x in off) + '</li>')
         cited = [by_id[i] for line in short.get("lines") or [] for i in line.get("evidence", []) if i in by_id]
         shown = cited or [e for e in m.get("evidence", []) if e["kind"] in ("event", "stars", "police")] or \
             [e for e in m.get("evidence", []) if e["kind"] == "seen"]
@@ -1370,6 +1815,16 @@ def write_review(folder, cand, written, data):
                 + (f'{entry["length_s"]:.1f} s &middot; true peak {tp.get("after", 0):+.1f} dBTP &middot; ' if ok else "")
                 + f'{"NO-HUD MODE" if m.get("mode") == "nohud" else "HUD rules on"} &middot; why this type: '
                 f'{esc(m.get("type_why"))}')
+        if short.get("format"):
+            story = (f'<b>{esc(short["format"])}</b> ({esc(truth.FORMATS.get(short["format"], ""))}): '
+                     f'{esc(short.get("format_why"))}')
+            if entry.get("payoff_at") is not None:
+                story += f' &middot; payoff at {entry["payoff_at"]:.0%}'
+            if entry.get("pops") is not None:
+                story += (f' &middot; {entry["pops"]} pop-ins (every {entry.get("pop_interval_s")} s), background shots '
+                          f'{entry.get("background_avg_s")} s')
+            gaps = "; ".join(f'{g["from_s"]:.1f}-{g["to_s"]:.1f} s: {g["why"]}' for g in entry.get("gaps_over_2s") or [])
+            meta += f'<br>Story: {story}' + (f'<br>Gaps over 2 s: {esc(gaps)}' if gaps else "")
         source = rel(folder, m["path"]) + f'#t={m["window"][0]:.1f},{m["window"][1]:.1f}' if m.get("path") else ""
         claims = (f' &middot; <a href="{rel(folder, entry["files"]["claims.txt"])}">claims.txt</a>'
                   if ok and "claims.txt" in entry.get("files", {}) else "")
@@ -1438,7 +1893,7 @@ ul, ol {{ margin:0; padding-left:20px; }}
 .flags li.red {{ color:#fca5a5; }} .flags li.amber {{ color:#fde68a; }} .flags li.ok {{ color:#86efac; }}
 .problems li {{ color:#fca5a5; }}
 .hooks li.star {{ font-weight:700; color:#fde68a; }}
-.lines li {{ margin:6px 0; }} .claim {{ font-size:12px; color:var(--muted); }}
+.lines li {{ margin:6px 0; }} .claim {{ font-size:12px; color:var(--muted); }} .claim.red {{ color:#fca5a5; }}
 .chip {{ display:inline-block; font-size:12px; background:#222838; border:1px solid var(--line); border-radius:10px;
   padding:0 7px; margin:2px 2px 0 0; }} .chip.fact {{ background:#2a2338; }}
 code.cmd {{ display:block; font-size:12px; background:#0b0d12; border:1px solid var(--line); border-radius:4px; padding:4px 6px;
@@ -1505,15 +1960,32 @@ def main():
     r.add_argument("--short", type=int, help="only this Short (its number on the review page)")
     r.add_argument("--hook", type=int, choices=(1, 2, 3), help="with --short: use this hook instead of the starred one")
     r.add_argument("--no-cold-open", action="store_true", help="with --short: no cold open and no zoom")
+    f = sub.add_parser("frame", help="a gridded frame of a pick's recording, to read a circle's box from")
+    f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
+    f.add_argument("--short", type=int, required=True, help="the pick's number")
+    f.add_argument("--at", type=float, nargs="+", required=True, help="recording time(s) in seconds")
+    r.add_argument("--engine", choices=ENGINES, default="v2",
+                   help="v2 (default): the story layer (edit2.py); v1: PR 25's explainer.py render")
     args = ap.parse_args()
     try:
-        if args.stage == "prepare":
+        if args.stage == "frame":
+            folder = args.run or latest_run()
+            cand = read_json(Path(folder) / "candidates.json") or {}
+            m = next((p for p in cand.get("picks", []) if p["short"] == args.short), None)
+            if m is None:
+                raise LaunchError(f"no pick {args.short} in {folder}")
+            (Path(folder) / "moments").mkdir(exist_ok=True)
+            for at in args.at:
+                out = Path(folder) / "moments" / f"{m['id']}_grid_{at:.1f}.jpg"
+                print(out if grid_frame(m["path"], at, out) else f"ERROR: no frame at {at} s")
+        elif args.stage == "prepare":
             prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input, day=args.date,
                     slots=args.star_slots, log=lambda m: print(m, flush=True))
         else:
             if (args.hook or args.no_cold_open) and args.short is None:
                 ap.error("--hook and --no-cold-open need --short N")
-            data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True))
+            data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True),
+                          engine=args.engine)
             if any(e["status"] != "READY" for e in data["shorts"]):
                 sys.exit(1)
     except (LaunchError, index.IndexError_, safety_checks.SafetyError) as e:

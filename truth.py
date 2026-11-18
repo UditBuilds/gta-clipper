@@ -161,9 +161,9 @@ def line_problems(n, line, by_id, nohud, facts, line_span=None):
     ids = line.get("evidence", [])
     fact_ids = line.get("facts", [])
     out = []
-    if claim not in CLAIMS:
-        out.append(f"{where}: needs \"claim\": \"on_screen\" (it describes the footage) or \"fact\" (how the game "
-                   "works, from facts.json)")
+    if claim not in CLAIMS_V2:
+        out.append(f"{where}: needs \"claim\": \"on_screen\" (it describes the footage), \"fact\" (how the game "
+                   "works, from facts.json) or \"ask\" (a question a later line answers)")
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         out.append(f"{where}: \"evidence\" is a list of evidence ids such as [\"E2\"]")
         ids = []
@@ -173,6 +173,8 @@ def line_problems(n, line, by_id, nohud, facts, line_span=None):
     if unknown:
         out.append(f"{where}: no evidence {', '.join(unknown)} in this moment")
     items = [by_id[i] for i in ids if i in by_id]
+    if claim == "ask":                   # a question claims nothing itself; its words answer to the whole moment
+        items = list(by_id.values())
     if claim == "on_screen" and not items:
         out.append(f"{where}: an on_screen line must cite the evidence that shows it")
     if claim == "fact" and not fact_ids:
@@ -247,6 +249,177 @@ def upload_problems(short):
     return out
 
 
+# --- The story layer (PR 26): the owner's rules for what a Short says ---
+CLAIMS_V2 = CLAIMS + ("ask",)
+FORMATS = {"F1": "GTA 5 vs GTA 6: what changed", "F2": "a test: can you ...? and the answer",
+           "F3": "3 things this moment shows", "F4": "first look: what it looks like in GTA 6"}
+TEACHES_WORDS = 3                         # "teaches" says in at least this many words what the viewer learns
+PAYOFF_AT = (0.45, 0.75)                  # the payoff line starts this far into the Short
+# A line that starts with the player as its subject ("I drive", "So I cut across", "my truck") is play-by-play
+# unless it is a question, uses a fact, or states a measured result (a number its HUD/police/event evidence shows).
+FIRST_PERSON = re.compile(r"^\s*(?:(?:so|then|now|and|but|just|here|okay|ok|well)\s*,?\s+)*"
+                          r"(?:i|i'm|i'll|i've|i'd|we|we're|we've|me|my|our)\b", re.IGNORECASE)
+NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
+                "nine": "9", "ten": "10", "zero": "0", "no": "0"}
+TEACHING_KINDS = ("stars", "police", "event", "compare", "rockstar")
+CTA_WORDS = ("subscribe", "follow for", "follow me", "like and", "like this", "comment", "link in", "check out",
+             "hit the bell")
+# F2 (a test): a line may say why something happened only when both the change and the result are on screen, in
+# that order (the owner's rule): it cites two evidence items, the second later than the first.
+CAUSE = (r"\bbecause\b", r"\bso (?:the|they|it|he|she|i|we)\b", r"\bmade (?:them|the cops|the police|it|him|her)\b",
+         r"\bthat'?s (?:why|how)\b", r"\bthanks to\b", r"\bby (?:changing|switching|swapping|hiding|jumping|ditching|"
+         r"stealing|getting)\b", r"\blost (?:them|the cops|the police)\b", r"\bto lose\b", r"\bworked\b")
+
+
+def spoken_numbers(text):
+    """The numbers a line says, digits or words ("four stars" is 4)."""
+    words = [w.lower().strip("'’") for w in words_of(text)]
+    return set(facts_file.numbers_in(text or "")) | {NUMBER_WORDS[w] for w in words if w in NUMBER_WORDS and w != "no"}
+
+
+def play_by_play(line, items):
+    """Why a line only narrates the player's actions (the owner's rule 3), or None when it teaches or asks."""
+    say = str(line.get("say", ""))
+    if line.get("claim") == "ask" or line.get("facts"):
+        return None
+    kinds = {e["kind"] for e in items}
+    if FIRST_PERSON.search(say):
+        measured = spoken_numbers(say) & evidence_numbers(items)
+        if measured and kinds & set(TEACHING_KINDS):
+            return None
+        return ("it narrates what I do (\"" + " ".join(words_of(say)[:3]) + " ...\"); say what the viewer learns from "
+                "it (a HUD reading, the police, an event, a fact) or ask the question the Short answers")
+    if items and kinds <= {"activity"}:
+        return ("it only says what I am doing (its evidence is just the activity label); say something the viewer can "
+                "learn from the picture")
+    return None
+
+
+def names_item(word, item):
+    """True when a word names an evidence item: the word's family is supported by it, or the item's own words use
+    it."""
+    word = word.lower()
+    for family in WORDS:
+        if word in family[0]:
+            return supported(family, [item])
+    return len(word) >= 4 and has_word(str(item.get("value", "")) + " " + str(item.get("source", "")), word)
+
+
+def overlay_problems(n, line, by_id, nohud, facts_text):
+    """The pops a line asks for: a circle sits on the thing the line names (its "on" word names its evidence), a hud
+    card shows the stars the line names, and a pill's words need evidence like the line's own and must name something
+    (a number or a thing its evidence shows), so they make sense on their own."""
+    out, where = [], f"line {n}"
+    cited = [by_id[i] for i in line.get("evidence", []) if i in by_id]
+    for p in line.get("pops", []) or []:
+        kind, on = p.get("kind"), str(p.get("on", ""))
+        if kind == "circle":
+            item = by_id.get(p.get("evidence"))
+            if item is None or item not in cited:
+                out.append(f"{where}: a circle names the evidence it rings (\"evidence\": one of the line's own ids)")
+            elif not names_item(on, item):
+                out.append(f"{where}: the circle lands on \"{on}\", which doesn't name {item['id']} ({item['value']}); "
+                           "ring only the exact thing the line names")
+        elif kind == "pip" and p.get("hud") == "stars":
+            if not (has_word(on, "stars") or has_word(on, "star") or has_word(on, "wanted")) or not any(
+                    e["kind"] == "stars" for e in cited):
+                out.append(f"{where}: the HUD card shows the wanted stars, so it lands on a star word of a line that "
+                           "cites the stars")
+        elif kind == "badge":                # F3's own count (1, 2, 3), not a claim about the footage
+            if not re.fullmatch(r"\d{1,2}", str(p.get("text", "")).strip()):
+                out.append(f"{where}: a badge is the count's number (\"1\", \"2\", \"3\"), not {p.get('text')!r}")
+        elif kind == "stat":
+            text = str(p.get("text", ""))
+            out += [m.replace(where, f"{where} {kind} pill") for m in word_problems(text, cited, nohud, where, facts_text)]
+            numbers = spoken_numbers(text)
+            if numbers - evidence_numbers(cited) - {x for x in facts_file.numbers_in(facts_text)}:
+                out.append(f"{where}: the {kind} pill says a number its line's evidence doesn't show ({text!r})")
+            named = numbers or any(names_item(w, e) for w in words_of(text) for e in cited) or any(
+                has_word(text, w) for family in WORDS for w in family[0])
+            if kind == "stat" and not named:
+                out.append(f"{where}: the pill {text!r} doesn't name anything on screen; a pill must make sense on "
+                           "its own (a number or a thing its evidence shows)")
+    return out
+
+
+def story_problems(short, moment, facts):
+    """The owner's story rules (PR 26) for a narrated Short, before it is voiced: a format the moment offers, every
+    line teaching or asking (no play-by-play), each question answered, one payoff, a loop line, no spoken call to
+    action, F2's no-cause rule, overlays that explain and mission footage only with a reason. Timing rules (the
+    payoff at 45-75 %, words on screen with their evidence) are checked once the voice is made."""
+    out = []
+    items = moment.get("evidence") or []
+    by_id = {e["id"]: e for e in items}
+    nohud = moment.get("mode") == "nohud"
+    lines = short.get("lines") or []
+    fmt = short.get("format")
+    offered = moment.get("format_options")
+    if fmt not in FORMATS:
+        out.append("format: one of " + ", ".join(f"{k} ({v})" for k, v in FORMATS.items()))
+    elif offered is not None and fmt not in [o["format"] for o in offered]:
+        out.append(f"format: {fmt} isn't one this moment offers ("
+                   + (", ".join(o["format"] for o in offered) or "none") + ")")
+    if not str(short.get("format_why", "")).strip():
+        out.append("format_why: say in a sentence why this format fits this moment")
+    if moment.get("mission") and not str(short.get("mission_ok", "")).strip():
+        out.append("mission_ok: this moment is mission footage; say why its point is clear without the story, or "
+                   "leave it out")
+    for n, line in enumerate(lines, 1):
+        where = f"line {n}"
+        claim = line.get("claim")
+        say = str(line.get("say", ""))
+        if claim == "ask":
+            if not say.rstrip().endswith("?"):
+                out.append(f"{where}: an \"ask\" line is a question (it ends with ?)")
+            answer = line.get("answered_by")
+            if not (isinstance(answer, int) and n < answer <= len(lines)
+                    and lines[answer - 1].get("claim") in CLAIMS):
+                out.append(f"{where}: a question needs \"answered_by\": the number of the later line that answers it "
+                           "(with evidence or a fact)")
+        elif claim in CLAIMS and len(words_of(str(line.get("teaches", "")))) < TEACHES_WORDS:
+            out.append(f"{where}: \"teaches\" says what the viewer learns from this line ({TEACHES_WORDS}+ words)")
+        cited = [by_id[i] for i in line.get("evidence", []) if i in by_id]
+        why = play_by_play(line, cited)
+        if why:
+            out.append(f"{where}: play-by-play: {why}")
+        if any(has_word(say, w) for w in CTA_WORDS):
+            out.append(f"{where}: no spoken call to action (a silent subscribe pill ends every Short)")
+        if fmt == "F2" and claim != "ask":
+            low = say.lower().replace("’", "'")
+            if any(re.search(p, low) for p in CAUSE):
+                times = sorted(e["from_s"] for e in cited)
+                if len(cited) < 2 or times[-1] <= times[0]:
+                    out.append(f"{where}: says why something happened; a test may only say that when the change and "
+                               "the result are both on screen in order (cite both). Otherwise say what happened, not why")
+        facts_text = " ".join(f"{facts[i]['claim']} {facts[i]['safe_wording']}" for i in line.get("facts", [])
+                              if i in facts).lower()
+        out += overlay_problems(n, line, by_id, nohud, facts_text)
+    payoffs = [n for n, l in enumerate(lines, 1) if l.get("payoff")]
+    if len(payoffs) != 1:
+        out.append("payoff: mark exactly one line \"payoff\": true (the answer or the thing the Short was for)")
+    elif lines[payoffs[0] - 1].get("claim") not in CLAIMS:
+        out.append(f"line {payoffs[0]}: the payoff states something (on_screen or fact), it isn't a question")
+    if lines and lines[0].get("claim") not in CLAIMS_V2:
+        out.append("line 1: the hook is a claim or a question the Short pays off")
+    if lines:
+        last = lines[-1]
+        if not last.get("loop"):
+            out.append(f"line {len(lines)}: the last line has \"loop\": true and runs into line 1, so the Short loops")
+        elif str(last.get("say", "")).rstrip().endswith("."):
+            out.append(f"line {len(lines)}: the loop line runs into line 1, so it doesn't end with a full stop")
+    brk = short.get("break")
+    if isinstance(brk, dict):
+        label = str(brk.get("label", ""))
+        out += [p.replace("break", "break label", 1) for p in text_problems(label, items, nohud, "break")]
+        item = by_id.get(brk.get("evidence"))
+        if brk.get("kind", "freeze") == "freeze":
+            if item is None:
+                out.append("break: a freeze names the evidence it shows (\"evidence\")")
+            elif not (spoken_numbers(label) or any(names_item(w, item) for w in words_of(label))):
+                out.append(f"break: the label {label!r} must name what the freeze shows ({item['value']})")
+    return out
+
+
 def check_short(short, moment, facts, today, line_spans=None):
     """(problems, flags, claims) for one Short Claude wrote. moment: its pick from candidates.json (type, evidence,
     mode). line_spans: per narrated line, (from_s, to_s) of the footage on screen while it is spoken, once timed."""
@@ -273,12 +446,16 @@ def check_short(short, moment, facts, today, line_spans=None):
         for n, line in enumerate(lines, 1):
             span = line_spans[n - 1] if line_spans and n - 1 < len(line_spans) else None
             problems += line_problems(n, line, by_id, nohud, facts, span)
+        problems += story_problems(short, moment, facts)
         more, claims = fact_problems(lines, facts, today)
         problems += more
         if any(f["status"] == "reported" for c in claims for f in c["facts"]):
             flags.append("REPORTED FACT: a line uses a reported fact; read claims.txt")
     elif short.get("lines"):
         problems.append("lines: an ACTION CLIP has no narration; leave \"lines\" out")
+    if moment.get("type") == "action" and moment.get("mission") and not str(short.get("mission_ok", "")).strip():
+        problems.append("mission_ok: this moment is mission footage; say why its point is clear without the story, "
+                        "or leave it out")
     return problems, flags, claims
 
 
