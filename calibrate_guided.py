@@ -1183,7 +1183,8 @@ def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=Fal
         log(f"Starting the scan again: {why}.")
         # The old attempt's log is kept apart, so the page's clock and the saved minutes start from this attempt.
         session.data["log_before"] = session.data.get("log_before", []) + session.data.get("log", [])
-        session.data.update(frames=[], drawing={"stars": {}, "bars": [], "phone": {"grey": []}}, overrides={}, log=[])
+        session.data.update(frames=[], videos={}, drawing={"stars": {}, "bars": [], "phone": {"grey": []}}, overrides={},
+                            log=[])
         session.data.pop("guided", None)
         session.event("rescan", why=why)
         session.save()

@@ -1,0 +1,112 @@
+{
+  "name": "gta6",
+  "game": "GTA 6",
+  "frame": [
+    1920,
+    1080
+  ],
+  "stretch": {
+    "min_s": 1.5,
+    "pad_s": 0.5
+  },
+  "minimap": {
+    "method": "arrow",
+    "box": [
+      168,
+      1000,
+      31,
+      31
+    ],
+    "centre": [
+      183,
+      1014.6
+    ],
+    "core_r": 3.5,
+    "ring": [
+      6.0,
+      8.0
+    ],
+    "core_min": 170.0,
+    "core_share": 0.316,
+    "ring_max": 95.0,
+    "ring_share": 0.488,
+    "min_share": 0.2
+  },
+  "stars": {
+    "on": true,
+    "box": [
+      1669,
+      22,
+      228,
+      43
+    ],
+    "slots": 6,
+    "first_tip_x": 1693.06,
+    "tip_spacing": 36.025,
+    "tip_y": 28.35,
+    "radius": 16.46,
+    "inner": 0.43,
+    "min_score": 1.0,
+    "boost": 3.0,
+    "method": "gta6"
+  },
+  "phone": {
+    "on": false
+  },
+  "notes": "Made by calibrate.py on 2026-11-19 from 13 labelled frames of Grand Theft Auto VI_20261119014828.webm (the scan also looked at _022442 and _035639). Rectangles are [x, y, w, h] in pixels of the 1920x1080 picture as shown.",
+  "calibration": {
+    "tool": "calibrate.py",
+    "session": "C:\\AI\\gta\\calib\\gta6\\session.json",
+    "frames": 13,
+    "measured": [
+      "minimap.core_share",
+      "minimap.ring_share",
+      "min_score"
+    ],
+    "set_by_hand": [],
+    "inherited": [
+      "stretch min_s 1.5 and pad_s 0.5",
+      "minimap min_share 0.2",
+      "minimap arrow middle radius 3.5 px and disc ring [6.0, 8.0] px",
+      "stars boost 3.0"
+    ],
+    "status": {
+      "minimap": "check",
+      "stars": "ready",
+      "phone": "off"
+    },
+    "bars": "GTA 6: no bars; the minimap's player arrow, clicked by you",
+    "stars": "found by the tool in the drawn box and confirmed, with the number of slots typed in",
+    "labels": {
+      "hud": {
+        "guess_kept": 13,
+        "guess_changed": 0,
+        "not_sure": 0,
+        "no_guess": 0
+      },
+      "stars": {
+        "guess_kept": 13,
+        "guess_changed": 0,
+        "not_sure": 0,
+        "no_guess": 0
+      },
+      "phone": {
+        "guess_kept": 13,
+        "guess_changed": 0,
+        "not_sure": 0,
+        "no_guess": 0
+      }
+    },
+    "page_opened": "2026-11-19T16:28:18",
+    "saved": "2026-11-19T16:31:44",
+    "guided": {
+      "video": "Grand Theft Auto VI_20261119014828.webm",
+      "pending": [
+        "phone"
+      ],
+      "bars_found_by_scan": false,
+      "arrow_found_by_scan": true,
+      "stars_found_by_scan": true
+    }
+  }
+}
