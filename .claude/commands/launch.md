@@ -66,17 +66,16 @@ One entry per pick you make (at least 3 when 3 or more picks can keep the rules)
       "beats": [{"beat": "full", "at": 98.0}]},
      {"say": "Look closer: small icons under the stars reportedly show what police know about you.",
       "claim": "fact", "facts": ["wanted-heat-icons"], "evidence": ["E4"], "teaches": "the icons are what police know",
-      "beats": [{"beat": "card", "at": 100.0, "zoom": "stars", "label": {"text": "What police know", "style": "info"}},
-                {"beat": "card", "at": 12.0, "zoom": "tip", "label": {"text": "Game tip", "style": "grey"}}]},
+      "beats": [{"beat": "full", "at": 100.0, "inset": {"zoom": "stars", "box": "icons"}},
+                {"beat": "full", "at": 12.0, "inset": {"zoom": "tip", "length": 2.0}}]},
      {"say": "After a respray, the car icon is gone.", "claim": "on_screen", "evidence": ["E9"],
       "teaches": "a respray clears the car icon",
       "beats": [{"beat": "full", "at": 124.0},
-                {"beat": "compare", "top": {"at": 102.0, "zoom": "stars", "label": "Before"},
-                                    "bottom": {"at": 149.5, "zoom": "stars", "label": "After respray"}}]},
+                {"beat": "full", "at": 149.5, "inset": {"zoom": "stars", "box": "icons"}}]},
      {"...": "..."},
      {"say": "Then the heat clears, and the stars disappear.", "claim": "on_screen", "evidence": ["E14"],
       "teaches": "the stars go once nothing is known", "payoff": true,
-      "beats": [{"beat": "card", "at": 391.5, "zoom": "stars", "label": {"text": "Heat cleared", "style": "info"}}]},
+      "beats": [{"beat": "full", "at": 391.5, "inset": {"zoom": "stars"}}, {"beat": "banner", "at": 393.0, "text": "Heat cleared"}]},
      {"say": "So next time you're wanted, before you run, ask yourself", "claim": "on_screen", "evidence": ["E2"],
       "teaches": "the loop back to the question", "loop": true, "beats": [{"beat": "full", "at": 145.0}]}]}
 ]}
@@ -98,18 +97,25 @@ line 1 is the spoken hook (a question or a claim the Short pays off).
 5. **No story spoilers, no names but Jason and Lucia, no dialogue quotes.** Mission footage needs `"mission_ok"`.
 6. **F2:** never say why something happened unless the change and the result are both cited, in that order.
 
-**Beats** (on every line, 1-3 each, so a new picture every 1.5-2.5 s, full screen and cards in turn):
-- `{"beat": "full", "at": <recording s>}`: the footage on the whole screen (the HUD corners are cut off); `"focus"`
-  0-1 moves the crop across.
-- `{"beat": "card", "at": s, "zoom": "stars" | "tip" | "minimap" | [x, y, w, h], "label": ...}`: a framed card; with
-  `zoom`, a close-up of that part of the picture, readable on a phone (the star row with the heat icons under it, the
-  game's tip box at the top left, the minimap, or a box you read off a `frame` picture). Use it for every proof.
-- `{"beat": "compare", "top": {"at", "zoom", "label"}, "bottom": {...}}`: before and after, stacked.
+**Beats** (engine v3, the owner's visual rules of Nov 19; on every line, 1-3 each, a new picture every 1.5-2.5 s):
+- **Full screen always.** `{"beat": "full", "at": <recording s>}`: the gameplay on the whole screen, a 9:16 window
+  that follows the action (`"focus"` 0-1 holds it at one place across the picture). `card` and `compare` are
+  refused: no small box over a blurred background.
+- **HUD proof is an inset on a full beat**, for at most 2 s: `{"beat": "full", "at": s, "inset": {"zoom": "stars" |
+  "tip" | "minimap" | [x, y, w, h], "box": "icons" | "stars", "start": 0.2, "length": 1.8}}`. It sits inside YouTube's
+  safe area, off the captions; the zoom is capped at 2x so 1080p stays sharp (a smaller detail gets a wider crop and a
+  red box). A line that names the stars or icons without an inset gets one added, timed to those words.
 - `{"beat": "banner", "at": s, "text": "1-3 words"}`: a pill over full-screen footage.
-- `"at"` is a second of the pick's own recording, near its window. Every beat's footage must be clean in the index
-  and not shown by an earlier Short (code checks). A beat with no `beats` at all gets footage at its evidence.
+- **B-roll** between proof beats: `"video": "<recording stem>"` takes a bright, clearly GTA 6 shot (streets, traffic,
+  cars, people, skyline, action) from another recording. A beat that is too dark, mostly blank, only the character's
+  back, or has game text under YouTube's title area is rejected after the render.
+- **Caption = picture:** after the render every caption word that names the HUD, a count, "gone", a star's look or a
+  thing to see is checked against its frame; one mismatch fails the Short ("GONE" only once the icon really is gone).
+- `"at"` is a second of the pick's own recording within 60 s of its window. Every beat's footage must be clean in the
+  index and not shown by an earlier Short (code checks). A line with no `beats` gets full-screen footage at its
+  evidence, with the star inset for star/heat items.
 - **Action Shorts** (format A1): 3-5 short lines, about 50-80 words: the setup (what is happening), the moment (a
-  `full` beat at the impact, the game's sound is in), the payoff (a close card or a banner on the result), the loop.
+  `full` beat at the impact, the game's sound is in), the payoff (an inset or a banner on the result), the loop.
 
 **Length:** narrated 25-39 s (about 95-115 words at speed 1.0), action 16-32 s. Title 32-46 characters with 1-2
 words in ALL CAPS (Title Case is fine), description exactly 2 sentences, 3-5 hashtags (`#GTA6`, `#GTAVI`,
