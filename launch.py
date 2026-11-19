@@ -2703,6 +2703,13 @@ def commands(folder, n):
             "hook": [f'{py} --run "{folder}" --short {n} --hook {k}' for k in (1, 2, 3)]}
 
 
+def kept_results(old, written):
+    """The earlier render.json entries a render keeps (a --short N render keeps the others): only those whose Short
+    is still in shorts.json (launch-fixes: a renumbered Short left its old FAILED entry on the review page)."""
+    now = {s.get("short") for s in written.get("shorts", []) if isinstance(s, dict)}
+    return {e["short"]: e for e in (old or {}).get("shorts", []) if e.get("short") in now}
+
+
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
            facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
            engine="v3", synth=None, v2_render=None, v3_render=None):
@@ -2725,8 +2732,7 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
         except vlm.VlmError as e:
             log(f"  Note: the auto peak's gore check is off ({e}); the cold open is flagged for a look")
             checker = None
-    old = read_json(folder / RENDER_LOG) or {"shorts": []}
-    results = {e["short"]: e for e in old.get("shorts", [])}
+    results = kept_results(read_json(folder / RENDER_LOG), written)
     for short in written["shorts"]:
         if only is not None and short.get("short") != only:
             continue

@@ -1290,6 +1290,16 @@ def a_stopped_prepare_uses_the_finished_clip_runs_again():
     return again == done_run and not ran and other is None and none_yet is None
 
 
+
+@check
+def a_short_no_longer_in_shorts_json_leaves_the_review_page():
+    """launch-fixes: render keeps earlier render.json entries (so --short N keeps the others), but only for Shorts
+    still in shorts.json; a renumbered Short's old FAILED entry is dropped"""
+    old = {"shorts": [{"short": 1, "status": "READY"}, {"short": 3, "status": "FAILED"}]}
+    kept = launch.kept_results(old, {"shorts": [{"short": 1}, {"short": 4}]})
+    return list(kept) == [1] and launch.kept_results(None, {"shorts": [{"short": 1}]}) == {}
+
+
 @check
 def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
     """launch-fixes: the safety step's memory stop is a SafetyError, so launch.py prints ERROR: and exits 2 (the run
