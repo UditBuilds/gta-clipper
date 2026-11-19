@@ -447,7 +447,7 @@ function bindCanvas() {
   };
 }
 function nextText(step, cur) {
-  if (cur) return `${toolsFor(step).length > 1 ? "Next " + (cur.kind === "point" ? "click" : "drag") + " sets" : "Next drag"}: <b>${esc(cur.label)}</b>`;
+  if (cur) return `${toolsFor(step).length > 1 || cur.kind === "point" ? "Next " + (cur.kind === "point" ? "click" : "drag") + " sets" : "Next drag"}: <b>${esc(cur.label)}</b>`;
   return "Everything here is set. To redo one, pick it below first.";
 }
 function notesHtml(step) {
