@@ -102,6 +102,10 @@ Upload slots: **about 4:30 AM IST** and **about 10:30 PM IST**.
 ## If something goes wrong
 
 - `ERROR: ... Ollama ...`: open the Ollama app, then type `/launch` again. It carries on where it stopped.
+- `ERROR: another heavy job is running: ...`: wait for that one to finish (one heavy job at a time on the laptop),
+  then type the same command again.
+- `ERROR: only ... GB of memory free`: close the browser and anything else big, then type `/launch` again. It
+  carries on where it stopped.
 - `ERROR: no new recordings`: the files aren't in `C:\AI\gta\input` yet, or that part was already done.
 - **NO-HUD MODE** on the page: the HUD couldn't be read, so nothing mentions wanted stars. Check the flags more
   carefully.

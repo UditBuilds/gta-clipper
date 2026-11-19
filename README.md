@@ -523,6 +523,22 @@ The model took 3.37-3.41 s per sheet on every video, and all 696 sheets ended wi
 again (about 5 s). In the full runs only test1 needed that (3 reloads); test2 and the two October 26 recordings
 finished with none. I don't know why test1 differed, so the guard stays.
 
+Launch night (Nov 19) showed the guard was too late: a prepare was stopped from outside at about 3.8 GB free, under
+the old 2 GB stop. Now (index and the safety checks alike) the model is unloaded under **7 GB** free (at most every 10
+calls), under **5.5 GB** after any call, and the run stops cleanly under **4.5 GB** (`ERROR: ...`, exit 2; the answers
+so far are cached and the same command carries on). The re-run of that night's prepare dropped from 11 to 7.4 GB free
+in about a minute during the safety checks; the guard unloaded the model 4 times, the lowest was 6.8 GB, and it
+finished in 25 minutes.
+
+**One heavy job at a time** (`heavy.py`). `launch.py prepare` and `render`, `index.py`, `tag_media.py`,
+`footage_short.py` and the suites that render (`launchtest`, `topictest`, `storytest`, `footagetest`,
+`explainertest`) take one lock, `C:\AI\gta\_heavy_job.json`. A second one stops with `ERROR: another heavy job is
+running: ...` naming the one that holds it; a lock whose process is gone is taken over. Each prints `Free memory: X GB`
+when it starts; prepare also prints it before the index, before the safety checks and at the end.
+
+**A stopped prepare carries on.** Its run stays "preparing" in `_launch_runs.json`; the next prepare reuses that folder,
+the cached model answers and the clip.py runs that finished (`launch_clip_done.json` in each).
+
 **Star count check.** `star_check.py` builds `C:\AI\gta\library\star_check.html`: frames the index says show a given
 number of stars, each large, with the star corner zoomed and the index's count under it. On 18 frames (6 at 3 stars
 and 6 at 4 stars from the two October 26 recordings, 3 at 1 star, and 3 at 2 stars from test1 because those
