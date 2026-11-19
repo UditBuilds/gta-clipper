@@ -539,6 +539,14 @@ when it starts; prepare also prints it before the index, before the safety check
 **A stopped prepare carries on.** Its run stays "preparing" in `_launch_runs.json`; the next prepare reuses that folder,
 the cached model answers and the clip.py runs that finished (`launch_clip_done.json` in each).
 
+**Spoken swearing** (`speech.py`, .venv-tts only). After each render the finished Short is transcribed with
+faster-whisper small.en (CPU, int8, about 4 s a Short; the 464 MB model is in `C:\AI\gta\models\whisper`). The
+subtitle check's swear words said in the first 7 s fail the Short; later ones are a SWEARING flag; a Short with the
+game's sound and none heard says so in its SOUND flag (listen once anyway: mumbled words can be missed). Without
+faster-whisper the old "listen once" flag stays. The audio goes in through ffmpeg (faster-whisper's PyAV decoder
+breaks with PyAV 19).
+
+
 **Star count check.** `star_check.py` builds `C:\AI\gta\library\star_check.html`: frames the index says show a given
 number of stars, each large, with the star corner zoomed and the index's count under it. On 18 frames (6 at 3 stars
 and 6 at 4 stars from the two October 26 recordings, 3 at 1 star, and 3 at 2 stars from test1 because those

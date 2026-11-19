@@ -2683,12 +2683,40 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     (out / "upload.txt").write_text(footage_short.make_short.upload_text(short), encoding="utf-8")
     if any(e["kind"] == "event" and e["value"] == "crash" for e in m["evidence"]):
         flags.append("CRASH: check that it looks cinematic, not clumsy")
-    if engine != "v3" or done.get("game_sound"):
-        flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is NOT "
-                     "checked (no speech-to-text): listen once before uploading")
+    game_sound = engine != "v3" or done.get("game_sound")
+    heard = speech_check(out / "short.mp4", log)
+    if heard is None:
+        if game_sound:
+            flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is "
+                         "NOT checked (no speech-to-text): listen once before uploading")
+    else:
+        if heard["early"]:
+            raise RenderProblem("spoken swearing in the first 7 s (speech check): "
+                                + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
+                                + "; pick another start or footage without that line")
+        for t, w in heard["later"]:
+            flags.append(f"SWEARING: {w!r} is said at {t:.1f} s (speech check); cut it or mute that part")
+        if game_sound and not heard["later"]:
+            flags.append(f"SOUND: the game's own sound is in; the speech check heard no swearing "
+                         f"({heard['words']} words). Listen once anyway: it can miss mumbled words")
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
+
+
+def speech_check(path, log=print, check=None):
+    """launch-fixes: speech.swearing on a finished Short, or None where faster-whisper isn't installed (or fails:
+    the Short then keeps the "listen once" flag)."""
+    import speech
+    if check is None:
+        if not speech.available():
+            return None
+        check = speech.swearing
+    try:
+        return check(path)
+    except Exception as e:                      # a broken speech check must not stop the night
+        log(f"  Note: the speech check failed ({e}); listen to this Short once")
+        return None
 
 
 def recs_stub(m):

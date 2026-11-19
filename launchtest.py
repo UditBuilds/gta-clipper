@@ -1300,6 +1300,24 @@ def a_short_no_longer_in_shorts_json_leaves_the_review_page():
     return list(kept) == [1] and launch.kept_results(None, {"shorts": [{"short": 1}]}) == {}
 
 
+
+@check
+def spoken_swearing_in_the_first_7_s_is_found():
+    """launch-fixes: speech.swearing (faster-whisper's words, stood in here) finds the subtitle check's swear words in
+    what is said: before 7 s they are "early" (the Short fails), later ones are flags; mild words pass; a speech check
+    that breaks gives None (the Short keeps its "listen once" flag)"""
+    import speech
+    said = [(0.5, 0.8, "Hey"), (2.0, 2.3, "shit,"), (4.0, 4.2, "damn"), (9.1, 9.4, "fuck"), (12.0, 12.2, "nice")]
+    got = speech.swearing("x.mp4", transcribe=lambda p: said)
+    clean = speech.swearing("x.mp4", transcribe=lambda p: [(1.0, 1.2, "hello")])
+
+    def broken(path):
+        raise RuntimeError("no model")
+    none = launch.speech_check("x.mp4", log=lambda m: None, check=broken)
+    return (got["words"] == 5 and [w for _, w in got["early"]] == ["shit"] and [w for _, w in got["later"]] == ["fuck"]
+            and not clean["early"] and not clean["later"] and none is None), got
+
+
 @check
 def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
     """launch-fixes: the safety step's memory stop is a SafetyError, so launch.py prints ERROR: and exits 2 (the run
