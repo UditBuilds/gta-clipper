@@ -1278,6 +1278,10 @@ def preflight(model, log=print):
         log(f"  Note: Ollama has {', '.join(others)} loaded; they are unloaded first so the model fits the GPU.")
         for m in others:
             vlm.unload(m)
+    if model in info["loaded"]:
+        # launch-fixes: a render minutes ago can leave our own model loaded (keep_alive), holding memory the free
+        # memory check below would blame on other programs. It loads again on the first call.
+        vlm.unload(model)
     free = index.free_ram_gb()
     if free is not None and free < index.RELOAD_BELOW_GB:
         raise LaunchError(f"only {free:.1f} GB of memory is free; close other programs (a browser with many tabs, "

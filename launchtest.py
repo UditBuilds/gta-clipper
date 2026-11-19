@@ -1318,6 +1318,22 @@ def spoken_swearing_in_the_first_7_s_is_found():
             and not clean["early"] and not clean["later"] and none is None), got
 
 
+
+@check
+def the_preflight_unloads_our_own_model_before_it_measures_memory():
+    """launch-fixes: with the memory floor at 7 GB, a qwen3-vl left loaded by a render minutes ago (keep_alive) could
+    make /launch refuse with "close other programs"; the preflight now unloads it (and any other model) first"""
+    unloaded, saved = [], (launch.vlm.check_ollama, launch.vlm.unload, launch.index.free_ram_gb)
+    launch.vlm.check_ollama = lambda m: {"loaded": [launch.index.MODEL, "other:1b"], "digest": "x", "capabilities": []}
+    launch.vlm.unload = unloaded.append
+    launch.index.free_ram_gb = lambda: 12.0 if launch.index.MODEL in unloaded else 6.5
+    try:
+        free = launch.preflight(launch.index.MODEL, log=lambda m: None)
+    finally:
+        launch.vlm.check_ollama, launch.vlm.unload, launch.index.free_ram_gb = saved
+    return free == 12.0 and set(unloaded) == {launch.index.MODEL, "other:1b"}
+
+
 @check
 def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
     """launch-fixes: the safety step's memory stop is a SafetyError, so launch.py prints ERROR: and exits 2 (the run
