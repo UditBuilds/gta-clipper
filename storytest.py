@@ -436,7 +436,8 @@ def the_v2_render_checks_timing_and_logs_the_story():
         folder = run_folder_with(tmp, [pick, dict(pick, short=2, id="M2")],
                                  [good, dict(long_short, short=2, moment="M2")], dry=True)
         data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
-                             indexes=[made_up_idx(path=str(VIDEO))], synth=slow_synth, v2_render=fake_render)
+                             indexes=[made_up_idx(path=str(VIDEO))], synth=slow_synth, v2_render=fake_render,
+                             engine="v2")
         page = (folder / "review.html").read_text(encoding="utf-8")
     first, second = data["shorts"]
     anchors = made["tl"]["anchors"]

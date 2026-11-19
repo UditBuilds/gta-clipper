@@ -33,13 +33,18 @@ import index
 import library
 import vlm
 
-PROMPT_VERSION = "safety_v2"     # prompts/LOG.md: v2 catches more cutscenes (set B 23/31 vs 8/31)
+PROMPT_VERSION = "safety_v3"     # prompts/LOG.md: v2's questions, plus what the frames show (launch-fixes)
 BLOCKING = ("phone_screen", "menu_or_map", "loading_or_black", "cutscene")
 WHAT = {"phone_screen": "phone on screen", "menu_or_map": "menu or map", "loading_or_black": "loading or black screen",
         "cutscene": "cutscene", "blood_or_gore": "blood or gore", "subtitles": "subtitles"}
+# What the frames show (safety_v3, launch-fixes): a label such as "crash" or "shootout" is kept only where the model
+# sees it in the candidate's own frames, never from words alone.
+SEEN = {"crash": "a crash", "shooting": "shooting", "police": "police", "explosion": "an explosion",
+        "stunt": "a jump or a flip", "water": "swimming or a boat"}
 SCHEMA = {"type": "object",
-          "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in WHAT}},
-          "required": ["note", *WHAT]}
+          "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in WHAT},
+                         **{k: {"type": "boolean"} for k in SEEN}},
+          "required": ["note", *WHAT, *SEEN]}
 OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 120}
 EVERY_S = 1.0             # a frame every second...
 EVERY_NOHUD_S = 0.5       # ...every half second when the HUD rules are off
@@ -79,13 +84,16 @@ def parse_answer(content):
         raise ValueError(f"reply is not JSON ({e})") from None
     if not isinstance(a, dict):
         raise ValueError("reply is not a JSON object")
+    # The six safety questions must all be answered. A SEEN question left out counts as not seen (its label is
+    # then dropped, never kept), so a v2 answer still reads; one answered with anything but true/false is unusable.
     bad = [k for k in WHAT if not isinstance(a.get(k), bool)]
+    bad += [k for k in SEEN if k in a and not isinstance(a[k], bool)]
     if bad:
         raise ValueError(f"not true/false: {', '.join(bad)}")
     note = " ".join(str(a.get("note", "")).split())
     if not note:
         raise ValueError("empty note")
-    return {"note": note, **{k: a[k] for k in WHAT}}
+    return {"note": note, **{k: a[k] for k in WHAT}, **{k: a.get(k, False) for k in SEEN}}
 
 
 def load_prompt(game, version=PROMPT_VERSION):
@@ -365,7 +373,19 @@ def check_moment(m, rec, folder, checker):
         for a, b, what in swearing_in(checker, rec["path"], spans, work):
             report["flags"].append(f"PROFANITY at {library.hms(a)}: {what}")
     m["safety"], m["safe_options"] = report, safe
+    m["verified"] = seen_spans(sheets)
     return bool(safe), reasons
+
+
+def seen_spans(sheets):
+    """{what: [[from_s, to_s], ...]} for each SEEN thing the model saw, from the safety sheets (launch-fixes)."""
+    out = {}
+    for s in sheets:
+        a = s.get("answer") or {}
+        for k in SEEN:
+            if a.get(k):
+                out.setdefault(k, []).append([s["from_s"], s["to_s"]])
+    return out
 
 
 # --- Sound: true peak ---

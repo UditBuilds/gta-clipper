@@ -455,16 +455,22 @@ def shoot_moment(rec):
 
 @check
 def safety_answers_must_be_complete():
-    """the safety answer needs a note and true/false for all six questions; anything else is unusable"""
+    """the safety answer needs a note and true/false for all six questions; anything else is unusable. launch-fixes
+    (safety_v3): what the frames show (crash, shooting, police ...) is true/false too; one left out counts as not
+    seen, one answered with anything else makes the answer unusable"""
     good = safety.parse_answer(json.dumps({"note": "car on a road", **{k: False for k in safety.WHAT}}))
+    seen = safety.parse_answer(json.dumps({"note": "a car hits a wall", **{k: False for k in safety.WHAT},
+                                           "crash": True}))
     bad = 0
     for reply in ("not json", "[]", json.dumps({"note": "x", "phone_screen": "yes"}),
-                  json.dumps({"note": "", **{k: False for k in safety.WHAT}})):
+                  json.dumps({"note": "", **{k: False for k in safety.WHAT}}),
+                  json.dumps({"note": "x", **{k: False for k in safety.WHAT}, "crash": "yes"})):
         try:
             safety.parse_answer(reply)
         except ValueError:
             bad += 1
-    return good["phone_screen"] is False and good["note"] == "car on a road" and bad == 4
+    return (good["phone_screen"] is False and good["note"] == "car on a road" and bad == 5
+            and all(good[k] is False for k in safety.SEEN) and seen["crash"] is True and seen["police"] is False)
 
 
 @check
@@ -810,6 +816,19 @@ def only_jason_and_lucia_may_be_named_and_no_spoilers():
 
 
 @check
+def titles_and_hooks_may_use_title_case():
+    """launch-fixes: a title or a hook in normal Title Case passes ("How To Make GTA 6 Cops FORGET You"); a trailer
+    name is still refused there, and a capitalised name mid sentence is still refused in a line or a description"""
+    pick = chase_pick()
+    items = pick["evidence"]
+    title = truth.text_problems("How To Make GTA 6 Cops FORGET You", items, False, "title")
+    hook = truth.text_problems("Can The Cops Catch Me?", items, False, "hook 1")
+    named = truth.text_problems("Driving With Boobie Tonight", items, False, "title")
+    desc = truth.text_problems("A chase starts. Then Michael shows up.", items, False, "description")
+    return title == [] and hook == [] and any("boobie" in p for p in named) and any("Michael" in p for p in desc)
+
+
+@check
 def hooks_titles_and_descriptions_follow_the_rules():
     """3 hooks of 3-6 words, no emoji, a starred index; the title by make_short's rules; exactly 2 sentences of
     description; narrated line 1 is the starred hook word for word; an ACTION CLIP has no lines"""
@@ -964,7 +983,8 @@ def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
     """render() of an ACTION CLIP on a real made-up video: the clip is cut to 1080x1920, the starred hook is burned
     in, the auto peak gives a cold open (the Short is longer than its window by the cold open) and is flagged AUTO
     PEAK with the command to drop it; the music bed is mixed under the game sound; the true peak is under -1.0 dBTP;
-    --short 1 --no-cold-open renders it again without the cold open, and --hook 1 swaps in the first hook"""
+    --short 1 --no-cold-open renders it again without the cold open, and --hook 1 swaps in the first hook.
+    launch-fixes: this is the old way (no voice), kept only behind --engine v2; /launch's default is v3"""
     with tempfile.TemporaryDirectory() as tmp:
         src, music = Path(tmp) / "rec_b.mp4", Path(tmp) / "bed.wav"
         if not made_up_footage(src):
@@ -987,15 +1007,15 @@ def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
         launch.pick_music = lambda seconds, seed: (music, "made up")
         try:
             first = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS,
-                                  checker=None, indexes=[])["shorts"][0]
+                                  checker=None, indexes=[], engine="v2")["shorts"][0]
             tp = safety.true_peak(first["files"]["short.mp4"]) if first["status"] == "READY" else None
             size = launch.subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
                                           "stream=width,height", "-of", "csv=p=0", first["files"]["short.mp4"]],
                                          capture_output=True, text=True).stdout.strip()
             again = launch.render(folder, 1, None, True, shorts_dir=shorts, today=TODAY, log=lambda m: None,
-                                  facts=FACTS, checker=None, indexes=[])["shorts"][0]
+                                  facts=FACTS, checker=None, indexes=[], engine="v2")["shorts"][0]
             swapped = launch.render(folder, 1, 1, False, shorts_dir=shorts, today=TODAY, log=lambda m: None,
-                                    facts=FACTS, checker=None, indexes=[])["shorts"][0]
+                                    facts=FACTS, checker=None, indexes=[], engine="v2")["shorts"][0]
         finally:
             launch.pick_music = old
     return (first["status"] == "READY" and first["hook"] == "Wait for the crash" and first["cold_open"]
@@ -1079,6 +1099,49 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
 
 
 # --- The whole prepare stage, with stand-ins ---
+
+@check
+def a_recording_under_15_s_is_skipped_with_a_plain_line():
+    """launch-fixes: launch night had a 14.9 s recording. prepare() leaves a recording under 15 s out before
+    calibrating or indexing it, says so in one plain line and in candidates.json's "skipped", and goes on with the
+    rest; when every new recording is that short it stops with a plain reason"""
+    def run(tmp, short_ones):
+        tmp = Path(tmp)
+        inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
+        for d in (inp, shorts, lib):
+            d.mkdir(exist_ok=True)
+        (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
+        for name in ("GTA_20261119000000.webm", "GTA_20261119010000.webm"):
+            (inp / name).write_bytes(b"x")
+        guided_run, _ = stand_in_guided(["PASS"])
+        asked, lines = [], []
+
+        def index_video(video, profile, every, library, cache_dir, log):
+            asked.append(Path(video).stem)
+            return made_up_idx(Path(video).stem, video)
+        old = launch.probe_duration
+        launch.probe_duration = lambda v: 14.9 if Path(v).stem in short_ones else DURATION
+        try:
+            folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
+                                    log=lines.append, index_video=index_video, guided_run=guided_run,
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+        finally:
+            launch.probe_duration = old
+        return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked, lines
+    with tempfile.TemporaryDirectory() as tmp:
+        data, asked, lines = run(tmp, {"GTA_20261119000000"})
+    stopped = None
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            run(tmp, {"GTA_20261119000000", "GTA_20261119010000"})
+        except launch.LaunchError as e:
+            stopped = str(e)
+    why = data["skipped"].get("GTA_20261119000000.webm", "")
+    return (asked == ["GTA_20261119010000"] and "14.9 s" in why and "15 s or more" in why
+            and any(l.strip().startswith("Skipped GTA_20261119000000.webm: only 14.9 s") for l in lines)
+            and [r["name"] for r in data["recordings"]] == ["GTA_20261119010000.webm"]
+            and stopped and "under 15 s" in stopped)
+
 
 @check
 def prepare_writes_candidates_with_evidence_and_logs_the_run():

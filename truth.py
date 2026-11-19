@@ -36,7 +36,8 @@ CLAIMS = ("on_screen", "fact")
 EVIDENCE_SLACK_S = 1.5
 # Words that need evidence, and the evidence that supports them: (kind, value or None for any value).
 WORDS = [
-    (("star", "stars", "wanted"), [("stars", None)]),
+    (("star", "stars", "wanted"), [("stars", None), ("star_look", None)]),
+    (("icon", "icons", "heat"), [("heat", None)]),
     (("cop", "cops", "police", "officer", "officers", "squad car", "cruiser"),
      [("police", None), ("activity", "chase"), ("stars", None)]),
     (("crash", "crashes", "crashed", "crashing", "wreck", "wrecked", "smash", "smashed", "collide", "collision",
@@ -78,14 +79,26 @@ def has_word(text, phrase):
     return re.search(r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])", kept) is not None
 
 
+# launch-fixes: a "seen" line whose crash, explosion, stunt, shootout or police the safety frames didn't show carries
+# them in "not_seen"; its own words then don't support that family.
+FAMILY_EVENT = {"crash": "crash", "explode": "explosion", "jump": "stunt", "shoot": "shootout", "cop": "police"}
+
+
+def family_event(words):
+    return next((ev for w, ev in FAMILY_EVENT.items() if w in words), None)
+
+
 def supported(word_family, items):
     """True when one of the evidence items supports a word of that family: an item of a supporting kind/value, or a
-    'seen' or 'event' item whose own words use the word too."""
+    'seen' or 'event' item whose own words use the word too (not when the safety frames didn't show that event)."""
     words, kinds = word_family
+    event = family_event(words)
     for e in items:
         for kind, value in kinds:
             if e["kind"] == kind and (value is None or e["value"] == value):
                 return True
+        if event and event in (e.get("not_seen") or []):
+            continue
         if e["kind"] in ("seen", "event") and any(has_word(str(e.get("source", "")) + " " + str(e["value"]), w)
                                                   for w in words):
             return True
@@ -112,14 +125,17 @@ def word_problems(text, items, nohud, where, facts_text=""):
     return out
 
 
-def name_problems(text, facts_text, where):
+def name_problems(text, facts_text, where, title_case=False):
     """Capitalised words that may be names (not a sentence's first word, not ALL CAPS, not allowed, not in the
-    line's facts), and the trailer names even in capitals."""
+    line's facts), and the trailer names even in capitals. title_case (launch-fixes: a title or a hook, where
+    Title Case Is Normal): only the trailer names are refused."""
     out = []
     low = (text or "").lower()
     for name in NAMES:
         if re.search(r"(?<![a-z])" + re.escape(name) + r"(?![a-z])", low):
             out.append(f"{where}: \"{name}\" is a character name; only Jason and Lucia may be named")
+    if title_case:
+        return out
     for sentence in re.split(r"(?<=[.!?])\s+|\n", text or ""):
         for k, w in enumerate(words_of(sentence)):
             bare = w.strip("'’").lower()
@@ -216,7 +232,7 @@ def text_problems(text, items, nohud, where, facts_text=""):
     out = word_problems(text, items, nohud, where)
     out += number_problems(text, evidence_numbers(items), where)
     out += mechanics_problems(text, where)
-    out += name_problems(text, facts_text, where)
+    out += name_problems(text, facts_text, where, title_case=where == "title" or where.startswith("hook"))
     out += spoiler_problems(text, where)
     return out
 
@@ -253,6 +269,10 @@ def upload_problems(short):
 CLAIMS_V2 = CLAIMS + ("ask",)
 FORMATS = {"F1": "GTA 5 vs GTA 6: what changed", "F2": "a test: can you ...? and the answer",
            "F3": "3 things this moment shows", "F4": "first look: what it looks like in GTA 6"}
+# launch-fixes (engine v3): a topic Short teaches one thing about GTA 6 with the footage (and the game's own HUD or
+# tips) as proof, like the Step 0 sample; an action Short has a short voice too: setup, then the payoff.
+V3_FORMATS = {"T1": "a topic: one thing about GTA 6, the footage as proof",
+              "A1": "an action clip: setup, then the payoff"}
 TEACHES_WORDS = 3                         # "teaches" says in at least this many words what the viewer learns
 PAYOFF_AT = (0.45, 0.75)                  # the payoff line starts this far into the Short
 # A line that starts with the player as its subject ("I drive", "So I cut across", "my truck") is play-by-play
@@ -342,7 +362,40 @@ def overlay_problems(n, line, by_id, nohud, facts_text):
     return out
 
 
-def story_problems(short, moment, facts):
+def beat_text_problems(n, line, by_id, nohud, facts):
+    """Engine v3 (launch-fixes): the words a line's beats put on screen (a card's or a compare side's label, a
+    banner) follow the line's own rules: what they name needs the line's evidence or facts, and no names or
+    spoilers."""
+    out, where = [], f"line {n}"
+    cited = [by_id[i] for i in line.get("evidence", []) if i in by_id]
+    if line.get("claim") == "ask":
+        cited = list(by_id.values())
+    used = [facts[i] for i in line.get("facts", []) or [] if i in facts]
+    facts_text = " ".join(f"{f['claim']} {f['safe_wording']} {' '.join(f.get('also_ok', []))}" for f in used).lower()
+    texts = []
+    for k, b in enumerate(line.get("beats") or [], 1):
+        if not isinstance(b, dict):
+            continue
+        parts = [b.get(side) for side in ("top", "bottom")] if b.get("beat") == "compare" else [b]
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            label = part.get("label")
+            text = label.get("text") if isinstance(label, dict) else label
+            if isinstance(text, str) and text.strip():
+                texts.append((f"{where} beat {k} label", text))
+        if b.get("beat") == "banner" and isinstance(b.get("text"), str):
+            texts.append((f"{where} beat {k} banner", b["text"]))
+    for at, text in texts:
+        out += [m.replace(where, at, 1) for m in word_problems(text, cited, nohud, where, facts_text)]
+        out += [m.replace(where, at, 1) for m in number_problems(text, evidence_numbers(cited) | {
+            x for f in used for w in facts_file.wordings(f) for x in facts_file.numbers_in(w)}, where)]
+        out += [m.replace(where, at, 1) for m in name_problems(text, facts_text, where)]
+        out += [m.replace(where, at, 1) for m in spoiler_problems(text, where)]
+    return out
+
+
+def story_problems(short, moment, facts, engine="v2"):
     """The owner's story rules (PR 26) for a narrated Short, before it is voiced: a format the moment offers, every
     line teaching or asking (no play-by-play), each question answered, one payoff, a loop line, no spoken call to
     action, F2's no-cause rule, overlays that explain and mission footage only with a reason. Timing rules (the
@@ -354,8 +407,12 @@ def story_problems(short, moment, facts):
     lines = short.get("lines") or []
     fmt = short.get("format")
     offered = moment.get("format_options")
-    if fmt not in FORMATS:
-        out.append("format: one of " + ", ".join(f"{k} ({v})" for k, v in FORMATS.items()))
+    known = {**FORMATS, **V3_FORMATS} if engine == "v3" else FORMATS
+    if offered is not None and engine == "v3":
+        offered = list(offered) + ([{"format": "A1"}] if moment.get("type") == "action" else [])
+        offered += [{"format": "T1"}] if moment.get("type") == "narrated" and moment.get("topic") else []
+    if fmt not in known:
+        out.append("format: one of " + ", ".join(f"{k} ({v})" for k, v in known.items()))
     elif offered is not None and fmt not in [o["format"] for o in offered]:
         out.append(f"format: {fmt} isn't one this moment offers ("
                    + (", ".join(o["format"] for o in offered) or "none") + ")")
@@ -420,9 +477,11 @@ def story_problems(short, moment, facts):
     return out
 
 
-def check_short(short, moment, facts, today, line_spans=None):
+def check_short(short, moment, facts, today, line_spans=None, engine="v2"):
     """(problems, flags, claims) for one Short Claude wrote. moment: its pick from candidates.json (type, evidence,
-    mode). line_spans: per narrated line, (from_s, to_s) of the footage on screen while it is spoken, once timed."""
+    mode). line_spans: per narrated line, (from_s, to_s) of the footage on screen while it is spoken, once timed.
+    engine v3 (launch-fixes): an ACTION Short has lines too, checked the same way; the starred hook is shown as the
+    opening card from frame 0, so line 1 needn't repeat it word for word."""
     items = moment.get("evidence") or []
     by_id = {e["id"]: e for e in items}
     nohud = moment.get("mode") == "nohud"
@@ -435,18 +494,23 @@ def check_short(short, moment, facts, today, line_spans=None):
         if isinstance(short.get(key), str):
             problems += text_problems(short[key], items, nohud, key)
     claims = []
-    if moment.get("type") == "narrated":
+    voiced = moment.get("type") == "narrated" or engine == "v3"
+    if voiced:
         lines = short.get("lines")
         if not isinstance(lines, list) or not lines or not all(isinstance(l, dict) for l in lines):
-            return problems + ["lines: a narrated Short needs its lines"], flags, claims
+            return problems + [f"lines: a{'n action' if moment.get('type') == 'action' else ' narrated'} Short "
+                               "needs its lines (every Short has a voice)"], flags, claims
         hooks = short.get("hooks") or []
         star = short.get("star")
-        if isinstance(star, int) and 0 <= star < len(hooks) and lines[0].get("say", "").strip() != hooks[star].strip():
+        if (engine != "v3" and isinstance(star, int) and 0 <= star < len(hooks)
+                and lines[0].get("say", "").strip() != hooks[star].strip()):
             problems.append("line 1 must be the starred hook, word for word (the narrated hook is spoken)")
         for n, line in enumerate(lines, 1):
             span = line_spans[n - 1] if line_spans and n - 1 < len(line_spans) else None
             problems += line_problems(n, line, by_id, nohud, facts, span)
-        problems += story_problems(short, moment, facts)
+            if engine == "v3":
+                problems += beat_text_problems(n, line, by_id, nohud, facts)
+        problems += story_problems(short, moment, facts, engine)
         more, claims = fact_problems(lines, facts, today)
         problems += more
         if any(f["status"] == "reported" for c in claims for f in c["facts"]):
@@ -456,7 +520,7 @@ def check_short(short, moment, facts, today, line_spans=None):
     if moment.get("type") == "action" and moment.get("mission") and not str(short.get("mission_ok", "")).strip():
         problems.append("mission_ok: this moment is mission footage; say why its point is clear without the story, "
                         "or leave it out")
-    return problems, flags, claims
+    return list(dict.fromkeys(problems)), flags, claims
 
 
 def claims_text(short, moment, claims, facts):

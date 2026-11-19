@@ -820,3 +820,56 @@ flagged DRYRUN STAND-IN, and render refuses that outside a dry run. LAUNCH_NIGHT
 - **Action clips have none of the v2 extras** (slow-mo on the impact, a ring on the stars, a replay ending).
 - **The split-screen break and a real F1 (GTA 6 vs my GTA 5 clip) haven't run on real footage.**
 - **F4 can only run on GTA 6.**
+
+## Launch fixes (Nov 19): every Short like the posted sample
+
+On launch night /launch made 1 Short instead of 3, and it was raw gameplay. The causes, the fixes and the order I
+asked for: the GTA 6 HUD (its own profile, `profiles/gta6.json`, calibrated on my footage: PASS), then **topics
+first**, then **the story layer for every Short**, then labels and picking. The bar is the Step 0 sample I posted,
+"How to make GTA 6 cops FORGET you": the hook on screen from frame 0, the am_puck voice with yellow captions, music
+and sound effects, setup -> payoff, my footage as the proof.
+
+**Engine v3 (the default render, `launch.py render`)** makes every Short that way, both types:
+
+- Claude writes the lines and their **beats** (full screen, a framed card, a before/after compare, a banner), each at
+  a second of the pick's own recording. A beat with `"zoom": "stars"` (or `"tip"`, `"minimap"`, or a box) is a
+  close-up cut by `proof.py`: the star row with the heat icons under it, the game's tip box, the minimap. That is what
+  made the sample readable on a phone.
+- The starred hook is the opening card from frame 0; line 1 is the spoken hook. A silent subscribe pill and a loop
+  end every Short.
+- An **action Short** has a short voice too (3-5 lines, setup -> payoff) with the game's sound in. A Short with no
+  lines is refused: no Short ships as raw gameplay.
+- truth.py checks every line (evidence on screen while it is said, facts, numbers, names, no play-by-play), the words
+  each beat puts on screen, one payoff at 45-85 %, a narrated Short of 25-39 s (action 16-32 s), and no beat on
+  footage an earlier Short showed or that isn't clean in the index. `--engine v2` and `v1` keep the older renders.
+
+**Topics first (prepare).** Topic candidates come first in the pool (+1.5 points): every `shotlist.json` shot the
+night's footage matches, and on GTA 6 every change of the heat icons or of the stars' look, read by `proof.hud6` twice
+a second. Each lists the facts.json ids its topic may use. A topic pick is NARRATED when its window fits, anchored on
+the second its topic shows. Its evidence gains `heat` items (how many icons, and when they change) and `star_look`
+items (solid red, red outline, hollow white, solid white), so a line may say "two icons are left" only when the HUD
+shows it.
+
+**Labels from the frames (safety_v3).** The safety question now also asks what the frames show: a crash, shooting,
+police, an explosion, a jump, swimming or a boat. A candidate's crash, explosion, stunt, shootout or police points
+stand only where those frames saw them (police also while the HUD shows stars); a "shootout" nobody shoots in is
+relabelled on foot; a model line that names an event the frames didn't show can't support a word. Mission dialogue
+(subtitles on 30 % or more of its sheets) costs up to 1.5 points. What was dropped is in each pick's
+`dropped_labels`.
+
+**The pool.** 15-25 candidates (5 per Short asked for), spread over every recording (60 s apart, each recording
+its share), are all checked before picking; every one that fails is listed in `candidates.json` with why. The best
+`--count` (default 3) that pass are picked.
+
+```powershell
+.\.venv\Scripts\python.exe launch.py prepare --count 3          # the default; --count 5 for more
+.\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
+.\.venv\Scripts\python.exe facts.py own                        # facts from my own footage, waiting for my yes
+.\.venv-tts\Scripts\python.exe topictest.py                     # 15 checks, about 15 s
+```
+
+**Known limits:**
+
+- Hollow white stars over a dark background are read as no stars (recording _022442 at 16:15): the calibrated star
+  rule needs a lighter middle. Those seconds are "no stars", never a wrong number.
+- Spoken swearing is still not checked (faster-whisper not installed yet): listen once to a Short with game sound.
