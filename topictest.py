@@ -340,14 +340,16 @@ def gta6_rec():
 def topics_come_from_the_shot_list_and_the_hud():
     """topic_candidates: a shot-list shot the footage matches (a chase with stars) becomes a topic candidate inside
     the clean stretch, with its topic, shot and facts and the topic bonus; on GTA 6 each change of the heat icons
-    (proof.hud6, made up here) is one too, anchored on its second; a shot nothing matches gives none; footage an
-    earlier Short showed gives none"""
+    (proof.hud6, made up here) is one too, anchored on its second; a shot nothing matches gives none, nor does a
+    topic with no facts to teach (driving and vehicles: B-roll); footage an earlier Short showed gives none"""
     rec = gta6_rec()
     recs = {rec["stem"]: rec}
     shotlist = {"topics": [{"id": "police-chase", "shots": [{"id": "chase-stars", "want": "a chase with stars",
                                                                "query": {"activity": ["chase"], "min_stars": 1}}]},
                            {"id": "combat-weapons", "shots": [{"id": "boats", "want": "a boat",
-                                                                "query": {"activity": ["boat"]}}]}]}
+                                                                "query": {"activity": ["boat"]}}]},
+                           {"id": "driving-vehicles", "shots": [{"id": "any-chase", "want": "a chase",
+                                                                  "query": {"activity": ["chase"]}}]}]}
     asked = []
 
     def hud6(path, a, b, prof):
@@ -357,7 +359,7 @@ def topics_come_from_the_shot_list_and_the_hud():
     used = launch.topic_candidates(recs, [("rec_a", 90.0, 170.0)], shotlist, hud6, log=lambda s: None)
     chase = [m for m in got if m["topic"]["id"] == "police-chase"]
     heat = [m for m in got if m["topic"]["id"] == "heat-icons"]
-    return (chase and heat and not any(m["topic"]["id"] == "combat-weapons" for m in got)
+    return (chase and heat and not any(m["topic"]["id"] in ("combat-weapons", "driving-vehicles") for m in got)
             and all(m["span"][0] + launch.GUARD_S <= m["start_s"] <= m["topic"]["at_s"] <= m["end_s"]
                     <= m["span"][1] - launch.GUARD_S for m in got)
             and chase[0]["topic"]["facts"] == launch.TOPIC_FACTS["police-chase"] and chase[0]["terms"]["topic"] > 0
@@ -406,7 +408,7 @@ def a_topic_passes_the_quality_gate_with_its_topic():
             and not calm_passes and calm_why), (why, calm_why)
 
 
-# --- 6. Engine v3: every Short like the sample ---
+# --- 6. Engine v3: every Short like the sample, with the owner's visual rules (Nov 19 feedback) ---
 
 FACTS = {"heat": {"id": "heat", "claim": "Small icons under the stars show what the police know.",
                   "safe_wording": "small icons under the stars reportedly show what police know about you",
@@ -430,6 +432,7 @@ def topic_pick(video):
 
 
 def topic_short():
+    """The made-up topic Short: every beat full screen; the insets come from the words (place_insets)."""
     return {"short": 1, "moment": "M1", "type": "narrated", "format": "T1",
             "format_why": "the HUD shows an icon go: the footage proves it",
             "hooks": ["What do these icons mean?", "Watch this icon vanish", "Your stars hide a secret"], "star": 0,
@@ -438,38 +441,84 @@ def topic_short():
             "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
             "lines": [
                 {"say": "What do the icons under your stars mean?", "claim": "ask", "evidence": ["E1", "E2"],
-                 "answered_by": 4, "beats": [{"beat": "full", "at": 4.0}]},
+                 "answered_by": 4, "beats": [{"beat": "full", "at": 4.0}, {"beat": "full", "at": 5.5}]},
                 {"say": "Look closer: small icons under the stars reportedly show what police know about you.",
                  "claim": "fact", "facts": ["heat"], "evidence": ["E1", "E2"], "teaches": "the icons are what police know",
-                 "beats": [{"beat": "card", "at": 6.0, "zoom": "stars",
-                            "label": {"text": "What police know", "style": "info"}},
-                           {"beat": "card", "at": 9.0, "label": {"text": "Game tip", "style": "grey"}}]},
+                 "beats": [{"beat": "full", "at": 6.0, "inset": {"zoom": "stars", "box": "icons"}},
+                           {"beat": "full", "at": 9.0, "label": {"text": "What police know", "style": "info"}}]},
                 {"say": "Here the stars still carry three icons.", "claim": "on_screen", "evidence": ["E1", "E2"],
-                 "teaches": "three things are known", "beats": [{"beat": "card", "at": 10.0, "zoom": "stars"}]},
+                 "teaches": "three things are known", "beats": [{"beat": "full", "at": 10.0},
+                                                                {"beat": "full", "at": 11.0}]},
                 {"say": "Then an icon goes, and two are left.", "claim": "on_screen", "evidence": ["E3", "E4"],
                  "teaches": "an icon can disappear", "payoff": True,
-                 "beats": [{"beat": "compare", "top": {"at": 10.0, "zoom": "stars", "label": "Before"},
-                            "bottom": {"at": 16.0, "zoom": "stars", "label": "After"}}]},
+                 "beats": [{"beat": "full", "at": 16.0, "inset": {"zoom": "stars", "box": "icons"}}]},
                 {"say": "So next time the stars show up, look at", "claim": "on_screen", "evidence": ["E1"],
                  "teaches": "the loop back to the question", "loop": True, "beats": [{"beat": "full", "at": 22.0}]}]}
 
 
+def spread_words(script):
+    """Every line 5.8 s, its words spread evenly over it, as explainer's timing and log give them."""
+    words, t = [], 0.0
+    for line in script["lines"]:
+        toks = str(line["say"]).split()
+        step = 5.8 / len(toks)
+        for k, tok in enumerate(toks):
+            words.append({"text": tok.strip(".,;:?!").upper(), "start_s": round(t + k * step, 3),
+                          "end_s": round(t + (k + 0.8) * step, 3)})
+        t += 5.8
+    return words
+
+
 def stand_in_timing(path, root):
-    """Every line 5.8 s, shared by its beats; a 1.5 s loop ending."""
+    """Every line 5.8 s, shared by its beats; a 1.5 s loop ending; the words spread over their lines."""
     script = json.loads(Path(path).read_text(encoding="utf-8"))
     lines = [[5.8 / len(l["beats"])] * len(l["beats"]) for l in script["lines"]]
-    return {"total_s": 5.8 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": {}}
+    return {"total_s": 5.8 * len(lines), "lines": lines, "loop_s": 1.5, "first": (0, 0), "behind": {},
+            "words": spread_words(script)}
 
 
 def stand_in_render(made):
+    """explainer.render's stand-in: a tiny short.mp4 and a log with the words and every visual where the stand-in
+    timing puts them."""
     def render(resolved, out):
-        made["script"] = json.loads(Path(resolved).read_text(encoding="utf-8"))
-        (Path(out) / "log.json").write_text(json.dumps({"durations": {"video_s": 29.0},
-                                                        "music": {"file": "C:/made_up/bed.mp3"}}), encoding="utf-8")
+        script = json.loads(Path(resolved).read_text(encoding="utf-8"))
+        made["script"] = script
+        visuals, t = [], 0.0
+        for n, line in enumerate(script["lines"], 1):
+            for b in line["beats"]:
+                seconds = 5.8 / len(line["beats"])
+                visuals.append({"line": n, "source": f"{b['file']}@{b['at']}", "start_s": round(t, 3),
+                                "seconds": seconds, "source_start_s": float(b["at"]), "layout": "full",
+                                "beat": b["beat"], "loop_tail": False})
+                t += seconds
+        (Path(out) / "log.json").write_text(json.dumps({"durations": {"video_s": round(t, 3)},
+                                                        "music": {"file": "C:/made_up/bed.mp3"},
+                                                        "word_times": spread_words(script), "visuals": visuals}),
+                                            encoding="utf-8")
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=108x192:d=1", "-f", "lavfi",
                         "-i", "sine=f=440:d=1", "-c:v", "libx264", "-c:a", "aac", "-shortest",
                         str(Path(out) / "short.mp4")], capture_output=True)
     return render
+
+
+class StandInChecker:
+    """The vision model's frame question, made up: every frame is a bright street with a car and police, unless a
+    rule says otherwise for a clip (by the start of its file name) or a use ("beat" or "caption")."""
+
+    def __init__(self, **over):
+        self.over, self.asked = over, []
+
+    def frame(self, jpg, key):
+        self.asked.append(key)
+        answer = {"note": "a made-up street with cars and police", **{k: False for k in safety.FRAME},
+                  "vehicle": True, "street": True, "police": True, "people": True}
+        answer.update(self.over.get(key.get("use"), {}))
+        return answer, None
+
+
+def stand_in_hud6(path, a, b, prof):
+    """The made-up recording's HUD: 2 red stars all along; 3 icons until 14 s, then 2."""
+    return [(round(a + k / 2, 2), 2, "red", 3 if a + k / 2 < 14.0 else 2) for k in range(int((b - a) * 2) + 1)]
 
 
 def run_folder(tmp, picks, shorts):
@@ -499,51 +548,73 @@ def v3_index(video):
     return idx
 
 
-@check
-def engine_v3_makes_the_samples_script_with_close_ups_and_logs_it():
-    """render() with engine v3 (the default; a made-up voice and render): the hook card from the starred hook, the
-    am_puck voice, music, sound effects and the end pill; full-screen beats play the recording at their second, the
-    "stars" close-ups are cut from it at 1280x720 and the compare shows both; explainer.py reads the script; the
-    Short is READY, the footage it showed (close-ups as their recording seconds) is logged as used, and a narrated
-    Short with no game sound gets no SOUND flag"""
-    import explainer
+def render_v3_with(tmp, short, pick, video, checker, shorts_name="shorts", used=None):
+    shorts = Path(tmp) / shorts_name
+    shorts.mkdir()
+    if used:
+        footage_short.save_used(shorts, "earlier@launch-2026-11-18", used)
     made = {}
+    folder = run_folder(Path(tmp) / f"run_{shorts_name}", [pick], [dict(short, short=pick["short"])])
+    old = launch.render_one
+
+    def render_one(*a, **kw):                        # the made-up HUD reader, as render() has no hook for it
+        kw["hud6"] = stand_in_hud6
+        return old(*a, **kw)
+    launch.render_one = render_one
+    try:
+        data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=checker,
+                             timing=stand_in_timing, v3_render=stand_in_render(made), indexes=[v3_index(video)])
+    finally:
+        launch.render_one = old
+    return data["shorts"][0], made, shorts
+
+
+@check
+def engine_v3_makes_full_screen_shorts_and_checks_every_caption():
+    """render() with engine v3 (the default; a made-up voice, render, HUD reader and vision model): the hook card from
+    the starred hook, am_puck, music, sound effects and the end pill; every beat is a 1080x1920 full-screen clip of the
+    recording; the insets are timed to the words that name the stars and icons (and added where a line names them
+    without one); explainer.py reads the script; 100 % of the Short is full-screen gameplay; every caption check
+    passes and is kept in checks.json; the Short is READY and its footage is logged as used"""
+    import explainer
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "rec_z.mp4"
         if not big_video(video):
             return False
-        shorts = Path(tmp) / "shorts"
-        shorts.mkdir()
-        folder = run_folder(tmp, [topic_pick(video)], [topic_short()])
-        data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=None,
-                             timing=stand_in_timing, v3_render=stand_in_render(made), indexes=[v3_index(video)])
-        entry = data["shorts"][0]
+        entry, made, shorts = render_v3_with(tmp, topic_short(), topic_pick(video), video, StandInChecker())
         script = made.get("script") or {}
-        zooms = [b["file"] for l in script.get("lines", []) for b in l["beats"] if "zoom" in str(b.get("file"))]
-        zooms += [b[s]["file"] for l in script.get("lines", []) for b in l["beats"] if b["beat"] == "compare"
-                  for s in ("top", "bottom")]
-        sizes = {(s["width"], s["height"]) for z in zooms for s in probe(z).get("streams", [])}
+        files = [b["file"] for l in script.get("lines", []) for b in l["beats"]]
+        sizes = {(s["width"], s["height"]) for f in files[:3] for s in probe(f).get("streams", [])
+                 if s["codec_type"] == "video"}
         out = Path(entry.get("folder", tmp))
         loaded = explainer.load_script(out / "script_resolved.json", launch.GTA_ROOT) if (
             out / "script_resolved.json").is_file() else None
+        checks = json.loads((out / "checks.json").read_text(encoding="utf-8")) if (out / "checks.json").is_file() else {}
         used = json.loads((shorts / footage_short.USED_FOOTAGE).read_text(encoding="utf-8"))
-    full = [b for l in script.get("lines", []) for b in l["beats"] if b["beat"] == "full"]
+        plans = [json.loads(Path(f).with_suffix(".json").read_text(encoding="utf-8")) for f in files]
+    caps = checks.get("caption_checks") or []
+    insets = [p["inset"] for p in plans if p.get("inset")]
     return (entry["status"] == "READY" and script.get("open_card") == "WHAT DO THESE|ICONS MEAN?"
             and script.get("voice") == "am_puck" and script.get("music") == "auto" and script.get("sfx") is True
-            and script.get("end_pill") == launch.END_PILL and len(zooms) == 4 and sizes == {(1280, 720)}
-            and full and all(b["file"] == str(video) for b in full) and float(full[0]["at"]) == 4.0
-            and loaded is not None and entry["music"] == "bed.mp3"
+            and script.get("end_pill") == launch.END_PILL and all(b["beat"] == "full" for l in script["lines"]
+                                                                   for b in l["beats"])
+            and sizes == {(1080, 1920)} and loaded is not None and checks.get("full_screen") == 1.0
+            and len(insets) >= 5 and all(i["t1"] - i["t0"] <= proof.INSET_MAX_S + 1e-6 for i in insets)
+            and caps and all(c["ok"] for c in caps)
+            and any(c["rule"] == "the HUD is on screen" for c in caps)
+            and any(c["rule"] == "police in the frame" for c in caps)
+            and entry["checks"]["full_screen"] == 1.0
             and not any(f.startswith("SOUND") for f in entry["flags"])
-            and any(f.startswith("REPORTED FACT") for f in entry["flags"])
-            and used["shorts"] and all(s[0] == "rec_z" for s in used["shorts"][0]["spans"])
-            and any(abs(s[1] - 16.0) < 0.01 for s in used["shorts"][0]["spans"])), entry.get("problems")
+            and used["shorts"] and all(s[0] == "rec_z" for s in used["shorts"][0]["spans"])), (
+        entry.get("problems"), [c for c in caps if not c["ok"]])
 
 
 @check
-def engine_v3_refuses_a_plain_clip_a_late_payoff_and_used_footage():
-    """engine v3 refuses what the sample's way doesn't allow: an action Short with no lines (no Short ships as raw
-    gameplay: every Short has a voice), a payoff outside 45-85 % of the Short, a beat on footage an earlier Short
-    showed, a beat far from the pick's window, and a label that names what its line's evidence doesn't show"""
+def engine_v3_refuses_cards_plain_clips_late_payoffs_and_used_footage():
+    """engine v3 refuses what the owner's rules don't allow, before anything is made: a card or a compare (gameplay
+    as a small box over a blurred background), an action Short with no lines (no raw gameplay: every Short has a
+    voice), a payoff outside 45-85 % of the Short, a beat far from the pick's window, a label naming what its line's
+    evidence doesn't show, footage an earlier Short showed, and no vision model to check the captions"""
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "rec_z.mp4"
         if not big_video(video, 30):
@@ -555,33 +626,194 @@ def engine_v3_refuses_a_plain_clip_a_late_payoff_and_used_footage():
                  "title": "This CRASH came out of absolutely nowhere",
                  "description": "A drive ends against a wall. It all happens in one second.",
                  "hashtags": ["#GTA6", "#GTAVI", "#Shorts"]}
+        card = topic_short()
+        card["lines"][1]["beats"][0] = {"beat": "card", "at": 6.0}
+        compare = topic_short()
+        compare["lines"][3]["beats"] = [{"beat": "compare", "top": {"at": 10.0}, "bottom": {"at": 16.0}}]
         late = topic_short()
         late["lines"][3]["payoff"] = False
         late["lines"][1]["payoff"] = True            # the payoff in line 2: 20 % in
-        late["lines"][1]["claim"] = "fact"
         far = topic_short()
         far["lines"][4]["beats"] = [{"beat": "full", "at": 300.0}]
         crash = topic_short()
         crash["lines"][2]["beats"][0]["label"] = "A huge crash"
-        results = []
-        for short, p in ((plain, action), (late, pick), (far, pick), (crash, pick)):
-            shorts = Path(tmp) / f"shorts{len(results)}"
-            shorts.mkdir()
-            folder = run_folder(Path(tmp) / f"r{len(results)}", [p], [dict(short, short=p["short"])])
-            results.append(launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS,
-                                         checker=None, timing=stand_in_timing, v3_render=stand_in_render({}),
-                                         indexes=[v3_index(video)])["shorts"][0])
-        shorts = Path(tmp) / "shorts_used"
-        shorts.mkdir()
-        footage_short.save_used(shorts, "earlier@launch-2026-11-18", [["rec_z", 9.0, 12.0]])
-        folder = run_folder(Path(tmp) / "r_used", [pick], [topic_short()])
-        results.append(launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS,
-                                     checker=None, timing=stand_in_timing, v3_render=stand_in_render({}),
-                                     indexes=[v3_index(video)])["shorts"][0])
-    plain_r, late_r, far_r, crash_r, used_r = results
+        cases = [(plain, action, StandInChecker(), None), (card, pick, StandInChecker(), None),
+                 (compare, pick, StandInChecker(), None), (late, pick, StandInChecker(), None),
+                 (far, pick, StandInChecker(), None), (crash, pick, StandInChecker(), None),
+                 (topic_short(), pick, StandInChecker(), [["rec_z", 9.0, 12.0]]), (topic_short(), pick, None, None)]
+        results = [render_v3_with(tmp, s, p, video, c, f"s{k}", u)[0] for k, (s, p, c, u) in enumerate(cases)]
     has = lambda r, words: r["status"] == "FAILED" and any(words in p for p in r["problems"])
-    return (has(plain_r, "every Short has a voice") and has(late_r, "payoff") and has(far_r, "far from")
-            and has(crash_r, "label") and has(used_r, "earlier Short")), [r["problems"] for r in results]
+    return (has(results[0], "every Short has a voice") and has(results[1], "small box over a blurred background")
+            and has(results[2], "small box over a blurred background") and has(results[3], "payoff")
+            and has(results[4], "far from") and has(results[5], "label") and has(results[6], "earlier Short")
+            and has(results[7], "vision model isn't running")), [r["problems"] for r in results]
+
+
+@check
+def a_dark_blank_or_back_only_shot_or_one_with_text_at_the_bottom_is_rejected():
+    """beat_checks (rules 3 and 4) on real made-up clips: a near-black shot is rejected as too dark by the numbers;
+    a bright one passes; when the vision model says the shot is only the character's back, or has game text at the
+    bottom (under YouTube's title), it is rejected with the model's note; text on the right edge is only a flag"""
+    import proof
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        dark, bright = tmp / "dark.mp4", tmp / "bright.mp4"
+        for path, src in ((dark, "color=0x101010:s=1080x1920:d=3"), (bright, "testsrc2=s=1080x1920:d=3")):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-pix_fmt", "yuv420p", str(path)],
+                           capture_output=True)
+        plan = [[{"video": "rec_z", "from_s": 1.0, "clip": str(dark), "inset": None, "own": True},
+                 {"video": "rec_z", "from_s": 5.0, "clip": str(bright), "inset": None, "own": True}]]
+        times = {"lines": [[2.5, 2.5]]}
+        p1, r1, f1 = launch.beat_checks(plan, times, tmp, StandInChecker(), log=lambda s: None)
+        p2, r2, _ = launch.beat_checks(plan, times, tmp, StandInChecker(beat={"back_only": True}), log=lambda s: None)
+        p3, r3, _ = launch.beat_checks(plan, times, tmp, StandInChecker(beat={"text_bottom": True}), log=lambda s: None)
+        _, r4, f4 = launch.beat_checks(plan, times, tmp, StandInChecker(beat={"text_right": True}), log=lambda s: None)
+    dark_only = [r for r in r1]
+    return (len(dark_only) == 1 and dark_only[0]["beat"] == 1 and any("too dark" in w for w in dark_only[0]["why"])
+            and {r["beat"] for r in r2} == {1, 2} and any("character's back" in w for r in r2 for w in r["why"])
+            and any("under YouTube's title" in w for r in r3 for w in r["why"]) and [r["beat"] for r in r4] == [1]
+            and any(f.startswith("TEXT ON THE RIGHT") for f in f4) and not f1), (r1, r2, r3, f4)
+
+
+def caption_case(tmp, say, words, hud, inset=(0.0, 2.0), box="icons", checker=None):
+    """caption_checks on one made-up line: one beat of a real 2 s clip at 10 s of rec_z with a stars inset on from
+    inset[0] to inset[1] (None: no inset); words [(text, start)]; hud: the HUD reader's samples."""
+    clip_file = Path(tmp) / "c.mp4"
+    if not clip_file.is_file():
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1080x1920:d=4", "-pix_fmt",
+                        "yuv420p", str(clip_file)], capture_output=True)
+    ins = None if inset is None else {"zoom": "stars", "t0": inset[0], "t1": inset[1], "from_s": 10.0 + inset[0],
+                                      "box_name": box, "rect": [0, 0, 420, 236], "box": None}
+    plan = [[{"video": "rec_z", "from_s": 10.0, "clip": str(clip_file), "inset": ins, "own": True}]]
+    run_log = {"visuals": [{"line": 1, "source": f"{clip_file}@0", "start_s": 0.0, "seconds": 4.0,
+                            "source_start_s": 0.0, "layout": "full"}],
+               "word_times": [{"text": w, "start_s": t, "end_s": t + 0.3} for w, t in words]}
+    return launch.caption_checks(run_log, plan, [{"say": say}], checker or StandInChecker(), {"rec_z": hud}, tmp,
+                                 log=lambda s: None)
+
+
+@check
+def every_caption_word_is_checked_against_its_frame():
+    """caption_checks (rule 2): a HUD word shown while no stars inset is on fails; "two stars" passes with 2 stars
+    read in the inset and fails with 3; "gone" passes when the HUD reads no icons and the icon row is boxed, fails
+    while icons remain, and fails when the stars are still lit and the box is on the stars (the posted sample's
+    mistake); "police" passes when the vision model sees police in that frame and fails when it doesn't"""
+    def hud(stars, icons):
+        return [(round(5.0 + k / 2, 2), stars, "red" if stars else None, icons if stars else None) for k in range(40)]
+    with tempfile.TemporaryDirectory() as tmp:
+        no_inset = caption_case(tmp, "Look at the stars", [("LOOK", 0.2), ("STARS", 1.0)], hud(2, 3), inset=None)
+        two_ok = caption_case(tmp, "Now two stars show", [("TWO", 0.5), ("STARS", 0.8)], hud(2, 3))
+        two_bad = caption_case(tmp, "Now two stars show", [("TWO", 0.5), ("STARS", 0.8)], hud(3, 3))
+        gone_ok = caption_case(tmp, "The last icon is gone", [("ICON", 0.5), ("GONE", 1.0)], hud(2, 0))
+        gone_bad = caption_case(tmp, "The last icon is gone", [("ICON", 0.5), ("GONE", 1.0)], hud(2, 1))
+        gone_box = caption_case(tmp, "The last icon is gone", [("ICON", 0.5), ("GONE", 1.0)], hud(2, 0), box="stars")
+        police_ok = caption_case(tmp, "The police are close", [("POLICE", 2.5)], hud(2, 3))
+        police_bad = caption_case(tmp, "The police are close", [("POLICE", 2.5)], hud(2, 3),
+                                  checker=StandInChecker(caption={"police": False}))
+    bad = lambda checks: any(not c["ok"] for c in checks)
+    return (bad(no_inset) and not bad(two_ok) and bad(two_bad) and not bad(gone_ok) and bad(gone_bad)
+            and bad(gone_box) and any("box the icon row" in (c["why"] or "") for c in gone_box)
+            and not bad(police_ok) and bad(police_bad)), [no_inset, two_bad, gone_bad, gone_box, police_bad]
+
+
+@check
+def the_crop_follows_the_action_and_stays_in_the_middle_otherwise():
+    """proof.follow_track on made-up frames: a bright block moving left to right across a still picture pulls the
+    9:16 window after it (smoothly, never faster than FOLLOW_MAX_STEP a frame); a picture that changes everywhere
+    (a camera turn) and a still one keep it in the middle"""
+    import proof
+    w, h = 320, 180
+
+    def frame(x0, noise=0):
+        buf = bytearray([60] * (w * h))
+        for y in range(60, 120):
+            for x in range(max(0, x0), min(w, x0 + 30)):
+                buf[y * w + x] = 250
+        if noise:
+            rnd = random.Random(noise)
+            for i in range(0, w * h, 7):
+                buf[i] = rnd.randrange(256)
+        return bytes(buf)
+    moving = [frame(20 + 12 * k) for k in range(22)]
+    track = proof.follow_track(moving, w, h, 0.316)
+    turn = proof.follow_track([frame(150, noise=k + 1) for k in range(10)], w, h, 0.316)
+    still = proof.follow_track([frame(150)] * 10, w, h, 0.316)
+    steps = [abs(b - a) for a, b in zip(track, track[1:])]
+    return (track[-1] > 0.65 and track[8] < track[-1] and max(steps) <= proof.FOLLOW_MAX_STEP + 1e-9
+            and all(abs(x - 0.5) < 0.06 for x in turn) and all(x == 0.5 for x in still)), (track[::4], turn)
+
+
+@check
+def a_full_screen_clip_has_its_inset_only_in_its_window():
+    """proof.vertical_clip on a real made-up recording: a 1080x1920 clip; the inset's white edge is on screen inside
+    its window (0.5-2.0 s) and not after it; it sits inside YouTube's safe area and off the captions"""
+    import proof
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=0x203040:s=1920x1080:d=5",
+                        "-pix_fmt", "yuv420p", str(src)], capture_output=True)
+        out = proof.vertical_clip(src, 0.0, 4.0, Path(tmp) / "v.mp4", None,
+                                  {"rect": [1500, 0, 420, 236], "from_s": 0.5, "t0": 0.5, "t1": 2.0, "box": None})
+        on, off = proof.clip_frames(out, [1.0, 3.0], 1080, 1920, gray=True)
+        x, y = proof.INSET_X + 2, proof.INSET_Y + 200        # on the inset's white edge, left side
+        info = probe(out)
+    size = [(s["width"], s["height"]) for s in info.get("streams", []) if s["codec_type"] == "video"]
+    return (size == [(1080, 1920)] and on[y * 1080 + x] > 200 and off[y * 1080 + x] < 120
+            and proof.safe_zone_problems(proof.inset_screen_rect(), "the inset") == []), (on[y * 1080 + x],
+                                                                                           off[y * 1080 + x])
+
+
+@check
+def close_ups_keep_to_the_zoom_cap_and_box_the_detail():
+    """rule 5: the stars inset zooms at most 2x (a 420 px wide crop of the 1080p picture, not the 237 px detail), and
+    the detail comes back to be boxed in red; the tip box is wide enough already (1.5x, no box); the icon row's box
+    sits inside the inset"""
+    import proof
+    prof = clip.load_profile("gta6")
+    rect, detail = proof.inset_rect("stars", prof)
+    tip, tip_detail = proof.inset_rect("tip", prof)
+    box = proof.box_in_inset(proof.hud_box("icons", prof), rect)
+    return (proof.inset_zoom(rect) <= proof.ZOOM_CAP + 1e-9 and detail is not None and rect[2] >= 420
+            and rect[0] <= detail[0] and detail[0] + detail[2] <= rect[0] + rect[2]
+            and tip_detail is None and abs(proof.inset_zoom(tip) - 1.5) < 0.01
+            and 0 <= box[0] and box[0] + box[2] <= proof.INSET_W and 0 <= box[1] and box[1] + box[3] <= proof.INSET_H)
+
+
+@check
+def anything_we_put_on_screen_stays_in_the_safe_zone():
+    """rule 4: proof.safe_zone_problems passes the inset where it sits, and refuses a box under YouTube's title at
+    the bottom, one under the buttons on the right, and one over the captions"""
+    import proof
+    ok = proof.safe_zone_problems(proof.inset_screen_rect(), "inset")
+    bottom = proof.safe_zone_problems([100, 1600, 800, 200], "tip")
+    right = proof.safe_zone_problems([700, 600, 330, 200], "tip")
+    captions = proof.safe_zone_problems([100, 1150, 800, 200], "tip")
+    return ok == [] and bottom and right and captions and any("captions" in p for p in captions)
+
+
+@check
+def insets_are_timed_to_the_words_that_name_them():
+    """place_insets: a written inset is moved to the words of its beat that name the HUD, never over 2 s; a line
+    that names the icons on a beat with no inset gets one (the icon row boxed); a line that names nothing keeps its
+    beats plain"""
+    short = {"lines": [{"say": "Watch the three icons here now"}, {"say": "A calm drive in the city"}]}
+    plan = [[{"own": True, "inset": {"zoom": "stars"}, "video": "v"}, {"own": True, "inset": None, "video": "v"}],
+            [{"own": True, "inset": None, "video": "v"}]]
+    words = [{"text": t, "start_s": s, "end_s": s + 0.3} for t, s in
+             (("WATCH", 0.0), ("THE", 0.4), ("THREE", 0.8), ("ICONS", 1.2), ("HERE", 3.1), ("NOW", 3.5),
+              ("A", 5.8), ("CALM", 6.2), ("DRIVE", 6.6), ("IN", 7.0), ("THE", 7.4), ("CITY", 7.8))]
+    times = {"lines": [[3.0, 2.8], [5.8]], "words": words}
+    words2 = [dict(w) for w in words]
+    words2[4] = {"text": "ICONS", "start_s": 3.1, "end_s": 3.4}       # "icons" again, in the second beat
+    plan2 = [[{"own": True, "inset": {"zoom": "stars"}, "video": "v"}, {"own": True, "inset": None, "video": "v"}],
+             [{"own": True, "inset": None, "video": "v"}]]
+    notes = launch.place_insets(short, plan, times)
+    notes2 = launch.place_insets({"lines": [{"say": "Watch the three icons, icons now"}, short["lines"][1]]}, plan2,
+                                 dict(times, words=words2))
+    first = plan[0][0]["inset"]
+    return (0.4 <= first["start"] <= 0.6 and first["start"] + first["length"] <= 3.0 and first["length"] <= 2.0
+            and plan[0][1]["inset"] is None and plan[1][0]["inset"] is None and notes == []
+            and plan2[0][1]["inset"] and plan2[0][1]["inset"]["box"] == "icons" and notes2), (first, plan2[0][1])
 
 
 @check
@@ -603,8 +835,9 @@ def the_v3_rules_in_truth():
 @check
 def the_hook_card_and_beats_for_lines_that_name_none():
     """open_card_text: the starred hook in capitals, 2-3 lines of at most 13 characters ("CAN COPS|FORGET YOU?"), or
-    nothing when a word is too long or it needs 4 lines; auto_beats: a line that names no beats gets a close-up of
-    the stars for a heat item and footage for the rest, 2 beats for a line of 7 words or more"""
+    nothing when a word is too long or it needs 4 lines; auto_beats: a line that names no beats gets full-screen
+    footage at its evidence, with the stars as an inset (the icon row boxed) for a heat item; 2 beats for a line of 7
+    words or more"""
     by_id = {"E1": {"id": "E1", "kind": "heat", "from_s": 14.0, "to_s": 14.0, "at_s": 14.0},
              "E2": {"id": "E2", "kind": "activity", "from_s": 2.0, "to_s": 30.0}}
     one = launch.auto_beats({"say": "An icon goes.", "evidence": ["E1"]}, by_id, 1, False)
@@ -612,8 +845,8 @@ def the_hook_card_and_beats_for_lines_that_name_none():
     return (launch.open_card_text("Can cops forget you?") == "CAN COPS|FORGET YOU?"
             and launch.open_card_text("Incomprehensibly fast") is None
             and launch.open_card_text("one two three four five six seven eight nine ten eleven twelve") is None
-            and one == [{"beat": "card", "at": 14.0, "zoom": "stars"}]
-            and len(two) == 2 and two[0]["beat"] == "full" and two[1]["beat"] == "card"), (one, two)
+            and one == [{"beat": "full", "at": 14.0, "inset": {"zoom": "stars", "box": "icons"}}]
+            and len(two) == 2 and all(b["beat"] == "full" for b in two)), (one, two)
 
 
 def main():

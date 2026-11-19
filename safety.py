@@ -46,6 +46,19 @@ SCHEMA = {"type": "object",
                          **{k: {"type": "boolean"} for k in SEEN}},
           "required": ["note", *WHAT, *SEEN]}
 OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 120}
+# One shot of a finished Short, as the viewer sees it (the owner's feedback on the posted sample, Nov 19): the B-roll
+# check (rule 3: not too dark, not empty, not the character's back in an empty place), game text under YouTube's title
+# or buttons (rule 4), and what a caption word names (rule 2: caption = picture). prompts/frame_v1.txt.
+FRAME_VERSION = "frame_v1"
+FRAME = {"dark": "too dark", "empty": "almost nothing to look at", "back_only": "the character's back in an empty place",
+         "text_bottom": "game text at the bottom", "text_right": "game text on the right edge",
+         "police": "police", "vehicle": "a vehicle", "crash": "a crash", "explosion": "an explosion",
+         "shooting": "shooting", "water": "water", "street": "a street", "people": "people", "night": "night",
+         "buildings": "buildings"}
+FRAME_SCHEMA = {"type": "object",
+                "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in FRAME}},
+                "required": ["note", *FRAME]}
+FRAME_OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 160}
 EVERY_S = 1.0             # a frame every second...
 EVERY_NOHUD_S = 0.5       # ...every half second when the HUD rules are off
 FIRST_S = 7.0             # no blood or gore in a Short's first seconds
@@ -94,6 +107,23 @@ def parse_answer(content):
     if not note:
         raise ValueError("empty note")
     return {"note": note, **{k: a[k] for k in WHAT}, **{k: a.get(k, False) for k in SEEN}}
+
+
+def parse_frame(content):
+    """frame_v1's answer: a note and true/false for every FRAME question; anything else is unusable."""
+    try:
+        a = json.loads(content)
+    except ValueError as e:
+        raise ValueError(f"reply is not JSON ({e})") from None
+    if not isinstance(a, dict):
+        raise ValueError("reply is not a JSON object")
+    bad = [k for k in FRAME if not isinstance(a.get(k), bool)]
+    if bad:
+        raise ValueError(f"not true/false: {', '.join(bad)}")
+    note = " ".join(str(a.get("note", "")).split())
+    if not note:
+        raise ValueError("empty note")
+    return {"note": note, **{k: a[k] for k in FRAME}}
 
 
 def load_prompt(game, version=PROMPT_VERSION):
@@ -161,7 +191,7 @@ class Checker:
 
     def __init__(self, game, cache_dir, model=index.MODEL, ask=index.ask_model, sheets=make_sheets, info=None,
                  log=print, version=PROMPT_VERSION, ram=None, unload=None):
-        self.version = version
+        self.version, self.game = version, game
         self.prompt, self.sha = load_prompt(game, version)
         self.sub_prompt, self.sub_sha = load_prompt(game, SUBTITLE_VERSION)
         self.cache_dir, self.model, self.ask, self.sheets, self.log = Path(cache_dir), model, ask, sheets, log
@@ -193,6 +223,29 @@ class Checker:
                 "from_ms": round(f0 * 1000), "to_ms": round(f1 * 1000), "every_s": every, "frame_width": SHEET_W,
                 "model": self.model, "model_digest": self.info.get("digest"), "prompt_version": self.version,
                 "prompt_sha256": self.sha, "schema": SCHEMA, "options": OPTIONS}
+
+    def frame(self, jpg, key):
+        """frame_v1's answer for one picture (a sheet of a Short's shot, or one frame of it): (answer, error).
+        key: what the picture is (its clip and times), for the cache; the picture's own bytes are in the key too."""
+        import hashlib
+        if not hasattr(self, "frame_prompt"):
+            self.frame_prompt, self.frame_sha = load_prompt(self.game, FRAME_VERSION)
+        fields = {"kind": "frame", "video": "_short_frames", **key,
+                  "jpg_sha256": hashlib.sha256(Path(jpg).read_bytes()).hexdigest(),
+                  "model": self.model, "model_digest": self.info.get("digest"), "prompt_version": FRAME_VERSION,
+                  "prompt_sha256": self.frame_sha, "schema": FRAME_SCHEMA, "options": FRAME_OPTIONS}
+        rec = vlm.cache_load(self.cache_dir, fields)
+        if rec is None:
+            self.before_call()
+            rec = self.ask(self.model, self.frame_prompt, jpg, self.info.get("capabilities", []), schema=FRAME_SCHEMA,
+                           parse=parse_frame, options=FRAME_OPTIONS)
+            self.calls += 1
+            self.seconds += rec.get("wall_s") or 0.0
+            if rec.get("error") is None:
+                vlm.cache_save(self.cache_dir, fields, rec)
+        else:
+            self.cached += 1
+        return rec.get("answer"), rec.get("error")
 
     def look(self, path, a, b, every, work):
         """[{from_s, to_s, file, answer, error}] for footage a..b of a recording."""
