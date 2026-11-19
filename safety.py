@@ -142,18 +142,42 @@ def make_sheets(path, a, b, every, out_dir, width=SHEET_W, subtitles=False):
     return [(f0, f1, f) for (f0, f1, _), f in zip(plan, files)]
 
 
+class MemoryError_(Exception):
+    """The safety checks stopped because memory ran out even after unloading the model; the answers so far are
+    cached."""
+
+
 class Checker:
     """The safety question, asked through Ollama with the index's own call (index.ask_model) and cached like the
     index's answers. ask and sheets are swapped for stand-ins by the tests."""
 
     def __init__(self, game, cache_dir, model=index.MODEL, ask=index.ask_model, sheets=make_sheets, info=None,
-                 log=print, version=PROMPT_VERSION):
+                 log=print, version=PROMPT_VERSION, ram=None, unload=None):
         self.version = version
         self.prompt, self.sha = load_prompt(game, version)
         self.sub_prompt, self.sub_sha = load_prompt(game, SUBTITLE_VERSION)
         self.cache_dir, self.model, self.ask, self.sheets, self.log = Path(cache_dir), model, ask, sheets, log
         self.info = info if info is not None else vlm.check_ollama(model)
         self.calls, self.cached, self.seconds = 0, 0, 0.0
+        # The index's memory guard (launch-fixes): Ollama's memory grows with every picture, and on launch night the
+        # safety stage, which had no guard, was stopped by Claude Code at 3.8 GB free with Ollama holding 8.5 GB.
+        self.ram, self.unload = ram or index.free_ram_gb, unload or vlm.unload
+        self.since_reload, self.reloads = 0, 0
+
+    def before_call(self):
+        """Unload the model when free memory is low (the next call loads it again), as index.label_frames does;
+        stop with MemoryError_ when even that leaves too little."""
+        free = self.ram()
+        if free is not None and free < index.RELOAD_BELOW_GB and self.since_reload >= index.RELOAD_MIN_CALLS:
+            self.unload(self.model)
+            self.reloads, self.since_reload, free = self.reloads + 1, 0, self.ram()
+            self.log(f"  memory was low: unloaded the model after {self.calls} safety call(s), "
+                     f"{free if free is not None else 0:.1f} GB free now; it loads again")
+        if free is not None and free < index.MIN_FREE_RAM_GB:
+            raise MemoryError_(f"only {free:.1f} GB of memory free (needs {index.MIN_FREE_RAM_GB:g}) during the safety "
+                               "checks. The answers so far are cached: close other programs and run the same command "
+                               "again.")
+        self.since_reload += 1
 
     def fields(self, path, f0, f1, every):
         video = Path(path)
@@ -169,6 +193,7 @@ class Checker:
             fields = self.fields(path, f0, f1, every)
             rec = vlm.cache_load(self.cache_dir, fields)
             if rec is None:
+                self.before_call()
                 rec = self.ask(self.model, self.prompt, jpg, self.info.get("capabilities", []), schema=SCHEMA,
                                parse=parse_answer, options=OPTIONS)
                 self.calls += 1
@@ -194,6 +219,7 @@ class Checker:
                       "prompt_sha256": self.sub_sha, "schema": SUBTITLE_SCHEMA, "options": SUBTITLE_OPTIONS}
             rec = vlm.cache_load(self.cache_dir, fields)
             if rec is None:
+                self.before_call()
                 rec = self.ask(self.model, self.sub_prompt, jpg, self.info.get("capabilities", []),
                                schema=SUBTITLE_SCHEMA, parse=parse_subtitles, options=SUBTITLE_OPTIONS)
                 self.calls += 1

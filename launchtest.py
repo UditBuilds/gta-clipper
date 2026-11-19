@@ -421,9 +421,32 @@ def stand_in_checker(tmp, rules, subs=()):
         return {"answer": parse(json.dumps(answer)), "error": None, "wall_s": 0.1}
 
     checker = safety.Checker("GTA 6", tempfile.mkdtemp(dir=tmp), ask=ask, sheets=sheets,
-                             info={"digest": "x", "capabilities": []}, log=lambda m: None)
+                             info={"digest": "x", "capabilities": []}, log=lambda m: None,
+                             ram=lambda: 20.0, unload=lambda model: None)
     checker.read_log = read
     return checker, asked
+
+
+@check
+def the_safety_checks_unload_the_model_when_memory_runs_low():
+    """launch-fixes: launch night's first prepare was stopped by Claude Code during the safety checks (Ollama 8.5 GB,
+    3.8 GB free), which had no memory guard. Now, as in the index: under 5 GB free the model is unloaded (at most
+    every 10 calls) and loads again on the next call; under 2 GB even then, the run stops with a plain reason and
+    the answers so far stay cached"""
+    with tempfile.TemporaryDirectory() as tmp:
+        checker, _ = stand_in_checker(tmp, [])
+        frees, unloaded = iter([20.0] * 10 + [4.0, 9.0] + [20.0] * 20), []
+        checker.ram, checker.unload = lambda: next(frees), unloaded.append
+        checker.look("rec.webm", 0.0, 240.0, 4.0, Path(tmp))
+        low, _ = stand_in_checker(tmp, [])
+        low.ram = lambda: 1.0
+        stopped = None
+        try:
+            low.look("rec.webm", 0.0, 8.0, 4.0, Path(tmp))
+        except safety.MemoryError_ as e:
+            stopped = str(e)
+    return (unloaded == [launch.index.MODEL] and checker.reloads == 1 and checker.calls >= 12
+            and stopped and "memory" in stopped and "cached" in stopped)
 
 
 def shoot_moment(rec):

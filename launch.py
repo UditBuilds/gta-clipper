@@ -1124,7 +1124,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
     if isinstance(safety, safety_checks.Checker):
         timing["safety_model"] = round(safety.seconds, 1)
-        log(f"Safety checks: {safety.calls} model call(s), {safety.cached} cached, {safety.seconds:.0f} s")
+        log(f"Safety checks: {safety.calls} model call(s), {safety.cached} cached, {safety.seconds:.0f} s"
+            + (f", the model unloaded {safety.reloads} time(s) for memory" if safety.reloads else ""))
         safety_checks.vlm.unload(safety.model)
     if not picks:
         raise LaunchError("no moment passed the checks: nothing to make a Short from")
