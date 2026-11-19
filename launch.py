@@ -2287,14 +2287,23 @@ def v3_spans(plan, times):
     return line_spans, beats
 
 
-def frame_jpeg(clip_file, times, out, width=360, height=640):
-    """A JPEG of a clip's frames at times, side by side (what the frame question looks at)."""
+def frame_jpeg(clip_file, times, out, width=360, height=640, hide=None):
+    """A JPEG of a clip's frames at times, side by side (what the frame question looks at). hide: an [x, y, w, h]
+    rect of the 1080x1920 Short blurred out (launch-fixes: the beat question is about the gameplay, and our own
+    inset of the HUD's icons made the vision model call every inset beat "game text at the bottom")."""
     import proof
     tiles = len(times)
     inputs, graph = [], []
     for k, t in enumerate(times):
         inputs += ["-ss", f"{max(0.0, t):.3f}", "-i", str(clip_file)]
-        graph.append(f"[{k}:v]trim=end_frame=1,scale={width}:{height}[f{k}]")
+        if hide:
+            sx, sy = width / proof.W, height / proof.H
+            x, y = int(hide[0] * sx), int(hide[1] * sy)
+            w, h = max(2, int(hide[2] * sx) // 2 * 2), max(2, int(hide[3] * sy) // 2 * 2)
+            graph.append(f"[{k}:v]trim=end_frame=1,scale={width}:{height},split[a{k}][b{k}];"
+                         f"[b{k}]crop={w}:{h}:{x}:{y},boxblur=20:4[h{k}];[a{k}][h{k}]overlay={x}:{y}[f{k}]")
+        else:
+            graph.append(f"[{k}:v]trim=end_frame=1,scale={width}:{height}[f{k}]")
     stack = "".join(f"[f{k}]" for k in range(tiles))
     graph.append(f"{stack}hstack=inputs={tiles}[v]" if tiles > 1 else f"{stack}null[v]")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -2338,7 +2347,7 @@ def beat_checks(plan, times, out_dir, checker, log=print):
                 why += found[-1]
             if checker is not None:
                 jpg = frame_jpeg(entry["clip"], [seconds * 0.3, seconds * 0.7], Path(out_dir) / "checks" /
-                                 f"l{n}b{k}.jpg")
+                                 f"l{n}b{k}.jpg", hide=proof.inset_screen_rect() if ins else None)
                 answer, error = checker.frame(jpg, {"video": entry["video"], "clip": Path(entry["clip"]).name,
                                                     "seconds": round(seconds, 2), "use": "beat"}) if jpg else (None,
                                                                                                              "no frame")

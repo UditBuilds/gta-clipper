@@ -675,6 +675,36 @@ def a_dark_blank_or_back_only_shot_or_one_with_text_at_the_bottom_is_rejected():
             and any(f.startswith("TEXT ON THE RIGHT") for f in f4) and not f1), (r1, r2, r3, f4)
 
 
+
+@check
+def the_beat_question_does_not_see_our_own_inset():
+    """launch-fixes (Nov 19 run): every beat with a star inset was rejected as "game text at the bottom": the vision
+    model read the inset's HUD close-up. The picture it gets now has the inset's area blurred out (and only that):
+    the gameplay round it stays sharp, and a beat with no inset is sent as it is"""
+    import proof
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        src = tmp / "src.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=1080x1920:d=2", "-pix_fmt",
+                        "yuv420p", str(src)], capture_output=True)
+        hidden = launch.frame_jpeg(src, [0.5], tmp / "hidden.jpg", 360, 640, hide=proof.inset_screen_rect())
+        plain = launch.frame_jpeg(src, [0.5], tmp / "plain.jpg", 360, 640)
+
+        def gray(path):
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                                 capture_output=True).stdout
+            return raw
+
+        def edges(raw, x0, y0, x1, y1, w=360):
+            return sum(abs(raw[y * w + x] - raw[y * w + x + 1]) for y in range(y0, y1, 2) for x in range(x0, x1 - 1, 2))
+        a, b = gray(hidden), gray(plain)
+        x, y, w, h = [v // 3 for v in proof.inset_screen_rect()]
+        inside_h, inside_p = edges(a, x + 25, y + 25, x + w - 25, y + h - 25), edges(b, x + 25, y + 25, x + w - 25, y + h - 25)
+        outside_h, outside_p = edges(a, 0, 20, 360, y - 10), edges(b, 0, 20, 360, y - 10)
+    return (hidden and plain and inside_h < 0.5 * inside_p and abs(outside_h - outside_p) < 0.1 * outside_p,
+            (inside_h, inside_p, outside_h, outside_p))
+
+
 def caption_case(tmp, say, words, hud, inset=(0.0, 2.0), box="icons", checker=None):
     """caption_checks on one made-up line: one beat of a real 2 s clip at 10 s of rec_z with a stars inset on from
     inset[0] to inset[1] (None: no inset); words [(text, start)]; hud: the HUD reader's samples."""
