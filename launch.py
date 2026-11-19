@@ -226,13 +226,26 @@ def last_guided_result(name):
     return data.get("result") if isinstance(data, dict) else None
 
 
+def guided_failure(name):
+    """Why the last guided calibration of this profile saved nothing or failed, in its own words: the reason the
+    unattended page gave up, else the problems its check found."""
+    session = read_json(cal.CALIB_ROOT / name / "session.json") or {}
+    failed = [e for e in session.get("log", []) if e.get("event") == "auto_accept_failed"]
+    if failed:
+        return failed[-1].get("why")
+    result = read_json(cal.CALIB_ROOT / name / "guided_result.json") or {}
+    return "; ".join(result.get("problems") or []) or None
+
+
 def choose_profile(name, game, recordings, durations, slots, log=print, guided_run=None, tries=3):
     """The profile to index with: {"profile", "mode": "hud" or "nohud", "stars": True/False, "why", "attempts"}.
 
     - profiles/<name>.json exists, its stars are done, and its last guided check (if any) didn't FAIL: use it.
-    - else guided calibration with every guess accepted, on the longest recording first. "PASS" ends it; "PASS for
-      the minimap. STARS NOT CALIBRATED" tries the next longest recording for the stars (at most `tries` runs), and
-      uses the profile without stars if none shows any; FAIL, or a run that can't start or save, means NO-HUD.
+    - else guided calibration with every guess accepted, on up to `tries` recordings at once (longest first): the
+      calibration scans each of them and uses the one that shows the HUD best (launch-fixes: launch night tried one
+      recording and gave up). "PASS" ends it; "PASS for the minimap. STARS NOT CALIBRATED" tries the next recordings
+      for the stars, and uses the profile without stars if none shows any; FAIL, or a run that can't start or save,
+      means NO-HUD, with the calibration's own reason.
     """
     guided_run = guided_run or guided.run
     nohud = f"{game}_nohud"
@@ -245,19 +258,30 @@ def choose_profile(name, game, recordings, durations, slots, log=print, guided_r
         prof = clip.load_profile(name)
         return {"profile": name, "mode": "hud", "stars": prof.stars_on, "attempts": attempts,
                 "why": f"profiles/{name}.json already exists" + ("" if prof.stars_on else " (wanted stars off)")}
-    for video in sorted(recordings, key=lambda v: -durations.get(Path(v).stem, 0.0))[:tries]:
-        log(f"  Guided calibration of {name} on {Path(video).name}, every guess accepted...")
-        code = guided_run(name, video, slots=slots, game=GAMES.get(game, {}).get("name"), browser=False,
-                          log=lambda m: log("    " + m), serve=guided.auto_accept)
+    order = sorted(recordings, key=lambda v: -durations.get(Path(v).stem, 0.0))
+    for k in range(0, min(len(order), 3 * tries), tries):
+        batch = [Path(v) for v in order[k:k + tries]]
+        errors = []
+
+        def glog(m, errors=errors):
+            if m.startswith("ERROR:"):
+                errors.append(m[6:].strip())
+            log("    " + m)
+        log(f"  Guided calibration of {name} on {', '.join(v.name for v in batch)}, every guess accepted...")
+        code = guided_run(name, batch, slots=slots, game=GAMES.get(game, {}).get("name"), browser=False,
+                          log=glog, serve=guided.auto_accept)
         result = last_guided_result(name) if code != 2 else None
-        attempts.append({"video": Path(video).name, "exit": code, "result": result})
-        if code != 0 or not result or result.startswith("FAIL") or result.startswith("SAVED"):
+        failed = code != 0 or not result or result.startswith("FAIL") or result.startswith("SAVED")
+        why = ((errors[-1] if errors else guided_failure(name)) if failed else None)
+        attempts.append({"videos": [v.name for v in batch], "exit": code, "result": result, "why": why})
+        if failed:
             return {"profile": nohud, "mode": "nohud", "stars": False, "attempts": attempts,
-                    "why": f"guided calibration on {Path(video).name} " + (f"ended {result}" if result else
-                                                                          "could not start or save a profile")}
+                    "why": f"guided calibration on {', '.join(v.name for v in batch)} "
+                           + (f"ended {result}" if result else "could not start or save a profile")
+                           + (f": {why}" if why else "")}
         if "STARS NOT CALIBRATED" not in result:
             return {"profile": name, "mode": "hud", "stars": True, "attempts": attempts,
-                    "why": f"guided calibration PASS on {Path(video).name}"}
+                    "why": f"guided calibration PASS on {', '.join(v.name for v in batch)}"}
     if guided.pending_parts(name) is not None:
         return {"profile": name, "mode": "hud", "stars": False, "attempts": attempts,
                 "why": "guided calibration PASS for the minimap; no recording showed wanted stars, so star counts are "
@@ -926,6 +950,17 @@ def moment_sheet(path, start, end, out, every=2.0, cols=4, width=400):
     return done.returncode == 0 and Path(out).is_file()
 
 
+def hud_status(choice, modes, checks, hud_log):
+    """How the HUD was read over the whole run, for the top of candidates.json and review.html: "hud" (every recording
+    read with the profile), "partial" (some went NO-HUD, each with why) or "nohud" (none could be: the reason), and
+    where the full log is. Never silent (launch-fixes)."""
+    nohud = [stem for stem, m in modes.items() if m == "nohud"]
+    mode = "nohud" if choice["mode"] == "nohud" or (modes and len(nohud) == len(modes)) else "partial" if nohud else "hud"
+    return {"mode": mode, "profile": choice["profile"], "why": choice["why"], "log": str(hud_log),
+            "nohud_recordings": {stem: "; ".join((checks.get(stem) or {}).get("reasons") or [choice["why"]])
+                                 for stem in nohud}}
+
+
 # --- The whole prepare stage ---
 
 def preflight(model, log=print):
@@ -990,12 +1025,21 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     log(f"Recordings ({len(recordings)}, {sum(durations.values()) / 60:.1f} min): "
         + ", ".join(f"{v.name} ({hms(durations[v.stem])})" for v in recordings))
 
-    # 2. The profile.
+    # 2. The profile. Every HUD step goes to logs/hud.txt too (launch-fixes: launch night's calibration failed and
+    # the run said only "could not start or save a profile").
     t = time.perf_counter()
-    choice = choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], log, guided_run)
+    (folder / "logs").mkdir(exist_ok=True)
+    hud_log = folder / "logs" / "hud.txt"
+
+    def hlog(m):
+        log(m)
+        with open(hud_log, "a", encoding="utf-8") as fh:
+            fh.write(m + "\n")
+    hlog(f"--- {datetime.now():%Y-%m-%d %H:%M:%S}: HUD for {len(recordings)} recording(s), profile {profile} ---")
+    choice = choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], hlog, guided_run)
     timing["calibration"] = round(time.perf_counter() - t, 1)
-    log(f"Profile: {choice['profile']} ({'HUD rules on' if choice['mode'] == 'hud' else 'NO-HUD MODE'}): "
-        f"{choice['why']}")
+    hlog(f"Profile: {choice['profile']} ({'HUD rules on' if choice['mode'] == 'hud' else 'NO-HUD MODE'}): "
+         f"{choice['why']}")
 
     # 3. Index, with clip.py running alongside.
     t = time.perf_counter()
@@ -1018,8 +1062,10 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                 except library.LibraryError as e:
                     ok, reasons, numbers = False, [str(e)], {}
                 checks[v.stem] = {"ok": ok, "reasons": reasons, "numbers": numbers}
+                hlog(f"  {v.name}: HUD check {'passed' if ok else 'FAILED'} {numbers}"
+                     + (f": {'; '.join(reasons)}" if reasons else ""))
                 if not ok:
-                    log(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
+                    hlog(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
                     mode = "nohud"
                     idx = do_index(v, profile=f"{game}_nohud", every=every, library=lib_dir, cache_dir=cache_dir,
                                    log=lambda m: log("  " + m))
@@ -1103,6 +1149,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                             "clip_run": str(clip_runs.get(v.stem)) if clip_runs.get(v.stem) else None}
                            for v in recordings],
             "session_s": round(offset, 2), "skipped": skipped, "calibration": choice,
+            "hud": hud_status(choice, modes, checks, hud_log),
             "settings": {"every_s": every, "window_s": WINDOW_S, "library": str(lib_dir)},
             "moments_found": len(moments),
             "top_moments": [{k: m[k] for k in ("id", "video", "start_s", "end_s", "session_s", "score", "category",
@@ -1852,8 +1899,16 @@ def write_review(folder, cand, written, data):
                    + (f" &middot; {esc('; '.join(r['hud_check']['reasons']))}" if (r.get('hud_check') or {}).get('reasons')
                       else "") + "</li>" for r in run["recordings"])
     timing = ", ".join(f"{k} {v / 60:.1f} min" if v >= 60 else f"{k} {v:.0f} s" for k, v in run.get("timing_s", {}).items())
+    hud = run.get("hud") or {}
+    banner = ""
+    if hud.get("mode") in ("nohud", "partial"):
+        lost = "".join(f"<li>{esc(stem)}: {esc(why)}</li>" for stem, why in (hud.get("nohud_recordings") or {}).items())
+        banner = (f'<div class="hudwarn"><b>{"HUD NOT FOUND" if hud["mode"] == "nohud" else "HUD NOT READ ON SOME RECORDINGS"}'
+                  f'</b>: no wanted-star counts {"anywhere" if hud["mode"] == "nohud" else "for these recordings"}, so no '
+                  f'Short mentions stars there and labels come from the vision model alone. Why: {esc(hud.get("why", ""))}'
+                  f'{"<ul>" + lost + "</ul>" if lost else ""}Full log: <code>{esc(hud.get("log", ""))}</code></div>')
     page = REVIEW_PAGE.format(
-        title=esc(folder.name), dry=('<p class="dry">DRY RUN: nothing was logged as used footage; these Shorts are '
+        hudwarn=banner, title=esc(folder.name), dry=('<p class="dry">DRY RUN: nothing was logged as used footage; these Shorts are '
                                     'for testing.</p>' if run.get("dry_run") else ""),
         calibration=esc(f"{run['calibration']['profile']}: {run['calibration']['why']}"), recordings=recs,
         timing=esc(timing), cards="".join(cards),
@@ -1878,6 +1933,7 @@ main {{ max-width:1200px; margin:0 auto; padding:16px; }}
 h1 {{ font-size:22px; margin:0 0 6px; }} h2 {{ font-size:19px; margin:0 0 4px; }} h3 {{ font-size:14px; margin:14px 0 4px;
   color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }}
 .steps {{ background:#13233a; border:1px solid #2b4a75; border-radius:8px; padding:12px 16px; }}
+.hudwarn {{ background:#3a1518; border:2px solid var(--red); border-radius:8px; padding:12px 16px; margin:0 0 12px; }}
 .steps li {{ margin:4px 0; }}
 .dry {{ background:#3a2a10; border:1px solid var(--amber); border-radius:6px; padding:8px 12px; }}
 article {{ background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--green); border-radius:8px;
@@ -1910,6 +1966,7 @@ a {{ color:#93c5fd; }}
 @media (max-width:800px) {{ .grid {{ grid-template-columns:1fr; }} }}
 </style></head><body><main>
 <h1>Launch review: {title}</h1>
+{hudwarn}
 {dry}
 <div class="steps"><b>What to do (about 5 minutes per Short). {ready} of {total} Shorts are ready.</b>
 <ol>

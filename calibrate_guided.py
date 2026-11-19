@@ -66,6 +66,18 @@ STAR_TRY = 10            # the best this many shapes get a real star fit; the mo
 STAR_MAX_ASPECT = 10     # a box more than this many times wider than tall is a line of text, not a star row
 STAR_MIN_HEIGHT = 16     # real pixels: smaller is too small for calibrate.fit_stars
 STAR_FIT_YES, STAR_FIT_NO = 4, 6   # full-size pictures with and without the shape that go into the fit
+# GTA 6 (launch-fixes): no coloured bars by the minimap. Its player arrow (a white pointer in a dark disc, about 17 px
+# across at 1080p) is looked for in the bottom-left part of the picture, and lit red stars in the top-right part. The
+# areas are shares of the picture (x, y, w, h); nothing else about GTA 6's layout is assumed.
+BARS_MIN_Y = 0.5          # GTA V's minimap bars are in the lower half of the picture
+ARROW_REGION = (0.0, 0.68, 0.30, 0.32)
+ARROW_LOOK = 40           # at most this many frames are looked at (spread over the recording)
+ARROW_BRIGHT, ARROW_DARK = 170, 95   # brightness (0-255) of the pointer, and of the disc round it
+ARROW_CORE_PX = 6         # bright pixels within 3 px of the spot, at least
+ARROW_RING_SHARE = 0.55   # of the pixels 6-7 px from the spot, at least this share dark
+ARROW_MIN_SHARE = 0.25    # the arrow's spot must pass in at least this share of the frames looked at
+STAR6_REGION = (0.72, 0.0, 0.28, 0.12)
+STAR6_MIN_PX = 40         # a lit red star is a group of at least this many steady red pixels
 TUNE_REACH = (1.0, 5.0)  # tune_outline tries outlines this much smaller and larger (real pixels)...
 TUNE_STEP = 0.5          # ...in steps of this
 STAR_MARGIN = 0.25       # the fitted outline must score this much higher on every "stars" picture than on any other
@@ -581,14 +593,254 @@ def tune_outline(fit, yes, no):
 
 # --- Which frames go on the page ---
 
+def _integral(mask, w, h):
+    """Prefix sums of a 0/1 mask (w x h, row by row): I[(y) * (w + 1) + x] = sum of mask[:y, :x]."""
+    W = w + 1
+    out = [0] * (W * (h + 1))
+    for y in range(h):
+        run, row, base, prev = 0, y * w, (y + 1) * W, y * W
+        for x in range(w):
+            run += mask[row + x]
+            out[base + x + 1] = out[prev + x + 1] + run
+    return out
+
+
+def _box_sum(I, w, x0, y0, x1, y1):
+    W = w + 1
+    return I[y1 * W + x1] - I[y0 * W + x1] - I[y1 * W + x0] + I[y0 * W + x0]
+
+
+def _lums(raw):
+    r, g, b = raw[0::3], raw[1::3], raw[2::3]
+    return [0.2126 * x + 0.7152 * y + 0.0722 * z for x, y, z in zip(r, g, b)]
+
+
+def arrow_votes(raw, w, h):
+    """GTA 6's player arrow in one full-size crop: every spot (x, y) of the crop with a white middle (at least
+    ARROW_CORE_PX bright pixels within 3 px) inside a dark disc (ARROW_RING_SHARE of the pixels 6-7 px out dark)."""
+    lum = _lums(raw)
+    Ib = _integral([1 if v >= ARROW_BRIGHT else 0 for v in lum], w, h)
+    Id = _integral([1 if v <= ARROW_DARK else 0 for v in lum], w, h)
+    ring_px = 15 * 15 - 11 * 11
+    out = []
+    for y in range(8, h - 8):
+        for x in range(8, w - 8):
+            if _box_sum(Ib, w, x - 3, y - 3, x + 4, y + 4) < ARROW_CORE_PX:
+                continue
+            dark = _box_sum(Id, w, x - 7, y - 7, x + 8, y + 8) - _box_sum(Id, w, x - 5, y - 5, x + 6, y + 6)
+            if dark >= ARROW_RING_SHARE * ring_px:
+                out.append((x, y))
+    return out
+
+
+def find_arrow(frames, frame, read, log=lambda m: None):
+    """GTA 6 (launch-fixes): the minimap has no coloured bars, so look for its player arrow instead: a white pointer in
+    a dark disc that sits on exactly the same spot whenever the minimap is on screen. frames: [(time, small RGB)]
+    (black ones are skipped); read(time, rect) a full-size area. The spot that passes in the most frames wins, if it
+    passes in ARROW_MIN_SHARE of them. Returns {"centre": [x, y] (whole picture), "votes", "looked", "rect"} or None."""
+    fw, fh = frame
+    rx, ry, rw, rh = (round(ARROW_REGION[0] * fw), round(ARROW_REGION[1] * fh), round(ARROW_REGION[2] * fw),
+                      round(ARROW_REGION[3] * fh))
+    rect = [rx, ry, rw, rh]
+    looks = [t for t, raw in spread([fr for fr in frames if not is_black(fr[1])], ARROW_LOOK)]
+    if not looks:
+        return None
+    with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+        crops = list(pool.map(lambda t: read(t, rect), looks))
+    votes = {}
+    looked = 0
+    for raw in crops:
+        if not raw:
+            continue
+        looked += 1
+        seen = set()
+        for x, y in arrow_votes(raw, rw, rh):
+            key = (x // 2, y // 2)              # 2 px cells: the pointer's turn moves the best spot a little
+            if key not in seen:
+                seen.add(key)
+                votes[key] = votes.get(key, 0) + 1
+    if not votes or not looked:
+        return None
+    best = max(votes, key=votes.get)
+    if votes[best] < max(3, ARROW_MIN_SHARE * looked):
+        log(f"  Minimap arrow: the best spot passed in only {votes[best]} of {looked} looks (needs "
+            f"{max(3, math.ceil(ARROW_MIN_SHARE * looked))}): not found.")
+        return None
+    near = {k: v for k, v in votes.items() if abs(k[0] - best[0]) <= 1 and abs(k[1] - best[1]) <= 1}
+    total = sum(near.values())
+    cx = rx + sum((k[0] * 2 + 1) * v for k, v in near.items()) / total + 0.5
+    cy = ry + sum((k[1] * 2 + 1) * v for k, v in near.items()) / total + 0.5
+    # The vote cells are 2 px and the pointer turns, so the centre is fine-tuned: the spot within 3 px where the
+    # disc's middle is brightest and its ring darkest, over the looks that show the arrow there.
+    showing = [raw for raw in crops if raw and arrow_guess(raw, rect, (cx, cy), loose=True)]
+    if showing:
+        cx, cy = max(((cx + dx / 2, cy + dy / 2) for dx in range(-6, 7) for dy in range(-6, 7)),
+                     key=lambda c: sum(arrow_fit(raw, rect, c) for raw in showing))
+    return {"centre": [round(cx, 1), round(cy, 1)], "votes": votes[best], "looked": looked, "rect": rect}
+
+
+def arrow_shares(raw, rect, centre):
+    """(share of bright pixels in the arrow's middle, share of dark pixels in the ring inside its disc's edge) on one
+    full-size crop, with clip.py's default radii and brightness limits."""
+    a = clip.ARROW_DEFAULTS
+    x0, y0, w, h = rect
+    bright = dark = nb = nd = 0
+    for y in range(max(0, int(centre[1] - y0 - 10)), min(h, int(centre[1] - y0 + 11))):
+        for x in range(max(0, int(centre[0] - x0 - 10)), min(w, int(centre[0] - x0 + 11))):
+            d = math.hypot(x0 + x + 0.5 - centre[0], y0 + y + 0.5 - centre[1])
+            i = (y * w + x) * 3
+            v = 0.2126 * raw[i] + 0.7152 * raw[i + 1] + 0.0722 * raw[i + 2]
+            if d <= a["core_r"]:
+                nb += 1
+                bright += v >= a["core_min"]
+            elif a["ring"][0] <= d <= a["ring"][1]:
+                nd += 1
+                dark += v <= a["ring_max"]
+    return (bright / nb if nb else 0.0), (dark / nd if nd else 0.0)
+
+
+def arrow_fit(raw, rect, centre):
+    bright, dark = arrow_shares(raw, rect, centre)
+    return bright + dark
+
+
+def arrow_guess(raw, rect, centre, loose=False):
+    """HUD shown (True) or hidden (False) on one full-size crop, from the arrow at centre with clip.py's defaults
+    (loose: half the limits, while the centre is still being fine-tuned)."""
+    a = clip.ARROW_DEFAULTS
+    bright, dark = arrow_shares(raw, rect, centre)
+    k = 0.5 if loose else 1.0
+    return bright >= k * a["core_share"] and dark >= k * a["ring_share"]
+
+
+def red_blobs(mask, w, h):
+    """Connected groups (4-neighbours) of set pixels: [(x0, y0, x1, y1, pixels)]."""
+    seen, out = bytearray(w * h), []
+    for start in range(w * h):
+        if not mask[start] or seen[start]:
+            continue
+        stack, px = [start], []
+        seen[start] = 1
+        while stack:
+            i = stack.pop()
+            px.append(i)
+            x, y = i % w, i // w
+            for j in ((i - 1) if x else -1, (i + 1) if x < w - 1 else -1, i - w, i + w):
+                if 0 <= j < w * h and mask[j] and not seen[j]:
+                    seen[j] = 1
+                    stack.append(j)
+        xs, ys = [i % w for i in px], [i // w for i in px]
+        out.append((min(xs), min(ys), max(xs) + 1, max(ys) + 1, len(px)))
+    return out
+
+
+def find_gta6_stars(shown, hidden, frame, read, slots=None, log=lambda m: None):
+    """GTA 6 (launch-fixes): the wanted-star row from lit red stars. shown/hidden: times of frames with the HUD on
+    screen or not. Red pixels that sit on the same spot in some (not all) HUD frames, in star-sized groups at the top
+    right, are lit stars; the row is fitted (calibrate.fit_stars, GTA 6 style) from frames with them against frames
+    without any (the money's green wallet sits in the row then, or the HUD is gone). Returns find_stars' shape, or
+    None when no recording frame shows red stars (white ones are left to the page: draw the box round them)."""
+    fw, fh = frame
+    rect = [round(STAR6_REGION[0] * fw), round(STAR6_REGION[1] * fh), round(STAR6_REGION[2] * fw),
+            round(STAR6_REGION[3] * fh)]
+    rx, ry, rw, rh = rect
+    looks = spread(list(shown), ARROW_LOOK)
+    with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+        crops = {t: r for t, r in zip(looks, pool.map(lambda t: read(t, rect), looks)) if r}
+    if len(crops) < 3:
+        return None
+
+    def reds(raw):
+        return bytearray(1 if raw[i] >= 110 and raw[i] - max(raw[i + 1], raw[i + 2]) >= 80 else 0
+                         for i in range(0, len(raw), 3))
+
+    def greens(raw, y0, y1):
+        """Green pixels in rows y0..y1 of a crop: the money's wallet icon, which sits IN the star row only when no
+        star is lit (while wanted the money moves below the stars)."""
+        return sum(1 for i in range(y0 * rw * 3, min(rh, y1) * rw * 3, 3)
+                   if raw[i + 1] >= 90 and raw[i + 1] - max(raw[i], raw[i + 2]) >= 40)
+
+    masks = {t: reds(r) for t, r in crops.items()}
+    count = [0] * (rw * rh)
+    for m in masks.values():
+        for i, v in enumerate(m):
+            count[i] += v
+    steady = bytearray(1 if 2 <= c <= 0.9 * len(masks) else 0 for c in count)
+    blobs = [b for b in red_blobs(steady, rw, rh) if b[4] >= STAR6_MIN_PX and 0.5 <= (b[2] - b[0]) / max(1, b[3] - b[1]) <= 2.0]
+    if not blobs:
+        log("  Wanted stars: no red stars seen in this recording.")
+        return None
+    # The heat icons under the stars are red too: the stars are the top row of red shapes.
+    top = min(blobs, key=lambda b: (b[1] + b[3]) / 2)
+    mid, tall = (top[1] + top[3]) / 2, top[3] - top[1]
+    blobs = [b for b in blobs if abs((b[1] + b[3]) / 2 - mid) <= 0.5 * tall]
+    blobs.sort(key=lambda b: b[0])
+    size = max(max(b[2] - b[0], b[3] - b[1]) for b in blobs)
+    gaps = [b2[0] - b1[0] for b1, b2 in zip(blobs, blobs[1:]) if b2[0] - b1[0] > size]
+    spacing = min(gaps) if gaps else round(size * 2.1)
+    n = slots or max(len(blobs), 1)
+    # Room round the row (about a third of a star's width each side, and above and below), as fit_stars needs: with
+    # a tight box its search settles on smaller stars inside the real ones.
+    pad = max(10, round(0.3 * size))
+    x1 = min(fw, rx + max(b[2] for b in blobs) + 2 * pad)
+    x0 = max(0, rx + max(b[2] for b in blobs) - n * spacing - pad)
+    y0 = max(0, ry + min(b[1] for b in blobs) - pad)
+    y1 = min(fh, ry + max(b[3] for b in blobs) + pad)
+    box = [x0, y0, x1 - x0, y1 - y0]
+    lit = [(y - ry) * rw + (x - rx) for b in blobs for y in range(ry + b[1], ry + b[3]) for x in range(rx + b[0], rx + b[2])
+           if steady[(y - ry) * rw + (x - rx)]]
+    yes = [t for t, m in masks.items() if sum(m[i] for i in lit) >= 0.5 * len(lit)]
+    row0, row1 = min(b[1] for b in blobs), max(b[3] for b in blobs)
+    no = [t for t, r in crops.items() if t not in yes and sum(masks[t][i] for i in lit) == 0
+          and greens(r, row0, row1) >= 20]
+    no += list(spread(list(hidden), max(0, 4 - len(no))))
+    if len(yes) < cal.STAR_MIN_YES or len(no) < cal.STAR_MIN_NO:
+        log(f"  Wanted stars: red stars on {len(yes)} looks, {len(no)} looks surely without: too few to fit the row.")
+        return None
+    with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+        yes_raws = [r for r in pool.map(lambda t: read(t, box), yes) if r]
+        no_raws = [r for r in pool.map(lambda t: read(t, box), no) if r]
+    try:
+        fit = cal.fit_stars(box, yes_raws, no_raws, slots, "gta6")
+    except cal.CalibError as e:
+        log(f"  Wanted stars: red stars seen, but the row could not be fitted ({e}).")
+        return None
+    fit["box"] = row_rect(fit, frame)
+    return {"fit": fit, "yes": sorted(yes), "no": sorted(no), "alike": {t: 1.0 for t in yes}}
+
+
 def analyse(frames, w, h, frame, read, slots=None, log=lambda m: None):
     """Everything the scan can tell. frames: [(time, small RGB)]; frame: the full picture's size; read(time, rect):
-    a full-size area. Returns {"bars": coarse_bars or None, "stars": find_stars or None, "frames": [{"t", "black",
-    "hud": True/False/None, "stars": True/False/None (None: can't tell)}]}."""
+    a full-size area. Returns {"bars": coarse_bars or None, "arrow": find_arrow or None (GTA 6, when there are no
+    bars), "stars": find_stars or None, "frames": [{"t", "black", "hud": True/False/None, "stars": True/False/None
+    (None: can't tell)}]}."""
     raws = [r for _, r in frames]
-    bars = coarse_bars(raws, w, h)
     info = [{"t": t, "black": is_black(r), "hud": None, "stars": None} for t, r in frames]
     stars = None
+    # GTA V's coloured bars first, as before. They sit by the minimap, low on the picture: "bars" anywhere else are
+    # something else (GTA 6's red compass bar at the top while wanted passed as bars on launch night, _014828).
+    # With no bars there, GTA 6's player arrow is looked for instead.
+    bars = coarse_bars(raws, w, h)
+    if bars and full_rect(bars["box"])[1] < BARS_MIN_Y * frame[1]:
+        log(f"  Coloured strips found at {full_rect(bars['box'])}, high on the picture: not minimap bars.")
+        bars = None
+    arrow = None if bars else find_arrow(frames, frame, read, log)
+    if not bars:
+        if arrow:
+            rect = arrow["rect"]
+            with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+                crops = list(pool.map(lambda f: None if f["black"] else read(f["t"], rect), info))
+            for f, raw in zip(info, crops):
+                f["hud"] = bool(raw) and arrow_guess(raw, rect, arrow["centre"])
+            stars = find_gta6_stars([f["t"] for f in info if f["hud"]], [f["t"] for f in info if f["hud"] is False],
+                                    frame, read, slots, log)
+            if stars:
+                yes, no = set(stars["yes"]), set(stars["no"])
+                for f in info:
+                    if f["hud"]:
+                        f["stars"] = True if f["t"] in yes else False if f["t"] in no else None
+                        f["alike"] = 1.0 if f["t"] in yes else 0.0
+        return {"bars": None, "arrow": arrow, "stars": stars, "frames": info}
     if bars:
         for f, r in zip(info, raws):
             f["hud"] = (not f["black"]) and hud_shown(r, w, bars)
@@ -607,7 +859,7 @@ def choose_frames(found, shown=6, hidden=3, stars=4):
     frames with stars (the surest ones, spread over the recording), HUD-shown frames surely without stars, and
     frames with the HUD hidden. Without bars there are no guesses: an even spread of frames that aren't black."""
     fr = found["frames"]
-    if not found["bars"]:
+    if not (found["bars"] or found.get("arrow")):
         return [{"t": f["t"], "hud": None, "stars": "no"}
                 for f in spread([f for f in fr if not f["black"]], shown + hidden + stars)]
     yes = sorted(sorted((f for f in fr if f["stars"]), key=lambda f: -f["alike"])[:stars * 3], key=lambda f: f["t"])
@@ -675,6 +927,13 @@ def fill_session(session, video, found, picks, slots=None, game=None, log=print)
              if f["labels"].get("hud") == "shown" or (f["id"] in guess and guess[f["id"]]["hud"] == "shown")]
     rect = (drawing.get("bar_area") if drawing.get("bars") and drawing.get("bar_area")
             else full_rect(found["bars"]["box"], BAR_PAD) if found["bars"] else None)
+    arrow = found.get("arrow")
+    if arrow and not (drawing.get("arrow") or {}).get("confirmed"):
+        drawing["arrow"] = {"centre": list(arrow["centre"]), "auto": True, "confirmed": False,
+                            "votes": arrow["votes"], "looked": arrow["looked"]}
+        log(f"  Minimap arrow: found at x {arrow['centre'][0]:g}, y {arrow['centre'][1]:g} "
+            f"(on {arrow['votes']} of {arrow['looked']} looks).")
+        rect = None
     if rect:
         try:
             log("  " + session.find_bars(rect, use=shown))
@@ -690,6 +949,8 @@ def fill_session(session, video, found, picks, slots=None, game=None, log=print)
     done_before = bool((stars.get("fit") or {}).get("confirmed")) or stars.get("mode") == "clicks"
     if found["stars"]:
         stars.update(box=list(found["stars"]["fit"]["box"]), fit=dict(found["stars"]["fit"]), mode="fit", off=False)
+        if found["stars"]["fit"].get("style") == "gta6":
+            stars["style"] = "gta6"
         star_state = "found"
     elif done_before and not stars.get("off"):
         star_state = "kept"
@@ -703,6 +964,7 @@ def fill_session(session, video, found, picks, slots=None, game=None, log=print)
         phone["off"] = True
     d["game"] = d.get("game") or game or guess_game(session.name)
     d["guided"] = {"video": str(Path(video).resolve()), "video_name": Path(video).name, "bars": bars_ok,
+                   "arrow": bool(drawing.get("arrow")),
                    "stars": star_state, "phone": "drawn" if drawn else "skipped", "slots_told": slots,
                    "frames_added": len(new), "started": cal.now()}
     session.event("guided_fill", bars=bars_ok, stars=star_state, frames=len(new))
@@ -832,6 +1094,9 @@ def auto_accept(session, port=0, browser=False, guided=True):
     fit = session.data["drawing"]["stars"].get("fit")
     if fit and not session.data["drawing"]["stars"].get("off"):
         fit["confirmed"] = True
+    arrow = session.data["drawing"].get("arrow")
+    if arrow and arrow.get("centre"):
+        arrow["confirmed"] = True
     try:
         session.save_profile(True)
     except (cal.CalibError, ValueError, KeyError) as e:
@@ -841,13 +1106,34 @@ def auto_accept(session, port=0, browser=False, guided=True):
     return True
 
 
+def scan_one(session, video, slots, log):
+    """Scan and analyse one recording. Returns (found, info, a one-line summary, a score: how good a base it is)."""
+    info = clip.probe(session.ffprobe, video)
+    log(f"  {video.name} ({clip.hms(info['duration'])}): looking through it...")
+    frames = scan(session.ffmpeg, video, info)
+    w, h = small_size(info)
+    found = analyse(frames, w, h, cal.shown_size(info),
+                    lambda t, rect: grab_area(session.ffmpeg, video, info, t, rect), slots, lambda m: log("  " + m))
+    fr = found["frames"]
+    hud = sum(1 for f in fr if f["hud"])
+    what = ("bars found" if found["bars"] else
+            f"no bars; minimap arrow found at {found['arrow']['centre']}" if found.get("arrow") else
+            "no bars and no minimap arrow")
+    stars = f"stars on {len(found['stars']['yes'])} looks" if found["stars"] else "no stars found"
+    summary = (f"{video.name}: {len(frames)} looks, HUD on {hud}, black {sum(1 for f in fr if f['black'])}; "
+               f"{what}; {stars}")
+    score = (0 if not (found["bars"] or found.get("arrow")) else 1000 + (500 if found["stars"] else 0) + hud)
+    return found, info, summary, score
+
+
 def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=False, log=print, serve=None):
-    """The guided calibration, start to finish. Returns the exit code: 0 PASS (also with stars still to do), 1 FAIL
-    or nothing saved, 2 it could not start."""
+    """The guided calibration, start to finish. video: one recording or a list of them: each is scanned, every step
+    is logged, and the one that shows the HUD best (stars found first) is used. Returns the exit code: 0 PASS (also
+    with stars still to do), 1 FAIL or nothing saved, 2 it could not start."""
     import index
     import vlm
     t0 = time.time()
-    video = Path(video)
+    videos = [Path(v) for v in (video if isinstance(video, (list, tuple)) else [video])]
 
     def stop(msg):
         log("ERROR: " + msg)
@@ -857,11 +1143,14 @@ def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=Fal
         return stop("the profile name must be 1-40 lowercase letters, digits or _ (it becomes profiles/NAME.json)")
     if slots is not None and not 1 <= slots <= 10:
         return stop("--star-slots is the number of wanted-star slots, 1 to 10")
-    if not video.is_file():
-        return stop(f"video not found: {video}")
-    barred = index.off_limits(video)
-    if barred:
-        return stop(f"{video} is in {barred}: held-out footage is never used (the owner's rule)")
+    if not videos:
+        return stop("no recording given")
+    for v in videos:
+        if not v.is_file():
+            return stop(f"video not found: {v}")
+        barred = index.off_limits(v)
+        if barred:
+            return stop(f"{v} is in {barred}: held-out footage is never used (the owner's rule)")
     pending = pending_parts(name)
     if pending is not None and "stars" not in pending:
         return stop(f"profiles/{name}.json already exists and its stars are done. calibrate.py never overwrites a "
@@ -878,27 +1167,51 @@ def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=Fal
     except cal.CalibError as e:
         return stop(str(e))
     guided = session.data.get("guided") or {}
-    resume = pending is None and guided.get("video") == str(video.resolve()) and bool(session.data["frames"])
+    found_hud = bool(guided.get("bars") or guided.get("arrow"))
+    # Carry on only with a session whose scan found the HUD: a scan that found nothing is done again (on launch night
+    # the second /launch reused a scan that had found no bars, and failed the same way).
+    resume = (pending is None and bool(session.data["frames"]) and found_hud
+              and guided.get("video") in {str(v.resolve()) for v in videos})
+    if pending is None and session.data["frames"] and not resume:
+        why = "the last scan found no HUD" if not found_hud else "the last scan used other recordings"
+        log(f"Starting the scan again: {why}.")
+        session.data.update(frames=[], drawing={"stars": {}, "bars": [], "phone": {"grey": []}}, overrides={})
+        session.data.pop("guided", None)
+        session.event("rescan", why=why)
+        session.save()
     if pending and not session.data["frames"]:
         return stop(f"profiles/{name}.json is waiting for its stars, but its session folder {session.dir} is gone, so "
                     "it can't be finished. Calibrate again under another name")
+    video = Path(guided["video"]) if resume else videos[0]
     info = clip.probe(session.ffprobe, video)
     try:
         if resume:
             log(f"Carrying on with the session from before ({len(session.data['frames'])} pictures; nothing was saved "
                 "last time).")
         else:
-            log(f"Step 1 of 5. Looking through {video.name} ({clip.hms(info['duration'])}); about half a minute...")
-            frames = scan(session.ffmpeg, video, info)
-            w, h = small_size(info)
-            found = analyse(frames, w, h, cal.shown_size(info),
-                            lambda t, rect: grab_area(session.ffmpeg, video, info, t, rect), slots, log)
+            log(f"Step 1 of 5. Looking through {len(videos)} recording(s); about half a minute each...")
+            tries = []
+            for v in videos:
+                found, inf, summary, score = scan_one(session, v, slots, log)
+                log("  " + summary)
+                session.event("scan", video=v.name, summary=summary, score=score)
+                tries.append((score, -len(tries), v, found, inf))
+            score, _, video, found, info = max(tries, key=lambda t: (t[0], t[1]))
+            session.data["scans"] = [{"video": t[2].name, "score": t[0]} for t in tries]
+            if score <= 0:
+                log("  No recording showed a minimap the tool knows (GTA V's coloured bars or GTA 6's player arrow).")
+            else:
+                log(f"  Using {video.name} for the page.")
             fr = found["frames"]
-            log(f"  {len(frames)} looks at the recording: HUD on screen in {sum(1 for f in fr if f['hud'])}, "
+            log(f"  {len(fr)} looks at {video.name}: HUD on screen in {sum(1 for f in fr if f['hud'])}, "
                 f"black screen in {sum(1 for f in fr if f['black'])}.")
-            log("  Minimap bars: " + (f"found near {full_rect(found['bars']['box'])} ({len(found['bars']['strips'])} "
-                                      "coloured strips)." if found["bars"] else
-                                      "NOT found. You will drag one box round them on the page."))
+            if found.get("arrow"):
+                log(f"  Minimap: no bars (GTA 6); its player arrow is at x {found['arrow']['centre'][0]:g}, "
+                    f"y {found['arrow']['centre'][1]:g}. You check it on the page.")
+            else:
+                log("  Minimap bars: " + (f"found near {full_rect(found['bars']['box'])} "
+                                          f"({len(found['bars']['strips'])} coloured strips)." if found["bars"] else
+                                          "NOT found. You will drag one box round them on the page."))
             if found["stars"]:
                 fit = found["stars"]["fit"]
                 log(f"  Wanted stars: found, {fit['slots']} slot(s) at {fit['box']}, on screen in "
@@ -915,6 +1228,7 @@ def run(name, video, slots=None, game=None, port=0, browser=True, skip_index=Fal
             guided["stars_in_window"] = bool(found["stars"]) and any(
                 guided["check_window"][0] <= t < sum(guided["check_window"]) for t in found["stars"]["yes"])
             guided["scan_s"] = round(time.time() - t0, 1)
+            guided["recordings_scanned"] = [v.name for v in videos]
             session.save()
     except cal.CalibError as e:
         return stop(str(e))

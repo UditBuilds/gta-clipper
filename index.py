@@ -149,37 +149,17 @@ def off_limits(video):
 
 def star_polygons(prof):
     """The outline of each star slot, as clip.star_template() draws it: 10 points in the profile's frame pixels."""
-    polys = []
-    for tx in prof.star_tips_x:
-        cx, cy = tx, prof.star_tip_y + prof.star_radius
-        polys.append([(cx + r * math.cos(a), cy + r * math.sin(a))
-                      for i in range(10)
-                      for a, r in [(-math.pi / 2 + i * math.pi / 5,
-                                    prof.star_radius if i % 2 == 0 else prof.star_radius * prof.star_inner)]])
-    return polys
+    return clip.star_polygons(prof)
 
 
-def _edge_dist(px, py, poly):
-    best = float("inf")
-    for i in range(len(poly)):
-        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
-        dx, dy = bx - ax, by - ay
-        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-        best = min(best, math.hypot(px - ax - t * dx, py - ay - t * dy))
-    return best
-
-
-def _inside(px, py, poly):
-    inside = False
-    for i in range(len(poly)):
-        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
-        if (ay > py) != (by > py) and px < ax + (py - ay) * (bx - ax) / (by - ay):
-            inside = not inside
-    return inside
+_edge_dist = clip.edge_dist
+_inside = clip.point_inside
 
 
 def star_count_rule(prof):
-    """STAR_COUNT with the profile's optional stars.count values on top."""
+    """STAR_COUNT with the profile's optional stars.count values on top (a GTA 6 "gta6" profile: its own rule)."""
+    if getattr(prof, "star_method", "outline") == "gta6":
+        return dict(prof.gta6_rule)
     rule = dict(STAR_COUNT)
     extra = (prof.data.get("stars") or {}).get("count") or {}
     rule.update({k: v for k, v in extra.items() if k in STAR_COUNT})
@@ -192,25 +172,7 @@ def star_masks(prof, rule=None):
     The arms of neighbouring stars overlap, so an outline pixel that is in or near another slot's star is left out.
     """
     rule = rule or star_count_rule(prof)
-    x0, y0, w, h = prof.star_box
-    polys = star_polygons(prof)
-    lo, hi = rule["ring"]
-    masks = []
-    for k, poly in enumerate(polys):
-        ring, core = [], []
-        others = [p for m, p in enumerate(polys) if m != k]
-        for y in range(h):
-            for x in range(w):
-                px, py = x0 + x + 0.5, y0 + y + 0.5
-                if abs(px - prof.star_tips_x[k]) > prof.star_radius + 1 or not _inside(px, py, poly):
-                    continue
-                d = _edge_dist(px, py, poly)
-                if d >= rule["core"]:
-                    core.append(y * w + x)
-                elif lo <= d <= hi and not any(_inside(px, py, o) or _edge_dist(px, py, o) <= hi for o in others):
-                    ring.append(y * w + x)
-        masks.append((ring, core))
-    return masks
+    return clip.star_slot_masks(prof, rule["ring"], rule["core"])
 
 
 def star_slots(rgb, prof, masks):
@@ -267,7 +229,8 @@ def decode_pass(ffmpeg, video, info, range_fix, decoder, prof, frame_dir, every,
              f"[vh]select='gte(t,selected_n*{hud_step:g})',{dl}{clip.hud_filter(info, range_fix, prof)}[hud];"
              f"[vj]select='gte(t,selected_n*{gap:g})',{dl}"
              f"scale={width}:-2:{conv}out_color_matrix=bt601:out_range=pc,tile={tile[0]}x{tile[1]}[jpg]")
-    rule, masks = star_count_rule(prof), star_masks(prof)
+    rule = star_count_rule(prof)
+    masks = star_masks(prof) if getattr(prof, "star_method", "outline") != "gta6" else None
     hud = []
     frame_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=frame_dir) as tmp:
@@ -284,8 +247,10 @@ def decode_pass(ffmpeg, video, info, range_fix, decoder, prof, frame_dir, every,
                 raw = proc.stdout.read(prof.frame_bytes)
                 if len(raw) < prof.frame_bytes:
                     break
-                hud.append((len(hud) * hud_step, clip.star_score(raw, prof), clip.minimap_seen(raw, prof),
-                            clip.phone_seen(raw, prof), count_stars(star_slots(raw, prof, masks), rule)))
+                score = clip.star_score(raw, prof)
+                count = (int(score) if getattr(prof, "star_method", "outline") == "gta6"
+                         else count_stars(star_slots(raw, prof, masks), rule))
+                hud.append((len(hud) * hud_step, score, clip.minimap_seen(raw, prof), clip.phone_seen(raw, prof), count))
             proc.stdout.close()
             if proc.wait() != 0:
                 err.seek(0)

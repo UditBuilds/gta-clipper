@@ -161,8 +161,10 @@ def stand_in_guided(results, saves=True):
 
     def run(name, video, slots=None, game=None, browser=True, log=print, serve=None):
         result = results[len(calls)]
-        calls.append((name, Path(video).name, slots, serve))
+        calls.append((name, [Path(v).name for v in video] if isinstance(video, list) else Path(video).name, slots,
+                       serve))
         if result is None:
+            log("ERROR: video not found: made up")
             return 2
         if saves:
             prof = json.loads((HERE / "profiles" / "gta5.json").read_text(encoding="utf-8"))
@@ -191,24 +193,26 @@ def with_profile_dirs(fn):
 
 @check
 def the_profile_is_calibrated_with_every_guess_accepted_or_the_run_goes_without_hud():
-    """no profile: guided calibration with auto_accept on the longest recording; PASS uses it; stars missing tries the
-    next recording; FAIL or a run that can't start means NO-HUD; a finished profile is used as it is, unless its last
-    guided check FAILED"""
-    durations = {"short": 100.0, "long": 900.0, "mid": 400.0}
+    """no profile: guided calibration with auto_accept on the 3 longest recordings at once (launch-fixes: launch
+    night tried one); PASS uses it; stars missing tries the next recordings; FAIL or a run that can't start means
+    NO-HUD, with the calibration's own reason; a finished profile is used as it is, unless its last guided check
+    FAILED"""
+    durations = {"short": 100.0, "long": 900.0, "mid": 400.0, "tiny": 50.0}
     vids = [Path(f"{s}.webm") for s in durations]
 
-    def case(results, existing=None):
+    def case(results, existing=None, tries=3):
         def inner(tmp):
             if existing:
                 existing(tmp)
             run, calls = stand_in_guided(results)
-            got = launch.choose_profile("gta6", "gta6", vids, durations, 6, log=lambda m: None, guided_run=run)
+            got = launch.choose_profile("gta6", "gta6", vids, durations, 6, log=lambda m: None, guided_run=run,
+                                        tries=tries)
             return got, calls
         return with_profile_dirs(inner)
 
     ok_run, calls = case(["PASS"])
     stars_later, calls2 = case(["PASS for the minimap. STARS NOT CALIBRATED", "PASS"])
-    never_stars, _ = case(["PASS for the minimap. STARS NOT CALIBRATED"] * 3)
+    never_stars, _ = case(["PASS for the minimap. STARS NOT CALIBRATED"] * 3, tries=1)
     failed, _ = case(["FAIL"])
     cannot, _ = case([None])
 
@@ -221,11 +225,14 @@ def the_profile_is_calibrated_with_every_guess_accepted_or_the_run_goes_without_
     kept, calls3 = case([], finished)
     distrusted, _ = case([], finished_but_failed)
     return (ok_run["mode"] == "hud" and ok_run["profile"] == "gta6" and ok_run["stars"]
-            and calls[0][1] == "long.webm" and calls[0][2] == 6 and calls[0][3] is launch.guided.auto_accept
-            and stars_later["stars"] and [c[1] for c in calls2] == ["long.webm", "mid.webm"]
+            and calls[0][1] == ["long.webm", "mid.webm", "short.webm"] and calls[0][2] == 6
+            and calls[0][3] is launch.guided.auto_accept
+            and stars_later["stars"] and [c[1] for c in calls2] == [["long.webm", "mid.webm", "short.webm"],
+                                                                     ["tiny.webm"]]
             and never_stars["mode"] == "hud" and not never_stars["stars"] and len(never_stars["attempts"]) == 3
             and failed["mode"] == "nohud" and failed["profile"] == "gta6_nohud"
-            and cannot["mode"] == "nohud" and kept["mode"] == "hud" and calls3 == []
+            and cannot["mode"] == "nohud" and "video not found: made up" in cannot["why"]
+            and kept["mode"] == "hud" and calls3 == []
             and distrusted["mode"] == "nohud")
 
 
@@ -997,7 +1004,8 @@ def the_no_hud_profiles_never_see_a_hud():
 @check
 def a_failed_calibration_runs_the_whole_night_without_hud():
     """when the guided calibration FAILs, every recording is indexed with gta6_nohud, the run says NO-HUD MODE and
-    why, no pick has a wanted-star item or a star-rise peak, and every pick is flagged"""
+    why, no pick has a wanted-star item or a star-rise peak, and every pick is flagged; launch-fixes: every HUD step
+    is in the run's logs/hud.txt, and review.html says HUD NOT FOUND, with why, at the very top"""
     def run(tmp):
         tmp = Path(tmp)
         inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
@@ -1024,15 +1032,22 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
                                     clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
         finally:
             launch.probe_duration = old
-        return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked
+        data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
+        log = (folder / "logs" / "hud.txt").read_text(encoding="utf-8")
+        page = launch.write_review(folder, data, {"shorts": []}, {"shorts": []}).read_text(encoding="utf-8")
+        return data, asked, log, page
     old_env = launch.os.environ.get("GTA_CLIPPER_PROFILES")
     try:
-        data, asked = with_profile_dirs(run)
+        data, asked, log, page = with_profile_dirs(run)
     finally:
         if old_env is None:
             launch.os.environ.pop("GTA_CLIPPER_PROFILES", None)
     picks = data["picks"]
-    return (asked == ["gta6_nohud", "gta6_nohud"] and data["calibration"]["mode"] == "nohud"
+    top = page.find("HUD NOT FOUND")
+    return (data["hud"]["mode"] == "nohud" and "FAIL" in data["hud"]["why"] and data["hud"]["log"].endswith("hud.txt")
+            and "Guided calibration of gta6" in log and "NO-HUD MODE" in log
+            and 0 < top < page.find("What to do") and "FAIL" in page[top:page.find("What to do")]
+            and asked == ["gta6_nohud", "gta6_nohud"] and data["calibration"]["mode"] == "nohud"
             and "FAIL" in data["calibration"]["why"] and all(r["mode"] == "nohud" for r in data["recordings"])
             and picks and all(p["mode"] == "nohud" for p in picks)
             and not any(e["kind"] == "stars" for p in picks for e in p["evidence"])
