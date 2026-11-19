@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import calibrate as cal
 import clip
@@ -1228,6 +1229,74 @@ def a_frame_sheet_shows_the_moment_with_its_times():
         return ok and size == "1600,226"
 
 
+
+@check
+def one_heavy_job_at_a_time():
+    """launch-fixes: prepare, render and the suites that render take one lock. A second job refuses with a plain line
+    naming the holder; a lock whose process is gone (or a reused pid) is taken over; the holder's own process and its
+    child processes (they inherit GTA_HEAVY_JOB) pass; release removes only its own lock"""
+    import heavy
+    with tempfile.TemporaryDirectory() as tmp:
+        lock = Path(tmp) / "lock.json"
+        live = {111: 1000.0, 222: 1000.0}
+        alive = lambda pid: live.get(pid)
+        env_a, env_b = {}, {}
+        tok = heavy.acquire("launch.py prepare", lock, alive, pid=111, env=env_a)
+        try:
+            heavy.acquire("storytest.py", lock, alive, pid=222, env=env_b)
+            refused = False
+        except heavy.Busy as e:
+            refused = "launch.py prepare" in str(e) and "111" in str(e)
+        nested = heavy.acquire("render inside", lock, alive, pid=111, env={}) is None
+        child = heavy.acquire("explainer.py", lock, alive, pid=333, env={heavy.ENV: tok}) is None
+        heavy.release("not-mine", lock, env={})
+        kept = lock.exists()
+        heavy.release(tok, lock, env=env_a)
+        freed = not lock.exists() and heavy.ENV not in env_a
+        tok2 = heavy.acquire("first", lock, alive, pid=111, env={})
+        del live[111]                                       # the holder died without releasing
+        stale = heavy.acquire("second", lock, alive, pid=222, env={}) is not None
+        later = lambda pid: 5000.0                          # pid 222 reused by a process started after the lock
+        reused = heavy.holder(lock, alive) is not None and heavy.holder(lock, later) is None
+        heavy.acquire("third", lock, later, pid=444, env={})
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        line = heavy.ram_line(12.34) == "Free memory: 12.3 GB" and heavy.ram_line(None).startswith("Free memory:")
+    return (tok and refused and nested and child and kept and freed and tok2 and stale and data["what"] == "third"
+            and reused and line)
+
+
+@check
+def a_stopped_prepare_uses_the_finished_clip_runs_again():
+    """launch-fixes: prepare carries on where it stopped; a clip.py run that finished in the run folder (for the same
+    recording and profile) is used again and clip.py is not run once more; an unfinished one, or another profile's,
+    is not"""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, logs, video = Path(tmp) / "clip_runs", Path(tmp) / "logs", Path(tmp) / "rec_a.webm"
+        done_run = out / "rec_a" / "20261119-180131"
+        half_run = out / "rec_a" / "20261119-190000"
+        done_run.mkdir(parents=True)
+        half_run.mkdir(parents=True)
+        (done_run / "scores.json").write_text("{}", encoding="utf-8")
+        launch.write_json(done_run / launch.CLIP_DONE, {"profile": "gta6"})
+        ran = []
+        saved = launch.subprocess.run
+        launch.subprocess.run = lambda *a, **k: ran.append(a) or SimpleNamespace(returncode=1, stdout="")
+        try:
+            again = launch.run_clip(video, "gta6", out, logs)
+            other = launch.finished_clip_run(video, "gta6_nohud", out)
+            none_yet = launch.finished_clip_run(Path(tmp) / "rec_b.webm", "gta6", out)
+        finally:
+            launch.subprocess.run = saved
+    return again == done_run and not ran and other is None and none_yet is None
+
+
+@check
+def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
+    """launch-fixes: the safety step's memory stop is a SafetyError, so launch.py prints ERROR: and exits 2 (the run
+    stays "preparing" and carries on next time) instead of a traceback"""
+    return issubclass(safety.MemoryError_, safety.SafetyError)
+
+
 def main():
     ok = True
     for fn in CHECKS:
@@ -1243,4 +1312,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import heavy                          # one heavy job at a time (launch-fixes)
+    heavy.main_guard("launchtest.py")
     main()

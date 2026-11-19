@@ -74,9 +74,13 @@ OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 160}
 KEEP_ALIVE = "5m"
 CALL_TIMEOUT = 300.0
 # Ollama's memory grows with every picture it is sent (measured: free memory fell from 12 to 4.4 GB over 60 calls).
-RELOAD_BELOW_GB = 5.0     # with less free memory than this, the model is unloaded; the next call loads it again
+# launch-fixes (Nov 19): the run that had this guard was still stopped from outside at about 3.8 GB free, under the
+# old 2 GB floor, and 10 calls at ~0.13 GB each could take it from 5 GB to 3.7 GB before the next unload. So the
+# unload comes earlier, the cool-down is skipped once memory is really low, and the clean stop sits above 4 GB.
+RELOAD_BELOW_GB = 7.0     # with less free memory than this, the model is unloaded; the next call loads it again
 RELOAD_MIN_CALLS = 10     # ...but not more often than every this many calls
-MIN_FREE_RAM_GB = 2.0     # stop (answers so far stay cached) if even that leaves less free memory than this
+URGENT_BELOW_GB = 5.5     # ...unless free memory is under this: then it is unloaded after any call
+MIN_FREE_RAM_GB = 4.5     # stop (answers so far stay cached) if even that leaves less free memory than this
 
 ACTIVITIES = ("driving", "on_foot", "shootout", "chase", "flying", "boat", "swimming", "cutscene", "menu_map",
               "phone", "loading", "other")
@@ -134,6 +138,14 @@ def free_ram_gb():
         return st.avail / 2 ** 30
     except (AttributeError, OSError):
         return None
+
+
+def should_unload(free, since_reload):
+    """The memory guard's rule (index and safety checks): unload the model when free memory is under
+    RELOAD_BELOW_GB and RELOAD_MIN_CALLS calls went by since the last unload, or under URGENT_BELOW_GB after any call."""
+    if free is None or since_reload < 1:
+        return False
+    return free < URGENT_BELOW_GB or (free < RELOAD_BELOW_GB and since_reload >= RELOAD_MIN_CALLS)
 
 
 def off_limits(video):
@@ -392,7 +404,7 @@ def label_frames(video, times, frame_dir, model, info, prompt, cache_dir, every,
         rec = vlm.cache_load(cache_dir, fields)
         if rec is None:
             free = ram()
-            if free is not None and free < RELOAD_BELOW_GB and since_reload >= RELOAD_MIN_CALLS:
+            if should_unload(free, since_reload):
                 unload(model)
                 reloads, since_reload, free = reloads + 1, 0, ram()
                 log(f"  memory was low: unloaded the model at sheet {n}, {free:.1f} GB free now; it loads again")
@@ -820,4 +832,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import heavy                          # one heavy job at a time (launch-fixes)
+    heavy.main_guard("index.py")
     main()

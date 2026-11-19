@@ -49,6 +49,7 @@ import calibrate as cal
 import calibrate_guided as guided
 import clip
 import footage_short
+import heavy
 import index
 import library
 import safety as safety_checks
@@ -297,18 +298,39 @@ def clip_count(duration_s):
     return max(3, math.ceil(duration_s / 360.0))
 
 
+CLIP_DONE = "launch_clip_done.json"      # in a clip.py run folder: written by run_clip when that run finished
+
+
+def finished_clip_run(video, profile, out_root):
+    """launch-fixes: a stopped prepare carries on where it stopped, so a clip.py run this run folder already finished
+    for the same recording and profile is used again instead of running clip.py once more. None if there is none."""
+    runs = sorted((Path(out_root) / Path(video).stem).glob("*/" + CLIP_DONE))         if (Path(out_root) / Path(video).stem).is_dir() else []
+    for done in reversed(runs):
+        data = read_json(done) or {}
+        if data.get("profile") == profile and (done.parent / "scores.json").is_file():
+            return done.parent
+    return None
+
+
 def run_clip(video, profile, out_root, logs_dir):
     """clip.py on one recording, as it is (a subprocess, so its own rules and output stay exactly as always). Returns
-    its run folder, or None if it failed (the log says why)."""
+    its run folder, or None if it failed (the log says why). A run already finished in this folder is used again."""
     out_root, logs_dir = Path(out_root), Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
+    again = finished_clip_run(video, profile, out_root)
+    if again:
+        return again
     before = set((out_root / Path(video).stem).glob("*")) if (out_root / Path(video).stem).is_dir() else set()
     with open(logs_dir / f"clip_{Path(video).stem}.txt", "w", encoding="utf-8", errors="replace") as fh:
         done = subprocess.run([sys.executable, str(HERE / "clip.py"), str(video), "--profile", profile,
                                "--count", str(clip_count(probe_duration(video))), "--out", str(out_root)],
                               stdout=fh, stderr=subprocess.STDOUT, cwd=HERE)
     new = sorted(set((out_root / Path(video).stem).glob("*")) - before)
-    return new[-1] if done.returncode == 0 and new else None
+    if done.returncode == 0 and new:
+        write_json(new[-1] / CLIP_DONE, {"profile": profile, "video": str(video),
+                                         "finished": datetime.now().isoformat(timespec="seconds")})
+        return new[-1]
+    return None
 
 
 def probe_duration(video):
@@ -1297,8 +1319,11 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                           "in the library or taken by an earlier /launch run is skipped, and so is one under "
                           f"{MIN_RECORDING_S:g} s)")
     folder = run_folder(shorts_dir, day, runs, dry_run)
+    resumed = not dry_run and any(Path(r["folder"]) == folder and r.get("status") == "preparing" for r in runs["runs"])
     folder.mkdir(parents=True, exist_ok=True)
-    log(f"Run folder: {folder}")
+    log(f"Run folder: {folder}" + (" (a stopped run: it carries on where it stopped; the model's answers so far and "
+                                   "the finished clip.py runs are used again)" if resumed else ""))
+    log(heavy.ram_line())
     lib_dir, cache_dir = Path(library_dir), None
     if dry_run:
         # Everything the trial makes stays in its folder: profiles, calibration sessions, the library. The model's
@@ -1331,6 +1356,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
          f"{choice['why']}")
 
     # 3. Index, with clip.py running alongside.
+    log(heavy.ram_line() + " (before the index)")
     t = time.perf_counter()
     runner = clip_runner or (lambda v, p: run_clip(v, p, folder / "clip_runs", folder / "logs"))
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -1371,6 +1397,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             log(f"  WARNING: clip.py failed on {stem} (see {folder / 'logs'}); its action score counts as 0.")
 
     # 5. Moments.
+    log(heavy.ram_line() + " (before the safety checks)")
     t = time.perf_counter()
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
     recs, offset = {}, 0.0
@@ -1440,6 +1467,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         if m["mode"] == "nohud":
             m.setdefault("flags", []).append("NO-HUD MODE: no wanted-star counts; narration may not mention stars")
     timing["total"] = round(time.perf_counter() - t_start, 1)
+    log(heavy.ram_line() + " (end of prepare)")
     data = {"version": 1, "created": datetime.now().isoformat(timespec="seconds"), "dry_run": dry_run,
             "game": game, "game_name": GAMES[game]["name"], "folder": str(folder),
             "recordings": [{"name": v.name, "stem": v.stem, "path": str(v), "duration_s": round(durations[v.stem], 2),
@@ -3014,16 +3042,19 @@ def main():
                 out = Path(folder) / "moments" / f"{m['id']}_grid_{at:.1f}.jpg"
                 print(out if grid_frame(m["path"], at, out) else f"ERROR: no frame at {at} s")
         elif args.stage == "prepare":
-            prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input, count=max(1, args.count),
-                    day=args.date, slots=args.star_slots, log=lambda m: print(m, flush=True))
+            with heavy.job("launch.py prepare", log=lambda m: print(m, flush=True)):
+                prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input,
+                        count=max(1, args.count), day=args.date, slots=args.star_slots,
+                        log=lambda m: print(m, flush=True))
         else:
             if (args.hook or args.no_cold_open) and args.short is None:
                 ap.error("--hook and --no-cold-open need --short N")
-            data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True),
-                          engine=args.engine)
+            with heavy.job("launch.py render", log=lambda m: print(m, flush=True)):
+                data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True),
+                              engine=args.engine)
             if any(e["status"] != "READY" for e in data["shorts"]):
                 sys.exit(1)
-    except (LaunchError, index.IndexError_, safety_checks.SafetyError) as e:
+    except (LaunchError, index.IndexError_, safety_checks.SafetyError, heavy.Busy) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
 

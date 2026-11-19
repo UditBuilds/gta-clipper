@@ -180,7 +180,7 @@ def make_sheets(path, a, b, every, out_dir, width=SHEET_W, subtitles=False):
     return [(f0, f1, f) for (f0, f1, _), f in zip(plan, files)]
 
 
-class MemoryError_(Exception):
+class MemoryError_(SafetyError):
     """The safety checks stopped because memory ran out even after unloading the model; the answers so far are
     cached."""
 
@@ -206,7 +206,7 @@ class Checker:
         """Unload the model when free memory is low (the next call loads it again), as index.label_frames does;
         stop with MemoryError_ when even that leaves too little."""
         free = self.ram()
-        if free is not None and free < index.RELOAD_BELOW_GB and self.since_reload >= index.RELOAD_MIN_CALLS:
+        if index.should_unload(free, self.since_reload):
             self.unload(self.model)
             self.reloads, self.since_reload, free = self.reloads + 1, 0, self.ram()
             self.log(f"  memory was low: unloaded the model after {self.calls} safety call(s), "

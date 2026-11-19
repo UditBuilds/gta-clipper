@@ -869,4 +869,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import heavy                          # one heavy job at a time (launch-fixes)
+    heavy.main_guard("topictest.py")
     main()
