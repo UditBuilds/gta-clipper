@@ -835,11 +835,17 @@ def analyse(frames, w, h, frame, read, slots=None, log=lambda m: None):
             stars = find_gta6_stars([f["t"] for f in info if f["hud"]], [f["t"] for f in info if f["hud"] is False],
                                     frame, read, slots, log)
             if stars:
-                yes, no = set(stars["yes"]), set(stars["no"])
-                for f in info:
-                    if f["hud"]:
-                        f["stars"] = True if f["t"] in yes else False if f["t"] in no else None
-                        f["alike"] = 1.0 if f["t"] in yes else 0.0
+                # Every HUD frame gets a guess from the fitted row itself: lit stars counted the GTA 6 way.
+                fit, box = stars["fit"], stars["fit"]["box"]
+                hud = [f for f in info if f["hud"]]
+                with ThreadPoolExecutor(SCAN_WORKERS) as pool:
+                    crops = list(pool.map(lambda f: read(f["t"], box), hud))
+                for f, raw in zip(hud, crops):
+                    if raw:
+                        n = cal.star_scores(box, fit, [raw], "gta6")[0]
+                        f["stars"], f["alike"] = n >= 1, float(n)
+                stars["yes"] = sorted(f["t"] for f in hud if f["stars"])
+                stars["no"] = sorted(f["t"] for f in hud if f["stars"] is False)
         return {"bars": None, "arrow": arrow, "stars": stars, "frames": info}
     if bars:
         for f, r in zip(info, raws):
