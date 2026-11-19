@@ -280,3 +280,136 @@ def claims_text(script, claims, facts):
     for fact in used.values():
         out.append(f"  {fact['id']}  ({fact['status']})  {fact.get('source') or 'no source link'}")
     return "\n".join(out) + "\n"
+
+
+# --- Facts from the owner's own footage (launch-fixes): what the game itself shows or says on screen ---
+#
+# A fact can come from the owner's own recording instead of a web page: "kind": "own footage", with "footage":
+# {"video": recording stem, "from_s", "to_s"} and "picture" (a frame that shows it). Its claim quotes the game's
+# words or describes what the HUD shows, nothing inferred. Claude adds them as unverified; the owner looks at the
+# picture and confirms them with `python facts.py confirm ID ...` (only the owner changes a status).
+
+OWN_FOOTAGE = "own footage"
+FACT_KEY_ORDER = ("id", "kind", "claim", "safe_wording", "also_ok", "status", "time_sensitive", "source", "more_sources",
+                  "footage", "picture", "checked_on", "checked_by", "note")
+
+
+def format_fact(fact):
+    """One fact in facts.json's own hand-written style: one key a line, the first on the "{" line."""
+    keys = [k for k in FACT_KEY_ORDER if k in fact] + [k for k in fact if k not in FACT_KEY_ORDER]
+    parts = [f'"{k}": {json.dumps(fact[k], ensure_ascii=False)}' for k in keys]
+    return "    {" + ",\n     ".join(parts) + "}"
+
+
+def add_facts(new, path=FACTS_FILE):
+    """Append facts to facts.json without touching the rest of the file. A fact whose id is already there is left as
+    it is (never overwritten). Returns the ids added."""
+    path = Path(path)
+    raw = path.read_bytes().decode("utf-8-sig")
+    have = set(load_facts(path))
+    fresh = []
+    for f in new:                                        # the first of two with one id wins, as in the file
+        if f["id"] not in have:
+            have.add(f["id"])
+            fresh.append(f)
+    new = fresh
+    if not new:
+        return []
+    end = raw.rstrip().rfind("]")
+    head = raw[:end].rstrip()
+    text = head + ",\n\n" + ",\n\n".join(format_fact(f) for f in new) + "\n  ]\n}\n"
+    json.loads(text)                                     # never write a file that isn't valid JSON
+    path.write_text(text, encoding="utf-8", newline="\n")
+    load_facts(path)
+    return [f["id"] for f in new]
+
+
+def set_status(ids, status, by, day=None, path=FACTS_FILE):
+    """Change the status of these facts in facts.json, editing only their own lines; checked_on becomes day (today)
+    and checked_by becomes by. Returns the ids changed; FactsError for an id that isn't there."""
+    if status not in STATUSES:
+        raise FactsError(f"status is {', '.join(STATUSES)}")
+    path = Path(path)
+    raw = path.read_bytes().decode("utf-8-sig")
+    facts = load_facts(path)
+    missing = [i for i in ids if i not in facts]
+    if missing:
+        raise FactsError("no such fact: " + ", ".join(missing))
+    day = (day_of(day) or date.today()).isoformat()
+    changed = []
+    for name in ids:
+        start = raw.find('{"id": ' + json.dumps(name, ensure_ascii=False))
+        if start < 0:
+            raise FactsError(f"{name}: can't find its line in {path.name}; change it by hand")
+        end = object_end(raw, start)
+        fact = dict(facts[name], status=status, checked_on=day, checked_by=by)
+        raw = raw[:start] + format_fact(fact).lstrip() + raw[end:]
+        changed.append(name)
+    json.loads(raw)
+    path.write_text(raw, encoding="utf-8", newline="\n")
+    load_facts(path)
+    return changed
+
+
+def object_end(raw, start):
+    """The index just after the JSON object that starts at raw[start] ("{"), skipping braces inside strings."""
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    raise FactsError("facts.json: an object never ends")
+
+
+def own_footage_text(facts):
+    """The own-footage facts, for the owner to look at and confirm."""
+    own = [f for f in facts.values() if f.get("kind") == OWN_FOOTAGE]
+    if not own:
+        return "No own-footage facts yet."
+    out = []
+    for f in own:
+        fo = f.get("footage") or {}
+        out.append(f"[{f['id']}]  {f['status'].upper()}")
+        out.append(f"    on screen: {f['claim']}")
+        out.append(f"    say it as: {f['safe_wording']}")
+        out.append(f"    where:     {fo.get('video')} at {fo.get('from_s', 0):.1f}-{fo.get('to_s', 0):.1f} s")
+        if f.get("picture"):
+            out.append(f"    picture:   {f['picture']}")
+    unconfirmed = [f["id"] for f in own if f["status"] != "confirmed"]
+    if unconfirmed:
+        out += ["", "To confirm the ones that are right (look at each picture first):",
+                "  .\\.venv\\Scripts\\python.exe facts.py confirm " + " ".join(unconfirmed)]
+    return "\n".join(out)
+
+
+def main(argv=None):
+    import argparse
+    p = argparse.ArgumentParser(description="facts.json: list the own-footage facts, or confirm facts (the owner's step)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("own", help="list the facts that come from the owner's own footage")
+    c = sub.add_parser("confirm", help="mark facts confirmed (only the owner does this)")
+    c.add_argument("ids", nargs="+")
+    args = p.parse_args(argv)
+    if args.cmd == "own":
+        print(own_footage_text(load_facts()))
+        return 0
+    changed = set_status(args.ids, "confirmed", "owner")
+    print(f"Confirmed {len(changed)} fact(s): {', '.join(changed)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
