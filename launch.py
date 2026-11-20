@@ -48,6 +48,7 @@ from pathlib import Path
 import calibrate as cal
 import calibrate_guided as guided
 import clip
+import cutplan
 import footage_short
 import heavy
 import index
@@ -1798,7 +1799,7 @@ def render_narrated(short, m, out_dir, facts, today, indexes, log=print, timing=
 # --- Engine v2 (PR 26): the story layer ---
 
 STORY_LENGTH = (25.0, 40.0)              # a narrated story Short's length (the formats' 25-40 s)
-ENGINES = ("v3", "v2", "v1")             # v3 (launch-fixes, default): the Step 0 sample's way, both types;
+ENGINES = ("v4", "v3", "v2", "v1")             # v3 (launch-fixes, default): the Step 0 sample's way, both types;
                                          # v2: PR 26's story layer (narrated only); v1: PR 25's explainer.py render
 # Words that never anchor a line to a 'seen' item, however often the model's own lines use them.
 ANCHOR_STOP = {"with", "from", "into", "that", "this", "there", "their", "they", "then", "than", "what", "when",
@@ -2316,24 +2317,28 @@ def frame_jpeg(clip_file, times, out, width=360, height=640, hide=None):
     return Path(out) if Path(out).is_file() else None
 
 
-def beat_checks(plan, times, out_dir, checker, log=print):
+def beat_checks(plan, times, out_dir, checker, log=print, what="line", max_s=None):
     """Rules 3 and 4 for every beat, on the part of its clip that gets on screen: (problems, rejected shots,
     flags). Measured: too dark or mostly blank (proof.shot_problems on 3 frames, the inset left out). Asked (the
     vision model, frame_v1, 2 frames): too dark, empty, only the character's back, game text at the bottom (under
-    YouTube's title); text on the right edge is only a flag."""
+    YouTube's title); text on the right edge is only a flag. Engine v4 passes its shots as one-beat "lines"
+    (what="shot") with no length limit (max_s=0)."""
     import proof
     problems, rejected, flags = [], [], []
+    max_s = proof.CLIP_S - 0.3 if max_s is None else max_s
     for n, (lp, lengths) in enumerate(zip(plan, times["lines"]), 1):
         for k, (entry, seconds) in enumerate(zip(lp, lengths), 1):
             if seconds <= 0:
                 continue
-            where = f"line {n}, beat {k} ({entry['video'][-6:]} at {hms(entry['from_s'])})"
-            if seconds > proof.CLIP_S - 0.3:
+            where = (f"{what} {n}" + (f", beat {k}" if what == "line" else "")
+                     + f" ({entry['video'][-6:]} at {hms(entry['from_s'])})")
+            if max_s and seconds > max_s:
                 problems.append(f"{where} is on screen {seconds:.1f} s; split it into two beats (a clip is "
                                 f"{proof.CLIP_S:g} s)")
                 continue
             ts = [seconds * f for f in (0.2, 0.5, 0.8)]
             why = []
+            tag = f"l{n}b{k}" if what == "line" else f"s{n}"
             ins = entry.get("inset")
             sk = None
             if ins:
@@ -2351,7 +2356,7 @@ def beat_checks(plan, times, out_dir, checker, log=print):
                 why += found[-1]
             if checker is not None:
                 jpg = frame_jpeg(entry["clip"], [seconds * 0.3, seconds * 0.7], Path(out_dir) / "checks" /
-                                 f"l{n}b{k}.jpg", hide=proof.inset_screen_rect() if ins else None)
+                                 f"{tag}.jpg", hide=proof.inset_screen_rect() if ins else None)
                 answer, error = checker.frame(jpg, {"video": entry["video"], "clip": Path(entry["clip"]).name,
                                                     "seconds": round(seconds, 2), "use": "beat"}) if jpg else (None,
                                                                                                              "no frame")
@@ -2608,6 +2613,165 @@ def render_v3(short, m, out_dir, facts, today, indexes, used=(), log=print, timi
             "shown": [list(x) for x in used_spans], "engine": "v3", "game_sound": sound, "checks": checks}
 
 
+def v4_insets(plan_shots):
+    """(insets, problems): each shot's HUD close-up as it will be made, or None. A shot's own "inset": {"zoom":
+    "stars" | "tip" | "minimap" | [x, y, w, h], "box": "stars" | "icons", "start": s into the shot, "length": 0.5-2 s}."""
+    import proof
+    out, problems = [], []
+    for s in plan_shots:
+        ins = s.get("inset")
+        if ins is None:
+            out.append(None)
+            continue
+        where = f"shot {s['n']}: the inset"
+        start = ins.get("start", proof.INSET_START_S) if isinstance(ins, dict) else None
+        length = ins.get("length", proof.INSET_LEN_S) if isinstance(ins, dict) else None
+        seconds = s["frames"] / cutplan.FPS
+        if not (cutplan.number(start) and cutplan.number(length)) or start < 0 or start > seconds - 0.5 \
+                or not 0.5 <= length <= proof.INSET_MAX_S:
+            problems.append(f'{where} is {{"zoom": "stars", "box": "icons", "start": s into the shot, "length": '
+                            f'0.5-{proof.INSET_MAX_S:g} s}}, inside the shot')
+            out.append(None)
+            continue
+        t0, t1 = float(start), min(seconds, float(start) + float(length))
+        box = ins.get("box")
+        out.append({"zoom": ins.get("zoom", "stars"), "box": box, "from_s": round(s["from"] + t0, 3), "t0": t0, "t1": t1,
+                    "box_name": box if isinstance(box, str) else None})
+    return out, problems
+
+
+def v4_voice(lines, speed):
+    """Every line spoken on its own by am_puck (assemble.speak)."""
+    import assemble
+    import explainer
+    return assemble.speak(explainer.load_kokoro(), lines, "am_puck", speed)
+
+
+def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, checker=None, hud6=None, synth=None,
+              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None):
+    """One Short with engine v4 (editor-v3, Nov 20): payoff first. Before anything is made: the Short's one payoff
+    (the interest gate: none, no Short), its shots as spans of the recording (the payoff whole inside one, no second
+    twice, 15 s or more), an action payoff on the loudest moment (the hit), a hook about the HUD shown from frame 0.
+    Then the first frame (blurry or blocked moves the start later), the voice and each line placed into the picture
+    (ending before its cut; no voice over an action payoff; every cut on a sentence end or an event), the truth rules,
+    clean and unused footage. Then the shots (one fixed 9:16 window, steadied only where that measures calmer, HUD
+    close-ups on top), every shot bright and full, the Short put together (assemble.py), every caption against its
+    frame. The makers are replaced in tests."""
+    import explainer
+    out_dir = Path(out_dir)
+    kind = m["type"]
+    lines = short.get("lines") or []
+
+    def steady():
+        import steady as st
+        return st
+    loudest = loudest or (lambda v, a, b: steady().loudest(v, a, b))
+    cuts = cuts or (lambda v, a, b: steady().scene_cuts(v, a, b))
+    clear = clear or (lambda v, a, latest, focus: steady().clear_start(v, a, latest, focus=focus))
+    make_shot = make_shot or (lambda v, s, out, grade, log: steady().make_shot(v, s["from"], s["frames"], out,
+                                                                                focus=s["focus"], grade=grade, log=log))
+    add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
+    hud_words = set(HUD_NOUNS)
+    w0, w1 = m["window"]
+    loud = loudest(m["path"], w0, w1) if kind == "action" else None
+    plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
+    if problems:
+        raise RenderProblem("\n  ".join(problems))
+
+    s1, pay = plan["shots"][0], plan["payoff"]
+    latest = s1["to"] - cutplan.MIN_SHOT_S
+    if s1["from"] <= pay["from"] <= s1["to"]:
+        latest = min(latest, pay["from"] - cutplan.SETUP_S)
+    start, why, tried = clear(m["path"], s1["from"], max(s1["from"], latest), s1["focus"])
+    if why:
+        raise RenderProblem("\n  ".join(why))
+    first_note = None
+    if start > s1["from"] + 1e-6:
+        first_note = (f"shot 1 starts at {start:.2f} s, not {s1['from']:.2f} s: the frame there was not clear ("
+                      + "; ".join(tried[0]["why"]) + ")")
+        log("  " + first_note)
+        short = dict(short, shots=[dict(short["shots"][0], **{"from": start})] + list(short["shots"][1:]))
+        plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
+        if problems:
+            raise RenderProblem("\n  ".join(problems))
+
+    speed = short.get("speed", cutplan.SPEED)
+    if not cutplan.number(speed) or not 0.8 <= speed <= 1.4:
+        raise RenderProblem("speed is the voice's speed, 0.8-1.4 (the owner's is 1.2)")
+    spoken = (synth or v4_voice)(lines, speed)
+    cams = sorted({c for s in plan["shots"] for c in cuts(m["path"], s["from"], s["to"])})
+    plan, problems, more = cutplan.plan(short, m, [sp["seconds"] for sp in spoken], loud, cams, hud_words)
+    flags += more
+    spans = cutplan.line_spans(plan["placed"], len(lines))
+    more, tflags, claims = truth.check_short(short, m, facts, today, spans, engine="v4")
+    problems += more
+    flags += tflags
+    shown = [{"video": m["path"], "start_s": s["from"], "end_s": s["to"], "line": s["n"], "what": "footage"}
+             for s in plan["shots"]]
+    problems += [p.replace("line ", "shot ", 1) for p in footage_short.unclean(shown, indexes)]
+    for s in plan["shots"]:
+        if any(u == m["video"] and s["from"] < e and st < s["to"] for u, st, e in used):
+            problems.append(f"shot {s['n']}: {hms(s['from'])}-{hms(s['to'])} of {m['video'][-6:]} was shown by an "
+                            "earlier Short")
+    insets, more = v4_insets(plan["shots"])
+    problems += more
+    if problems:
+        raise RenderProblem("\n  ".join(dict.fromkeys(problems)))
+    if checker is None:
+        raise RenderProblem("the vision model isn't running, so the shot and caption checks can't run: open Ollama "
+                            "and render again")
+
+    prof = clip.load_profile(m["profile"]) if m.get("profile") else clip.load_profile("gta6")
+    grade = explainer.graded(True)
+    (out_dir / "shots").mkdir(parents=True, exist_ok=True)
+    report = []
+    for s, ins in zip(plan["shots"], insets):
+        path = out_dir / "shots" / f"shot{s['n']}.mp4"
+        rep = make_shot(m["path"], s, path, grade, log)
+        if ins:
+            made = path.with_name(f"shot{s['n']}_inset.mp4")
+            add_inset(path, m["path"], ins, made, prof)
+            path = made
+        s["clip"] = str(path)
+        report.append({"shot": s["n"], "from_s": s["from"], "to_s": s["to"], **rep})
+        steadied = sum(1 for p in rep.get("pieces", []) if p.get("stabilised"))
+        log(f"  shot {s['n']} {hms(s['from'])}-{hms(s['to'])} ({s['frames'] / cutplan.FPS:.1f} s): "
+            f"{len(rep.get('pieces', []))} piece(s), {steadied} steadied")
+    cplan = [[{"clip": s["clip"], "video": m["video"], "from_s": s["from"], "inset": ins}]
+             for s, ins in zip(plan["shots"], insets)]
+    times = {"lines": [[s["frames"] / cutplan.FPS] for s in plan["shots"]]}
+    more, rejected, bflags = beat_checks(cplan, times, out_dir, checker, log, what="shot", max_s=0)
+    flags += bflags
+    pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
+    checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": 1.0,
+              "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "steady": report,
+              "lines": plan["placed"], "camera_cuts": cams}
+    if more:
+        raise V3Failed("\n  ".join(dict.fromkeys(more)), checks)
+
+    import assemble
+    hooks, star = short.get("hooks") or [], short.get("star")
+    hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
+    card = short.get("open_card") or (open_card_text(hook) if hook else None)
+    run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
+                                        pay_at if kind == "action" else None, "auto",
+                                        footage_short.make_short.slug_of(short.get("title") or "short"), speed,
+                                        "am_puck", log)
+    checks["caption_checks"] = caption_checks(run_log, cplan, lines, checker, v3_hud(cplan, m, prof, hud6), out_dir, log)
+    (out_dir / "checks.json").write_text(json.dumps(checks, indent=2, ensure_ascii=False), encoding="utf-8")
+    bad = [c for c in checks["caption_checks"] if not c["ok"]]
+    if bad:
+        raise V3Failed("\n  ".join(f"caption \"{c['word']}\" at {c['t']:.1f} s (line {c['line']}): {c['why']}"
+                                   for c in bad), checks)
+    (out_dir / "claims.txt").write_text(truth.claims_text(short, m, claims, facts), encoding="utf-8")
+    if first_note:
+        flags.append(f"FIRST FRAME: {first_note}")
+    return {"length_s": round((run_log.get("durations") or {}).get("video_s", plan["total_s"]), 2), "flags": flags,
+            "line_spans": spans, "music": Path((run_log.get("music") or {}).get("file") or "").name or None,
+            "shown": [[m["video"], s["from"], s["to"]] for s in plan["shots"]], "engine": "v4", "game_sound": True,
+            "checks": checks, "payoff": checks["payoff"]}
+
+
 def explainer_error():
     import explainer
     return explainer.ScriptError
@@ -2619,8 +2783,9 @@ def short_folder(folder, n, title):
 
 def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
                checker=None, timing=None, narrated_render=None, action_render=None, engine="v3", synth=None,
-               v2_render=None, v3_render=None, used=None, hud6=None):
-    """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems)."""
+               v2_render=None, v3_render=None, used=None, hud6=None, v4_parts=None):
+    """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems).
+    v4_parts: engine v4's makers, replaced in tests (render_v4's keyword arguments)."""
     m = moment_for(cand, short)
     n = m["short"]
     hooks_list = short.get("hooks") or []
@@ -2639,7 +2804,7 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
         entry["window"] = m["window"]
     more, flags, _ = truth.check_short(short, m, facts, today, engine=engine)
     problems += more
-    peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" and engine != "v3"
+    peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" and engine not in ("v3", "v4")
                            else (None, []))
     problems += peak_problems
     if problems:
@@ -2654,7 +2819,11 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
             if gore:
                 raise RenderProblem("start_s: the new first 7 s show blood or swearing ("
                                     + "; ".join(safety_checks.fmt(gore)) + "); pick another start")
-        if engine == "v3":
+        if engine == "v4":
+            done = render_v4(short, m, out, facts, today, indexes, used or (), log, checker, hud6, **(v4_parts or {}))
+            flags += done.pop("flags", [])
+            peak = None
+        elif engine == "v3":
             done = render_v3(short, m, out, facts, today, indexes, used or (), log, timing, v3_render, checker, hud6)
             flags += done.pop("flags", [])
             peak = None
@@ -2744,7 +2913,7 @@ def kept_results(old, written):
 
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
            facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
-           engine="v3", synth=None, v2_render=None, v3_render=None):
+           engine="v3", synth=None, v2_render=None, v3_render=None, v4_parts=None):
     """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
     Returns the render.json data; review.html is written next to it."""
     import facts as facts_file
@@ -2775,7 +2944,7 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
                                                    if s2.get("name") != mine_name for sp in s2.get("spans", [])]
             entry = render_one(short, cand, folder, facts, today, indexes, hook_choice if only else None,
                                no_cold_open and only is not None, log, checker, timing, narrated_render, action_render,
-                               engine, synth, v2_render, v3_render, used)
+                               engine, synth, v2_render, v3_render, used, v4_parts=v4_parts)
         except RenderProblem as e:
             entry = {"short": short.get("short"), "status": "FAILED", "problems": [str(e)], "flags": []}
         entry["commands"] = commands(folder, entry["short"])
@@ -2914,6 +3083,10 @@ def write_review(folder, cand, written, data):
         if short.get("format"):
             story = (f'<b>{esc(short["format"])}</b> ({esc({**truth.FORMATS, **truth.V3_FORMATS}.get(short["format"], ""))}): '
                      f'{esc(short.get("format_why"))}')
+            if isinstance(entry.get("payoff"), dict):
+                pay = entry["payoff"]
+                story += (f' &middot; <b>payoff</b>: {esc(pay.get("what"))} ({library.hms(pay.get("from", 0))}-'
+                          f'{library.hms(pay.get("to", 0))}, {pay.get("at_s", 0):.1f} s into the Short)')
             if entry.get("payoff_at") is not None:
                 story += f' &middot; payoff at {entry["payoff_at"]:.0%}'
             if entry.get("pops") is not None:
@@ -3073,8 +3246,10 @@ def main():
     f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
     f.add_argument("--short", type=int, required=True, help="the pick's number")
     f.add_argument("--at", type=float, nargs="+", required=True, help="recording time(s) in seconds")
-    r.add_argument("--engine", choices=ENGINES, default="v3",
-                   help="v3 (default): every Short the Step 0 sample's way (hook card, voice, captions, close-ups); "
+    r.add_argument("--engine", choices=ENGINES, default="v4",
+                   help="v4 (default, editor-v3): payoff first, shots as spans, no second twice, fixed and measured-"
+                        "steady picture, the voice placed into the picture; "
+                        "v3: every Short the Step 0 sample's way (hook card, voice, captions, close-ups); "
                         "v2: PR 26's story layer (narrated only); v1: PR 25's explainer.py render")
     args = ap.parse_args()
     try:
