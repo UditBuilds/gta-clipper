@@ -263,14 +263,39 @@ def hook_problems(short, shots, hud_words):
     return [f"the hook names {named[0]!r}: show it from frame 0 (shot 1 starts with an inset, \"start\": 0)"]
 
 
+HUD_KINDS = ("stars", "heat", "star_look")  # HUD readings: measured twice a second, so their edges are real moments
+
+
 def events_of(moment, payoff, camera_cuts=()):
-    """Footage events a cut may land on: every evidence item's times, the game's camera cuts, the payoff's edges."""
+    """Footage events a cut may land on: the game's camera cuts, the HUD readings' changes, an evidence item's own
+    moment (at_s), the payoff's edges. Not the edges of vision-model sheets, activity segments or event windows: those
+    sit on a 6 s sampling grid, and a cut on them would be a cut on a timer. Not items of another recording (a
+    compare's GTA 5 side)."""
     out = list(camera_cuts)
     for e in moment.get("evidence") or []:
-        out += [e[k] for k in ("from_s", "to_s", "at_s") if number(e.get(k))]
+        if e.get("kind") == "compare" or str(e.get("id", "")).startswith("C"):
+            continue
+        if number(e.get("at_s")):
+            out.append(e["at_s"])
+        if e.get("kind") in HUD_KINDS:
+            out += [e[k] for k in ("from_s", "to_s") if number(e.get(k))]
     if payoff:
         out += [payoff["from"], payoff["to"]]
     return sorted(set(round(float(x), 3) for x in out))
+
+
+def cut_reasons(shots, placed, events=()):
+    """Per cut, why it passes ("sentence end", "event at s") or None: for the report."""
+    out = []
+    for a, b in zip(shots, shots[1:]):
+        cut = a["end"]
+        ends = [p["end"] for p in placed if p["end"] <= cut + 1e-6]
+        if ends and cut - max(ends) <= SENTENCE_CUT_S:
+            out.append((round(cut, 2), f"sentence end {cut - max(ends):.2f} s before"))
+            continue
+        ev = [e for e in events if abs(e - a["to"]) <= EVENT_SLACK_S or abs(e - b["from"]) <= EVENT_SLACK_S]
+        out.append((round(cut, 2), f"event at {ev[0]:.2f} s" if ev else None))
+    return out
 
 
 def line_spans(placed, count):

@@ -932,5 +932,5 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 22 checks, about 40 s
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 24 checks, about 40 s
 ```

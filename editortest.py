@@ -273,6 +273,25 @@ def a_cut_lands_on_a_sentence_end_or_an_event():
 
 
 @check
+def a_cut_on_the_6_s_sampling_grid_is_not_an_event():
+    """the vision model's sheets, activity segments and event windows sit on a 6 s grid: a cut 3 s after the last
+    line that lands on a sheet edge is a cut on a timer and fails; a HUD reading's change or a camera cut there passes;
+    another recording's compare item never counts"""
+    m = {"evidence": [{"id": "E1", "kind": "seen", "value": "x", "from_s": 54.0, "to_s": 60.0},
+                      {"id": "E2", "kind": "activity", "value": "driving", "from_s": 48.0, "to_s": 60.0},
+                      {"id": "E3", "kind": "event", "value": "crash", "from_s": 54.0, "to_s": 60.0},
+                      {"id": "C1", "kind": "compare", "value": "GTA 5: chase", "from_s": 59.9, "to_s": 70.0}]}
+    shots = [{"n": 1, "from": 50.0, "to": 60.0, "start": 0.0, "end": 10.0},
+             {"n": 2, "from": 66.0, "to": 70.0, "start": 10.0, "end": 14.0}]
+    placed = [{"line": 1, "start": 1.0, "end": 7.0}]
+    timer = cutplan.cut_problems(shots, placed, cutplan.events_of(m, None))
+    hud = dict(m, evidence=m["evidence"] + [{"id": "E4", "kind": "stars", "value": "2", "from_s": 60.1, "to_s": 64.0}])
+    on_hud = cutplan.cut_problems(shots, placed, cutplan.events_of(hud, None))
+    on_camera = cutplan.cut_problems(shots, placed, cutplan.events_of(m, None, camera_cuts=[59.8]))
+    return has(timer, "neither a sentence end nor an event") and not on_hud and not on_camera
+
+
+@check
 def no_voice_over_an_action_payoff():
     """in an action Short the game's own sound plays the payoff: a line over it is refused"""
     s = short(lines=[{"say": "Watch this.", "claim": "hype", "at": 14.3},

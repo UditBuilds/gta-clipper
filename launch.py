@@ -2674,7 +2674,13 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
-    loud = loudest(m["path"], w0, w1) if kind == "action" else None
+    pay0 = short.get("payoff") if isinstance(short.get("payoff"), dict) else {}
+    holder = next((x for x in short.get("shots") or [] if isinstance(x, dict) and cutplan.number(x.get("from"))
+                   and cutplan.number(x.get("to")) and cutplan.number(pay0.get("from"))
+                   and cutplan.number(pay0.get("to")) and x["from"] <= pay0["from"] and pay0["to"] <= x["to"]), None)
+    # the loudest moment of the payoff's own shot (a horn or gunshots elsewhere in the window must not fail it)
+    loud = (loudest(m["path"], *((holder["from"], holder["to"]) if holder else (w0, w1)))
+            if kind == "action" else None)
     plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
     if problems:
         raise RenderProblem("\n  ".join(problems))
@@ -2748,7 +2754,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
     checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": 1.0,
               "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "steady": report,
-              "lines": plan["placed"], "camera_cuts": cams}
+              "lines": plan["placed"], "camera_cuts": cams,
+              "cuts": cutplan.cut_reasons(plan["shots"], plan["placed"], cutplan.events_of(m, pay, cams))}
     if more:
         raise V3Failed("\n  ".join(dict.fromkeys(more)), checks)
 
