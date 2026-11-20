@@ -39,7 +39,7 @@ are picked. Everything is in `<run folder>\candidates.json`.
 ## 2. Look at each pick
 
 For every entry of `picks`:
-- `type`: `narrated` (a topic explainer, about 25-39 s) or `action` (16-32 s). Decided in code; keep it.
+- `type`: `narrated` (a topic explainer, 15-39 s) or `action` (15-25 s). Decided in code; keep it.
 - `topic` (a topic candidate): what the footage proves (`id`, `why`, `at_s`) and the facts.json ids it may use
   (`facts`). `format_options`: the formats this moment can teach (T1 a topic, F1-F4 as before); an action pick is A1.
 - `window`, `anchor_s`, `evidence` (E1, E2 ...: what the footage shows, when, and where that comes from: the HUD's stars,
@@ -50,78 +50,70 @@ For every entry of `picks`:
 - `C:\AI\gta\facts\own` and `.\.venv\Scripts\python.exe facts.py own`: facts from the owner's own footage (the game's
   own words on screen). Only **confirmed** ones may be used.
 
-## 3. Write `<run folder>\shorts.json`
+## 3. Write `<run folder>\shorts.json` (engine v4: payoff first)
 
-One entry per pick you make (at least 3 when 3 or more picks can keep the rules). Like the sample:
+The owner's editing rules (Nov 20, after the part3 Shorts: a skipped crash, repeated scenes, a wobbling picture, a
+blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cutplan.py, truth.py, steady.py):
+
+1. **Payoff first.** Find the one moment the Short is for and write it down first: `"payoff": {"from": s, "to": s,
+   "what": "what happens, in plain words"}` (0.6-8 s of the recording: the whole hit, the whole change). It plays
+   **whole, at real speed, inside one shot**: never cut, never skipped. An action payoff must hold the loudest
+   moment of the footage (the hit itself; the game's camera switch often comes a second later). **No clear payoff,
+   no Short**: leave the pick out and say why. The report names every Short's payoff.
+2. **Shots are spans, picked before the words**: `"shots": [{"from": s, "to": s}, ...]`, in time order, each at
+   least 0.8 s, within 60 s of the pick's window: the setup (at least 1.5 s before the payoff), the payoff's shot,
+   then the result. **No second twice**: not enough unique footage makes a shorter Short (**15 s at least**; action
+   15-25 s, narrated 15-39 s), never a repeat or a loop. End each shot where something happens or right after a line.
+   One fixed 9:16 window per shot (`"focus"` 0-1 across the picture, 0.5 by default); nothing pans or zooms; the
+   picture is steadied where that measures calmer.
+3. **The first frame is clear**: the subject visible, nothing blurry or in front of it (a frame that isn't moves the
+   start later by itself, up to 1.5 s, or fails). A hook that names the HUD (stars, icons) opens on its close-up:
+   `"inset": {"zoom": "stars", "box": "icons", "start": 0.0, "length": 1.8}` on shot 1.
+4. **The voice goes into the picture.** Each line has `"at"`: the recording second where it starts. It must end
+   before its shot's cut (code says by how much it runs over). In an action Short no line talks over the payoff:
+   say "Wait for it." before it and the reaction after it, and let the game's sound play the hit.
+5. **Punchy, to the viewer, like a gamer friend**: lines of 5-9 words (never more than 9 a sentence), "you", one point
+   then the payoff. No play-by-play ("Then the SUV pulls up ..."). `"claim"` is `on_screen` (cite `evidence` on
+   screen while it is said, and `teaches`), `fact` (`facts` from facts.json), `ask` (a question with `answered_by`)
+   or **`hype`**: at most 5 words that claim nothing ("Watch this.", "Wait for it."). Anything a line names (a truck,
+   the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (`"speed"` changes it).
+6. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
+   "He's here"). The swear check transcribes the finished Short; if its words differ from yours, reword.
 
 ```json
 {"shorts": [
-  {"short": 1, "moment": "M3", "type": "narrated", "format": "T1",
-   "format_why": "the HUD shows the stars turn to outlines once the icons are gone: the footage proves the claim",
-   "hooks": ["Can cops forget you?", "Make GTA 6 cops forget you", "Watch these icons vanish"], "star": 0,
-   "title": "How to make GTA 6 cops FORGET you", "description": "Sentence one. Sentence two.",
+  {"short": 4, "moment": "M21", "type": "action", "format": "A1",
+   "format_why": "a black SUV bounces off a truck into the player's lane: setup, the hit, the reaction",
+   "payoff": {"from": 268.6, "to": 270.2, "what": "the black SUV hits the truck and you plough straight through it"},
+   "hooks": ["This lane closed FAST", "Watch the black SUV", "GTA 6 traffic is brutal"], "star": 1,
+   "title": "Watch the black SUV in GTA 6", "description": "Sentence one. Sentence two.",
    "hashtags": ["#GTA6", "#GTAVI", "#Shorts", "#GTA6Gameplay"],
+   "shots": [{"from": 265.0, "to": 271.6}, {"from": 278.4, "to": 280.4}, {"from": 282.0, "to": 287.6},
+             {"from": 288.0, "to": 291.6}],
    "lines": [
-     {"say": "Can you make the cops in GTA 6 forget you?", "claim": "ask", "evidence": [], "answered_by": 6,
-      "beats": [{"beat": "full", "at": 98.0}]},
-     {"say": "Look closer: small icons under the stars reportedly show what police know about you.",
-      "claim": "fact", "facts": ["wanted-heat-icons"], "evidence": ["E4"], "teaches": "the icons are what police know",
-      "beats": [{"beat": "full", "at": 100.0, "inset": {"zoom": "stars", "box": "icons"}},
-                {"beat": "full", "at": 12.0, "inset": {"zoom": "tip", "length": 2.0}}]},
-     {"say": "After a respray, the car icon is gone.", "claim": "on_screen", "evidence": ["E9"],
-      "teaches": "a respray clears the car icon",
-      "beats": [{"beat": "full", "at": 124.0},
-                {"beat": "full", "at": 149.5, "inset": {"zoom": "stars", "box": "icons"}}]},
-     {"...": "..."},
-     {"say": "Then the heat clears, and the stars disappear.", "claim": "on_screen", "evidence": ["E14"],
-      "teaches": "the stars go once nothing is known", "payoff": true,
-      "beats": [{"beat": "full", "at": 391.5, "inset": {"zoom": "stars"}}, {"beat": "banner", "at": 393.0, "text": "Heat cleared"}]},
-     {"say": "So next time you're wanted, before you run, ask yourself", "claim": "on_screen", "evidence": ["E2"],
-      "teaches": "the loop back to the question", "loop": true, "beats": [{"beat": "full", "at": 145.0}]}]}
+     {"say": "Watch this, you're flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
+      "teaches": "the setup: a fast weave through traffic", "at": 265.25},
+     {"say": "Wait for it.", "claim": "hype", "at": 267.45},
+     {"say": "And the truck didn't even notice.", "claim": "on_screen", "evidence": ["E3"],
+      "teaches": "the truck keeps driving after the hit", "at": 270.15},
+     {"...": "..."}]}
 ]}
 ```
 
 **Hooks.** 3 options in English, 3-6 words, readable in one second, true to the footage, no emoji; `star` is the best
-one. The starred hook is shown as the **opening card from frame 0** (`open_card` sets it by hand, `"LINE 1|LINE 2"`);
-line 1 is the spoken hook (a question or a claim the Short pays off).
+one, shown as the opening card from frame 0 (`open_card` sets it by hand, `"LINE 1|LINE 2"`). Whatever it tells the
+viewer to watch must be easy to find in the picture (no ring is drawn for you): pick footage where it is clear.
 
-**Lines** (code refuses what breaks these; see truth.py):
-1. **Every line teaches or asks; no play-by-play** ("I drive ...", "Then I ..."). Each is `"claim": "on_screen"`
-   (cite `evidence` shown while it is said, and `teaches`), `"fact"` (`facts` from facts.json: `confirmed`, or
-   `reported` in its `safe_wording`; and `teaches`) or `"ask"` (a question with `answered_by`).
-2. **Words match the picture**: stars, police, a crash, icons ... are named only with evidence that shows them, on
-   screen while the line is said. A label in `dropped_labels` is not on screen: never name it.
-3. **One moment, in time order**: beats go forward through the recording (a compare may show an earlier "before").
-4. **Exactly one payoff** (`"payoff": true`), 45-85 % into the Short; the **last line** has `"loop": true`, no full
-   stop, and runs into line 1. No spoken call to action (a silent subscribe pill ends every Short).
-5. **No story spoilers, no names but Jason and Lucia, no dialogue quotes.** Mission footage needs `"mission_ok"`.
-6. **F2:** never say why something happened unless the change and the result are both cited, in that order.
+**Still true:** words match the picture (a label in `dropped_labels` is not on screen: never name it); one moment, in
+time order; no story spoilers, no names but Jason and Lucia, no dialogue quotes; mission footage needs
+`"mission_ok"`; F2 never says why something happened unless the change and the result are both cited, in order; no
+spoken call to action (a silent subscribe pill ends every Short).
 
-**Beats** (engine v3, the owner's visual rules of Nov 19; on every line, 1-3 each, a new picture every 1.5-2.5 s):
-- **Full screen always.** `{"beat": "full", "at": <recording s>}`: the gameplay on the whole screen, a 9:16 window
-  that follows the action (`"focus"` 0-1 holds it at one place across the picture). `card` and `compare` are
-  refused: no small box over a blurred background.
-- **HUD proof is an inset on a full beat**, for at most 2 s: `{"beat": "full", "at": s, "inset": {"zoom": "stars" |
-  "tip" | "minimap" | [x, y, w, h], "box": "icons" | "stars", "start": 0.2, "length": 1.8}}`. It sits inside YouTube's
-  safe area, off the captions; the zoom is capped at 2x so 1080p stays sharp (a smaller detail gets a wider crop and a
-  red box). A line that names the stars or icons without an inset gets one added, timed to those words.
-- `{"beat": "banner", "at": s, "text": "1-3 words"}`: a pill over full-screen footage.
-- **B-roll** between proof beats: `"video": "<recording stem>"` takes a bright, clearly GTA 6 shot (streets, traffic,
-  cars, people, skyline, action) from another recording. A beat that is too dark, mostly blank, only the character's
-  back, or has game text under YouTube's title area is rejected after the render.
-- **Caption = picture:** after the render every caption word that names the HUD, a count, "gone", a star's look or a
-  thing to see is checked against its frame; one mismatch fails the Short ("GONE" only once the icon really is gone).
-- `"at"` is a second of the pick's own recording within 60 s of its window. Every beat's footage must be clean in the
-  index and not shown by an earlier Short (code checks). A line with no `beats` gets full-screen footage at its
-  evidence, with the star inset for star/heat items.
-- **Action Shorts** (format A1): 3-5 short lines, about 50-80 words: the setup (what is happening), the moment (a
-  `full` beat at the impact, the game's sound is in), the payoff (an inset or a banner on the result), the loop.
+**Title** 32-46 characters with 1-2 words in ALL CAPS (Title Case is fine), description exactly 2 sentences, 3-5
+hashtags (`#GTA6`, `#GTAVI`, `#Shorts`; a `--game gta5` trial uses `#GTA5`).
 
-**Length:** narrated 25-39 s (about 95-115 words at speed 1.0), action 16-32 s. Title 32-46 characters with 1-2
-words in ALL CAPS (Title Case is fine), description exactly 2 sentences, 3-5 hashtags (`#GTA6`, `#GTAVI`,
-`#Shorts`; a `--game gta5` trial uses `#GTA5`).
-
-Leave a pick out of `shorts.json` if it can't keep these rules; say why in the report.
+Leave a pick out of `shorts.json` if it can't keep these rules; say why in the report. (`--engine v3` renders the old
+beat format, with its loop ending, for comparison only.)
 
 ## 4. Render
 
@@ -129,9 +121,11 @@ Leave a pick out of `shorts.json` if it can't keep these rules; say why in the r
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
 ```
 
-It checks shorts.json (truth, story and timing rules), cuts the close-ups, renders every Short (engine v3: the hook
-card, am_puck, yellow captions, music and sound effects, the subscribe pill and the loop; true peak under -1.0 dBTP),
-logs the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short
+It checks shorts.json (the payoff, the shots, truth and timing rules), finds a clear first frame, makes every shot
+(one fixed window, steadied where that measures calmer, HUD close-ups), places the voice, renders every Short (engine
+v4: the hook card, am_puck at 1.2, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
+payoff, the subscribe pill; no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
+the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short
 and render it alone with `--short N`. At most 3 tries per Short; after that leave it FAILED and go on.
 
 ## 5. Look at what you made
@@ -142,15 +136,16 @@ For each READY Short make a sheet and look at it with the Read tool, then at 3-4
 ffmpeg -v error -y -i "<short folder>\short.mp4" -vf "fps=2,scale=216:-2,tile=10x8" -frames:v 1 "<short folder>\check.jpg"
 ```
 
-Ask: would a stranger understand what this shows and why it matters? Is the hook readable at frame 0, does every
-close-up show what its line names, is the payoff visible? No phone, menu, map, loading screen, gore or names on
-screen. Fix what a re-render can fix; otherwise say so in the report.
+Ask: would a stranger understand what this shows and why it matters? Is the hook readable at frame 0 and is what it
+names on screen? Does the payoff play whole, with nothing repeated? Does every close-up show what its line names? Is
+the picture steady (no wobble)? No phone, menu, map, loading screen, gore or names on screen. Fix what a re-render
+can fix; otherwise say so in the report.
 
 ## 6. Report, in plain English
 
 1. HUD first: if `candidates.json` `hud.mode` isn't `hud`, say so at the very top, with why.
 2. The review page path: `<run folder>\review.html`.
-3. For each Short: READY or FAILED, the type and format, the 3 hooks with the starred one marked, what it teaches or
-   shows, the length, the title, its flags.
+3. For each Short: READY or FAILED, the type and format, **its payoff (what, and where in the Short)**, the 3 hooks
+   with the starred one marked, what it teaches or shows, the length, the title, its flags.
 4. Candidates left out and why (`candidates.json` `rejected`, and picks you didn't write).
 5. How long prepare and render took. Ask nothing.
