@@ -1,0 +1,28 @@
+{
+ "about": [
+  "Topics already posted. /launch prepare and repick (launch.py load_posted) counts it against a moment that repeats one: -2 points, -4 for a \"strong\" one (the owner's worst repeats). The dearest match counts, not a sum.",
+  "A topic matches a moment when any of its rules holds. A rule holds when all of its keys hold. Each key is a list (any of it): category (the moment's category, such as \"star rise\" or \"crash\"), topic (a topic candidate's id, such as \"wanted-system\"), term (a score term it has, such as \"crash\"), profile (gta6 or gta5), words (a word or phrase in what the frames say), all_words (all of these words).",
+  "added: when a topic joined the list (ISO time). A re-pick of an older run leaves out topics added after that run. The first list, from the owner on 2026-11-20, has no added time.",
+  "Only the owner adds or removes topics."
+ ],
+ "topics": [
+  {"name": "GTA 5 biker clip", "rules": [{"profile": ["gta5"], "words": ["biker", "motorbike", "motorcycle"]}]},
+  {"name": "download on Tuesday", "rules": [{"words": ["pre-load", "preload", "download"]}]},
+  {"name": "unlock time", "rules": [{"words": ["unlock time", "unlocks at", "launch time"]}]},
+  {"name": "regions", "rules": [{"words": ["six regions", "regions of leonida"]}]},
+  {"name": "wanted stars", "strong": true, "aliases": ["stars appear"],
+   "rules": [{"category": ["star rise"]}, {"topic": ["wanted-system", "star-looks"]}, {"term": ["star_rise"]}]},
+  {"name": "NZ Xbox trick", "rules": [{"words": ["new zealand"]}]},
+  {"name": "launch checklist", "rules": [{"words": ["checklist"]}]},
+  {"name": "last ride in GTA 5", "rules": [{"profile": ["gta5"]}]},
+  {"name": "cops forget you", "rules": [{"topic": ["cops-outfit-car-change", "heat-icons"]},
+                                        {"words": ["lose the cops", "lost the cops", "cops forget"]}]},
+  {"name": "black SUV crash on the bridge", "rules": [{"term": ["crash"], "all_words": ["suv", "bridge"]}]},
+  {"name": "crime reported", "strong": true,
+   "rules": [{"words": ["crime reported", "witness"]}, {"topic": ["wanted-system"]}, {"category": ["star rise"]}]},
+  {"name": "motorbike crash (Short 6)", "added": "2026-11-20T23:03:42",
+   "rules": [{"term": ["crash"], "words": ["motorbike", "motorcycle", "motorcyclist", "dirt bike"]}]},
+  {"name": "tree effigy / passing out", "added": "2026-11-20T23:03:42",
+   "rules": [{"words": ["effigy", "carved tree", "passes out", "passed out", "faint", "collapses"]}]}
+ ]
+}
