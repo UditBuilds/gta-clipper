@@ -87,7 +87,8 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
    plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
    with the game's sound slowed and no voice. Use it when the hit is too fast to see; skip it otherwise. No ring is
-   drawn on it (nothing tracks the object reliably).
+   drawn on it (nothing tracks the object reliably). End the payoff before the game's camera swings away: the
+   replay comes straight after it (Short 6's payoff ran 0.3 s into a swing, which flashed just before the replay).
 7. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
    "He's here"). The swear check transcribes the finished Short; if its words differ from yours, reword.
 
