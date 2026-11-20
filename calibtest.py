@@ -757,6 +757,189 @@ def end_to_end_stars_found_in_a_made_up_video():
             and saved["calibration"]["stars"].startswith("found by the tool"))
 
 
+# --- GTA 6 (launch-fixes): a minimap with no bars (its player arrow is checked), and stars counted by colour ---
+# Made-up HUDs again: an arrow, a star row and a wallet drawn at invented places, sizes and colours.
+
+def made_up_gta6_profile(tmp, centre=(60.5, 70.5), first=40.0, spacing=24.0, tip_y=8.0, r=10.0, slots=4):
+    data = {"name": "six_test", "game": "Made-up game", "frame": [320, 180], "stretch": {"min_s": 1.5, "pad_s": 0.5},
+            "minimap": {"method": "arrow", "box": [round(centre[0]) - 15, round(centre[1]) - 15, 31, 31],
+                        "centre": list(centre), "min_share": 0.2},
+            "stars": {"on": True, "method": "gta6", "box": [24, 2, 112, 30], "slots": slots, "first_tip_x": first,
+                      "tip_spacing": spacing, "tip_y": tip_y, "radius": r, "inner": 0.42, "min_score": 0.5,
+                      "boost": 3.0},
+            "phone": {"on": False}}
+    path = Path(tmp) / "six_test.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return clip.load_profile("six_test", path)
+
+
+def gta6_hud_frame(prof, arrow=True, lit=(), styles=None, wallet=False, bg=None, seed=1):
+    """One HUD frame in clip.hud_filter's layout for a made-up GTA 6 profile: a busy background, the player arrow
+    (a dark disc with a white pointer) or not, and star slots drawn lit ("red", "outline" or "white") or empty."""
+    rnd = random.Random(seed)
+    w = prof.hud_w
+    rows = prof.star_box[3] + prof.bar_box[3] + prof.phone_rows
+    buf = bytearray(prof.frame_bytes)
+    base = bg or (rnd.randrange(40, 200), rnd.randrange(40, 200), rnd.randrange(40, 200))
+    for y in range(rows):
+        for x in range(w):
+            i = (y * w + x) * 3
+            buf[i:i + 3] = bytes(max(0, min(255, c + rnd.randrange(-25, 26))) for c in base)
+    sx, sy = prof.star_box[:2]
+    polys = clip.star_polygons(prof)
+    styles = styles or {}
+    for k, poly in enumerate(polys):
+        style = styles.get(k, "red") if k in lit else "empty"
+        for y in range(prof.star_box[3]):
+            for x in range(prof.star_box[2]):
+                px, py = sx + x + 0.5, sy + y + 0.5
+                if not clip.point_inside(px, py, poly):
+                    continue
+                d = clip.edge_dist(px, py, poly)
+                i = (y * w + x) * 3
+                old = buf[i:i + 3]
+                if style == "red":
+                    col = (25, 20, 22) if d < 1.0 else (175, 35, 45)
+                elif style == "outline":
+                    col = (45, 30, 35) if d < 1.5 else (150, 150, 155)
+                elif style == "white":
+                    col = (40, 40, 40) if d < 1.0 else (235, 235, 235) if d < 2.4 else (170, 170, 172)
+                else:   # an empty slot: a faint see-through grey over the background
+                    col = tuple(round(0.75 * c + 0.25 * 150) for c in old)
+                buf[i:i + 3] = bytes(col)
+        if wallet and k == len(polys) - 1:   # the money's wallet: a green icon on a dark disc, where the last star is
+            cx, cy = prof.star_tips_x[k], prof.star_tip_y + prof.star_radius
+            for y in range(prof.star_box[3]):
+                for x in range(prof.star_box[2]):
+                    d = math.hypot(sx + x + 0.5 - cx, sy + y + 0.5 - cy)
+                    if d <= prof.star_radius:
+                        i = (y * w + x) * 3
+                        green = abs(sx + x - cx) < 4 and abs(sy + y - cy) < 3
+                        buf[i:i + 3] = bytes((40, 200, 60) if green else (38, 38, 42))
+    if arrow:
+        bx, by = prof.bar_box[:2]
+        cx, cy = prof.arrow["centre"]
+        off = prof.star_box[3] * w * 3
+        for y in range(prof.bar_box[3]):
+            for x in range(prof.bar_box[2]):
+                px, py = bx + x + 0.5, by + y + 0.5
+                d = math.hypot(px - cx, py - cy)
+                i = off + (y * w + x) * 3
+                if d <= 8.5:
+                    pointer = (py - cy) > -4.5 and abs(px - cx) <= 0.6 * (py - cy + 4.5) and (py - cy) < 3.5
+                    buf[i:i + 3] = bytes((240, 240, 235) if pointer else (35, 35, 40))
+    return bytes(buf)
+
+
+def profile_refusal(name, path):
+    try:
+        clip.load_profile(name, path)
+    except clip.ProfileError as e:
+        return str(e)
+    return None
+
+
+@check
+def gta6_profiles_load_and_gta5_reads_as_before():
+    """launch-fixes: a profile may read GTA 6's HUD: "minimap": {"method": "arrow", "centre": ...} (no bars) and
+    "stars": {"method": "gta6"} load; a centre outside the minimap box or an unknown method is refused with the
+    reason; the repo's gta5.json still reads its bars and star outlines the old way"""
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = made_up_gta6_profile(tmp)
+        bad = json.loads((Path(tmp) / "six_test.json").read_text(encoding="utf-8"))
+        bad["minimap"]["centre"] = [5, 5]
+        (Path(tmp) / "six_test.json").write_text(json.dumps(bad), encoding="utf-8")
+        outside = profile_refusal("six_test", Path(tmp) / "six_test.json")
+        bad["minimap"]["centre"], bad["minimap"]["method"] = [60.5, 70.5], "radar"
+        (Path(tmp) / "six_test.json").write_text(json.dumps(bad), encoding="utf-8")
+        method = profile_refusal("six_test", Path(tmp) / "six_test.json")
+    gta5 = clip.load_profile("gta5")
+    return (prof.minimap_method == "arrow" and prof.star_method == "gta6" and prof.arrow["centre"] == (60.5, 70.5)
+            and len(prof.gta6_masks) == 4 and outside and "not inside the minimap box" in outside
+            and method and "minimap method" in method
+            and gta5.minimap_method == "bars" and gta5.star_method == "outline" and len(gta5.bar_rules) == 3)
+
+
+@check
+def gta6_arrow_and_stars_are_read_on_made_up_huds():
+    """GTA 6 rules on 31 made-up HUD frames: the minimap counts as shown only with its player arrow (a white
+    pointer in a dark disc) on any background; lit stars are counted from the right in all three looks (solid red,
+    red outline, white outline), empty grey slots are not, a red background is not a red star (a red star on it
+    still is, by its dark outline), green trees behind a star are not the wallet, and the money's wallet (a green
+    icon on a dark disc) in the row means no stars at all"""
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = made_up_gta6_profile(tmp)
+    ok = True
+    for seed in range(10):
+        ok &= clip.minimap_seen(gta6_hud_frame(prof, arrow=True, seed=seed), prof)
+        ok &= not clip.minimap_seen(gta6_hud_frame(prof, arrow=False, seed=seed), prof)
+    cases = [((), {}, False, None, 0), ((3,), {}, False, None, 1), ((2, 3), {}, False, None, 2),
+             ((2, 3), {2: "outline", 3: "outline"}, False, None, 2), ((1, 2, 3), {1: "white", 2: "white", 3: "white"},
+                                                                      False, None, 3),
+             ((0, 1, 2, 3), {}, False, None, 4), ((2, 3), {}, True, None, 0),
+             ((3,), {3: "red"}, False, (170, 40, 45), 1), ((), {}, False, (160, 45, 40), 0), ((1,), {}, False, None, 0),
+             ((3,), {3: "outline"}, False, (60, 170, 60), 1)]
+    for seed, (lit, styles, wallet, bg, want) in enumerate(cases):
+        got = clip.gta6_star_count(gta6_hud_frame(prof, lit=lit, styles=styles, wallet=wallet, bg=bg, seed=seed), prof)
+        ok &= got == want and clip.star_score(gta6_hud_frame(prof, lit=lit, styles=styles, wallet=wallet, bg=bg,
+                                                             seed=seed), prof) == float(want)
+    return ok
+
+
+@check
+def gta6_guided_scan_finds_a_made_up_arrow():
+    """calibrate_guided.find_arrow, given no layout: in made-up pictures where a player arrow sits on one spot in
+    half of them (a busy background everywhere, the HUD gone in the other half), it finds that spot within a pixel,
+    and it finds nothing when no picture has the arrow"""
+    import calibrate_guided as g
+    fw, fh = 640, 360
+    centre = (93.5, 331.5)
+
+    def crop(t, rect, arrow):
+        rnd = random.Random(int(t * 10))
+        x0, y0, w, h = rect
+        buf = bytearray(w * h * 3)
+        for i in range(w * h):
+            v = rnd.randrange(60, 200)
+            buf[3 * i:3 * i + 3] = bytes((v, max(0, v - 20), min(255, v + 15)))
+        if arrow:
+            for y in range(h):
+                for x in range(w):
+                    px, py = x0 + x + 0.5, y0 + y + 0.5
+                    d = math.hypot(px - centre[0], py - centre[1])
+                    if d <= 8.5:
+                        pointer = abs(px - centre[0]) <= 0.5 * (py - centre[1] + 4.5) and -4.5 < py - centre[1] < 3.5
+                        buf[3 * (y * w + x):3 * (y * w + x) + 3] = bytes((240, 240, 235) if pointer else (30, 30, 35))
+        return bytes(buf)
+
+    frames = [(float(t), bytes([100] * 30)) for t in range(16)]
+    found = g.find_arrow(frames, (fw, fh), lambda t, rect: crop(t, rect, int(t) % 2 == 0))
+    none = g.find_arrow(frames, (fw, fh), lambda t, rect: crop(t, rect, False))
+    return (found is not None and none is None and abs(found["centre"][0] - centre[0]) <= 1.0
+            and abs(found["centre"][1] - centre[1]) <= 1.0 and found["votes"] >= 6)
+
+
+@check
+def gta6_drawing_makes_an_arrow_profile():
+    """geometry_profile from a GTA 6 drawing: a confirmed arrow centre makes "minimap": {"method": "arrow"} with a
+    31 px box round it inside the picture, and the star row reads GTA 6 style (method gta6); an arrow the owner
+    hasn't checked yet is a note that says what to do; GTA V drawings (bars) are made as before"""
+    stars = {"box": [200, 2, 100, 30], "mode": "fit", "fit": {"box": [200, 2, 100, 30], "confirmed": True, "slots": 3,
+                                                               "first_tip_x": 215.0, "tip_spacing": 30.0, "tip_y": 6.0,
+                                                               "radius": 10.0, "inner": 0.42}}
+    drawing = {"arrow": {"centre": [12.0, 350.0], "confirmed": True}, "stars": stars, "phone": {"off": True}}
+    prof, notes = cal.geometry_profile("six", "Made-up game", (640, 360), drawing)
+    unchecked, notes2 = cal.geometry_profile("six", "Made-up game", (640, 360),
+                                             dict(drawing, arrow={"centre": [12.0, 350.0], "confirmed": False}))
+    bars = {"bars": [{"box": [10, 300, 40, 4]}, {"box": [60, 300, 40, 4]}], "stars": {"off": True}, "phone": {"off": True}}
+    old, _ = cal.geometry_profile("five", "Made-up game", (640, 360), bars)
+    mm = prof["minimap"]
+    return (mm["method"] == "arrow" and mm["centre"] == [12.0, 350.0] and mm["box"] == [0, 329, 31, 31]
+            and prof["stars"]["method"] == "gta6" and not notes
+            and any(part == "minimap" and "Looks right" in text for part, text in notes2)
+            and "method" not in old["minimap"] and len(old["minimap"]["bars"]) == 2)
+
+
 def main():
     ok = True
     for fn in CHECKS:

@@ -1,0 +1,21 @@
+You are checking one shot of a vertical YouTube Short made from gameplay of the video game {GAME}.
+The picture is a sheet of up to 4 frames of the shot, in time order: top-left is first, then top-right, then bottom-left, and bottom-right is last. Each frame is what the viewer sees on a phone, without the captions.
+Look only at these frames. Answer true only for what you can clearly see in at least one frame, unless a field says otherwise.
+
+Answer in JSON with these fields, in this order:
+- note: one plain line of at most 15 words that says what the frames show.
+- dark: true if most of the picture is too dark to see what is going on (night shadows, a dark room, a black screen).
+- empty: true if there is almost nothing to look at: mostly a plain wall, floor, sky or ground, with no street, vehicle, person or action.
+- back_only: true if the shot is mostly the character's back or body in an empty or dull place, with nothing else of interest around them.
+- text_bottom: true if written game text (a tip, a button prompt, an instruction or a notification) appears in the bottom quarter of a frame. Spoken dialogue subtitles count too.
+- text_right: true if written game text appears along the right edge of a frame.
+- police: true if police officers or police cars can be clearly seen.
+- vehicle: true if a car, truck, van, motorbike, boat or other vehicle can be clearly seen.
+- crash: true if a vehicle is clearly hitting something or has just hit it.
+- explosion: true if an explosion, a fireball or burning wreckage can be seen.
+- shooting: true if a character is clearly firing a gun or aiming a gun at a person.
+- water: true if the sea, a river, a pool or a beach can be clearly seen.
+- street: true if a street, a road or traffic can be clearly seen.
+- people: true if other people (not only the player's character) can be clearly seen.
+- night: true if it is night time.
+- buildings: true if buildings or a city skyline can be clearly seen.

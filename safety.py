@@ -33,14 +33,32 @@ import index
 import library
 import vlm
 
-PROMPT_VERSION = "safety_v2"     # prompts/LOG.md: v2 catches more cutscenes (set B 23/31 vs 8/31)
+PROMPT_VERSION = "safety_v3"     # prompts/LOG.md: v2's questions, plus what the frames show (launch-fixes)
 BLOCKING = ("phone_screen", "menu_or_map", "loading_or_black", "cutscene")
 WHAT = {"phone_screen": "phone on screen", "menu_or_map": "menu or map", "loading_or_black": "loading or black screen",
         "cutscene": "cutscene", "blood_or_gore": "blood or gore", "subtitles": "subtitles"}
+# What the frames show (safety_v3, launch-fixes): a label such as "crash" or "shootout" is kept only where the model
+# sees it in the candidate's own frames, never from words alone.
+SEEN = {"crash": "a crash", "shooting": "shooting", "police": "police", "explosion": "an explosion",
+        "stunt": "a jump or a flip", "water": "swimming or a boat"}
 SCHEMA = {"type": "object",
-          "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in WHAT}},
-          "required": ["note", *WHAT]}
+          "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in WHAT},
+                         **{k: {"type": "boolean"} for k in SEEN}},
+          "required": ["note", *WHAT, *SEEN]}
 OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 120}
+# One shot of a finished Short, as the viewer sees it (the owner's feedback on the posted sample, Nov 19): the B-roll
+# check (rule 3: not too dark, not empty, not the character's back in an empty place), game text under YouTube's title
+# or buttons (rule 4), and what a caption word names (rule 2: caption = picture). prompts/frame_v1.txt.
+FRAME_VERSION = "frame_v1"
+FRAME = {"dark": "too dark", "empty": "almost nothing to look at", "back_only": "the character's back in an empty place",
+         "text_bottom": "game text at the bottom", "text_right": "game text on the right edge",
+         "police": "police", "vehicle": "a vehicle", "crash": "a crash", "explosion": "an explosion",
+         "shooting": "shooting", "water": "water", "street": "a street", "people": "people", "night": "night",
+         "buildings": "buildings"}
+FRAME_SCHEMA = {"type": "object",
+                "properties": {"note": {"type": "string"}, **{k: {"type": "boolean"} for k in FRAME}},
+                "required": ["note", *FRAME]}
+FRAME_OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 160}
 EVERY_S = 1.0             # a frame every second...
 EVERY_NOHUD_S = 0.5       # ...every half second when the HUD rules are off
 FIRST_S = 7.0             # no blood or gore in a Short's first seconds
@@ -79,13 +97,33 @@ def parse_answer(content):
         raise ValueError(f"reply is not JSON ({e})") from None
     if not isinstance(a, dict):
         raise ValueError("reply is not a JSON object")
+    # The six safety questions must all be answered. A SEEN question left out counts as not seen (its label is
+    # then dropped, never kept), so a v2 answer still reads; one answered with anything but true/false is unusable.
     bad = [k for k in WHAT if not isinstance(a.get(k), bool)]
+    bad += [k for k in SEEN if k in a and not isinstance(a[k], bool)]
     if bad:
         raise ValueError(f"not true/false: {', '.join(bad)}")
     note = " ".join(str(a.get("note", "")).split())
     if not note:
         raise ValueError("empty note")
-    return {"note": note, **{k: a[k] for k in WHAT}}
+    return {"note": note, **{k: a[k] for k in WHAT}, **{k: a.get(k, False) for k in SEEN}}
+
+
+def parse_frame(content):
+    """frame_v1's answer: a note and true/false for every FRAME question; anything else is unusable."""
+    try:
+        a = json.loads(content)
+    except ValueError as e:
+        raise ValueError(f"reply is not JSON ({e})") from None
+    if not isinstance(a, dict):
+        raise ValueError("reply is not a JSON object")
+    bad = [k for k in FRAME if not isinstance(a.get(k), bool)]
+    if bad:
+        raise ValueError(f"not true/false: {', '.join(bad)}")
+    note = " ".join(str(a.get("note", "")).split())
+    if not note:
+        raise ValueError("empty note")
+    return {"note": note, **{k: a[k] for k in FRAME}}
 
 
 def load_prompt(game, version=PROMPT_VERSION):
@@ -142,18 +180,42 @@ def make_sheets(path, a, b, every, out_dir, width=SHEET_W, subtitles=False):
     return [(f0, f1, f) for (f0, f1, _), f in zip(plan, files)]
 
 
+class MemoryError_(SafetyError):
+    """The safety checks stopped because memory ran out even after unloading the model; the answers so far are
+    cached."""
+
+
 class Checker:
     """The safety question, asked through Ollama with the index's own call (index.ask_model) and cached like the
     index's answers. ask and sheets are swapped for stand-ins by the tests."""
 
     def __init__(self, game, cache_dir, model=index.MODEL, ask=index.ask_model, sheets=make_sheets, info=None,
-                 log=print, version=PROMPT_VERSION):
-        self.version = version
+                 log=print, version=PROMPT_VERSION, ram=None, unload=None):
+        self.version, self.game = version, game
         self.prompt, self.sha = load_prompt(game, version)
         self.sub_prompt, self.sub_sha = load_prompt(game, SUBTITLE_VERSION)
         self.cache_dir, self.model, self.ask, self.sheets, self.log = Path(cache_dir), model, ask, sheets, log
         self.info = info if info is not None else vlm.check_ollama(model)
         self.calls, self.cached, self.seconds = 0, 0, 0.0
+        # The index's memory guard (launch-fixes): Ollama's memory grows with every picture, and on launch night the
+        # safety stage, which had no guard, was stopped by Claude Code at 3.8 GB free with Ollama holding 8.5 GB.
+        self.ram, self.unload = ram or index.free_ram_gb, unload or vlm.unload
+        self.since_reload, self.reloads = 0, 0
+
+    def before_call(self):
+        """Unload the model when free memory is low (the next call loads it again), as index.label_frames does;
+        stop with MemoryError_ when even that leaves too little."""
+        free = self.ram()
+        if index.should_unload(free, self.since_reload):
+            self.unload(self.model)
+            self.reloads, self.since_reload, free = self.reloads + 1, 0, self.ram()
+            self.log(f"  memory was low: unloaded the model after {self.calls} safety call(s), "
+                     f"{free if free is not None else 0:.1f} GB free now; it loads again")
+        if free is not None and free < index.MIN_FREE_RAM_GB:
+            raise MemoryError_(f"only {free:.1f} GB of memory free (needs {index.MIN_FREE_RAM_GB:g}) during the safety "
+                               "checks. The answers so far are cached: close other programs and run the same command "
+                               "again.")
+        self.since_reload += 1
 
     def fields(self, path, f0, f1, every):
         video = Path(path)
@@ -162,6 +224,29 @@ class Checker:
                 "model": self.model, "model_digest": self.info.get("digest"), "prompt_version": self.version,
                 "prompt_sha256": self.sha, "schema": SCHEMA, "options": OPTIONS}
 
+    def frame(self, jpg, key):
+        """frame_v1's answer for one picture (a sheet of a Short's shot, or one frame of it): (answer, error).
+        key: what the picture is (its clip and times), for the cache; the picture's own bytes are in the key too."""
+        import hashlib
+        if not hasattr(self, "frame_prompt"):
+            self.frame_prompt, self.frame_sha = load_prompt(self.game, FRAME_VERSION)
+        fields = {"kind": "frame", "video": "_short_frames", **key,
+                  "jpg_sha256": hashlib.sha256(Path(jpg).read_bytes()).hexdigest(),
+                  "model": self.model, "model_digest": self.info.get("digest"), "prompt_version": FRAME_VERSION,
+                  "prompt_sha256": self.frame_sha, "schema": FRAME_SCHEMA, "options": FRAME_OPTIONS}
+        rec = vlm.cache_load(self.cache_dir, fields)
+        if rec is None:
+            self.before_call()
+            rec = self.ask(self.model, self.frame_prompt, jpg, self.info.get("capabilities", []), schema=FRAME_SCHEMA,
+                           parse=parse_frame, options=FRAME_OPTIONS)
+            self.calls += 1
+            self.seconds += rec.get("wall_s") or 0.0
+            if rec.get("error") is None:
+                vlm.cache_save(self.cache_dir, fields, rec)
+        else:
+            self.cached += 1
+        return rec.get("answer"), rec.get("error")
+
     def look(self, path, a, b, every, work):
         """[{from_s, to_s, file, answer, error}] for footage a..b of a recording."""
         out = []
@@ -169,6 +254,7 @@ class Checker:
             fields = self.fields(path, f0, f1, every)
             rec = vlm.cache_load(self.cache_dir, fields)
             if rec is None:
+                self.before_call()
                 rec = self.ask(self.model, self.prompt, jpg, self.info.get("capabilities", []), schema=SCHEMA,
                                parse=parse_answer, options=OPTIONS)
                 self.calls += 1
@@ -194,6 +280,7 @@ class Checker:
                       "prompt_sha256": self.sub_sha, "schema": SUBTITLE_SCHEMA, "options": SUBTITLE_OPTIONS}
             rec = vlm.cache_load(self.cache_dir, fields)
             if rec is None:
+                self.before_call()
                 rec = self.ask(self.model, self.sub_prompt, jpg, self.info.get("capabilities", []),
                                schema=SUBTITLE_SCHEMA, parse=parse_subtitles, options=SUBTITLE_OPTIONS)
                 self.calls += 1
@@ -339,7 +426,19 @@ def check_moment(m, rec, folder, checker):
         for a, b, what in swearing_in(checker, rec["path"], spans, work):
             report["flags"].append(f"PROFANITY at {library.hms(a)}: {what}")
     m["safety"], m["safe_options"] = report, safe
+    m["verified"] = seen_spans(sheets)
     return bool(safe), reasons
+
+
+def seen_spans(sheets):
+    """{what: [[from_s, to_s], ...]} for each SEEN thing the model saw, from the safety sheets (launch-fixes)."""
+    out = {}
+    for s in sheets:
+        a = s.get("answer") or {}
+        for k in SEEN:
+            if a.get(k):
+                out.setdefault(k, []).append([s["from_s"], s["to_s"]])
+    return out
 
 
 # --- Sound: true peak ---

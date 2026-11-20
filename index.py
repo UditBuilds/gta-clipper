@@ -74,9 +74,13 @@ OPTIONS = {"temperature": 0, "seed": 42, "num_ctx": 4096, "num_predict": 160}
 KEEP_ALIVE = "5m"
 CALL_TIMEOUT = 300.0
 # Ollama's memory grows with every picture it is sent (measured: free memory fell from 12 to 4.4 GB over 60 calls).
-RELOAD_BELOW_GB = 5.0     # with less free memory than this, the model is unloaded; the next call loads it again
+# launch-fixes (Nov 19): the run that had this guard was still stopped from outside at about 3.8 GB free, under the
+# old 2 GB floor, and 10 calls at ~0.13 GB each could take it from 5 GB to 3.7 GB before the next unload. So the
+# unload comes earlier, the cool-down is skipped once memory is really low, and the clean stop sits above 4 GB.
+RELOAD_BELOW_GB = 7.0     # with less free memory than this, the model is unloaded; the next call loads it again
 RELOAD_MIN_CALLS = 10     # ...but not more often than every this many calls
-MIN_FREE_RAM_GB = 2.0     # stop (answers so far stay cached) if even that leaves less free memory than this
+URGENT_BELOW_GB = 5.5     # ...unless free memory is under this: then it is unloaded after any call
+MIN_FREE_RAM_GB = 4.5     # stop (answers so far stay cached) if even that leaves less free memory than this
 
 ACTIVITIES = ("driving", "on_foot", "shootout", "chase", "flying", "boat", "swimming", "cutscene", "menu_map",
               "phone", "loading", "other")
@@ -136,6 +140,14 @@ def free_ram_gb():
         return None
 
 
+def should_unload(free, since_reload):
+    """The memory guard's rule (index and safety checks): unload the model when free memory is under
+    RELOAD_BELOW_GB and RELOAD_MIN_CALLS calls went by since the last unload, or under URGENT_BELOW_GB after any call."""
+    if free is None or since_reload < 1:
+        return False
+    return free < URGENT_BELOW_GB or (free < RELOAD_BELOW_GB and since_reload >= RELOAD_MIN_CALLS)
+
+
 def off_limits(video):
     """The off-limits folder a video is in, or None."""
     path = Path(video).resolve()
@@ -149,37 +161,17 @@ def off_limits(video):
 
 def star_polygons(prof):
     """The outline of each star slot, as clip.star_template() draws it: 10 points in the profile's frame pixels."""
-    polys = []
-    for tx in prof.star_tips_x:
-        cx, cy = tx, prof.star_tip_y + prof.star_radius
-        polys.append([(cx + r * math.cos(a), cy + r * math.sin(a))
-                      for i in range(10)
-                      for a, r in [(-math.pi / 2 + i * math.pi / 5,
-                                    prof.star_radius if i % 2 == 0 else prof.star_radius * prof.star_inner)]])
-    return polys
+    return clip.star_polygons(prof)
 
 
-def _edge_dist(px, py, poly):
-    best = float("inf")
-    for i in range(len(poly)):
-        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
-        dx, dy = bx - ax, by - ay
-        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
-        best = min(best, math.hypot(px - ax - t * dx, py - ay - t * dy))
-    return best
-
-
-def _inside(px, py, poly):
-    inside = False
-    for i in range(len(poly)):
-        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
-        if (ay > py) != (by > py) and px < ax + (py - ay) * (bx - ax) / (by - ay):
-            inside = not inside
-    return inside
+_edge_dist = clip.edge_dist
+_inside = clip.point_inside
 
 
 def star_count_rule(prof):
-    """STAR_COUNT with the profile's optional stars.count values on top."""
+    """STAR_COUNT with the profile's optional stars.count values on top (a GTA 6 "gta6" profile: its own rule)."""
+    if getattr(prof, "star_method", "outline") == "gta6":
+        return dict(prof.gta6_rule)
     rule = dict(STAR_COUNT)
     extra = (prof.data.get("stars") or {}).get("count") or {}
     rule.update({k: v for k, v in extra.items() if k in STAR_COUNT})
@@ -192,25 +184,7 @@ def star_masks(prof, rule=None):
     The arms of neighbouring stars overlap, so an outline pixel that is in or near another slot's star is left out.
     """
     rule = rule or star_count_rule(prof)
-    x0, y0, w, h = prof.star_box
-    polys = star_polygons(prof)
-    lo, hi = rule["ring"]
-    masks = []
-    for k, poly in enumerate(polys):
-        ring, core = [], []
-        others = [p for m, p in enumerate(polys) if m != k]
-        for y in range(h):
-            for x in range(w):
-                px, py = x0 + x + 0.5, y0 + y + 0.5
-                if abs(px - prof.star_tips_x[k]) > prof.star_radius + 1 or not _inside(px, py, poly):
-                    continue
-                d = _edge_dist(px, py, poly)
-                if d >= rule["core"]:
-                    core.append(y * w + x)
-                elif lo <= d <= hi and not any(_inside(px, py, o) or _edge_dist(px, py, o) <= hi for o in others):
-                    ring.append(y * w + x)
-        masks.append((ring, core))
-    return masks
+    return clip.star_slot_masks(prof, rule["ring"], rule["core"])
 
 
 def star_slots(rgb, prof, masks):
@@ -267,7 +241,8 @@ def decode_pass(ffmpeg, video, info, range_fix, decoder, prof, frame_dir, every,
              f"[vh]select='gte(t,selected_n*{hud_step:g})',{dl}{clip.hud_filter(info, range_fix, prof)}[hud];"
              f"[vj]select='gte(t,selected_n*{gap:g})',{dl}"
              f"scale={width}:-2:{conv}out_color_matrix=bt601:out_range=pc,tile={tile[0]}x{tile[1]}[jpg]")
-    rule, masks = star_count_rule(prof), star_masks(prof)
+    rule = star_count_rule(prof)
+    masks = star_masks(prof) if getattr(prof, "star_method", "outline") != "gta6" else None
     hud = []
     frame_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=frame_dir) as tmp:
@@ -284,8 +259,10 @@ def decode_pass(ffmpeg, video, info, range_fix, decoder, prof, frame_dir, every,
                 raw = proc.stdout.read(prof.frame_bytes)
                 if len(raw) < prof.frame_bytes:
                     break
-                hud.append((len(hud) * hud_step, clip.star_score(raw, prof), clip.minimap_seen(raw, prof),
-                            clip.phone_seen(raw, prof), count_stars(star_slots(raw, prof, masks), rule)))
+                score = clip.star_score(raw, prof)
+                count = (int(score) if getattr(prof, "star_method", "outline") == "gta6"
+                         else count_stars(star_slots(raw, prof, masks), rule))
+                hud.append((len(hud) * hud_step, score, clip.minimap_seen(raw, prof), clip.phone_seen(raw, prof), count))
             proc.stdout.close()
             if proc.wait() != 0:
                 err.seek(0)
@@ -427,7 +404,7 @@ def label_frames(video, times, frame_dir, model, info, prompt, cache_dir, every,
         rec = vlm.cache_load(cache_dir, fields)
         if rec is None:
             free = ram()
-            if free is not None and free < RELOAD_BELOW_GB and since_reload >= RELOAD_MIN_CALLS:
+            if should_unload(free, since_reload):
                 unload(model)
                 reloads, since_reload, free = reloads + 1, 0, ram()
                 log(f"  memory was low: unloaded the model at sheet {n}, {free:.1f} GB free now; it loads again")
@@ -855,4 +832,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import heavy                          # one heavy job at a time (launch-fixes)
+    heavy.main_guard("index.py")
     main()

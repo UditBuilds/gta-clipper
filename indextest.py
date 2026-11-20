@@ -417,7 +417,7 @@ def low_memory_unloads_the_model_then_stops_the_run():
     unloads = []
     times = [k * 6.0 for k in range(25)]
     with tempfile.TemporaryDirectory() as tmp:
-        _, stats = run_labels(tmp, lambda *a: record(), ram=lambda: 4.0, times=times,
+        _, stats = run_labels(tmp, lambda *a: record(), ram=lambda: 6.0, times=times,
                               unload=lambda m: unloads.append(m))
         try:
             run_labels(tmp + "b", lambda *a: record(), ram=lambda: 1.0, times=times)
@@ -425,6 +425,22 @@ def low_memory_unloads_the_model_then_stops_the_run():
         except index.IndexError_ as e:
             stopped = "memory" in str(e)
     return stats["reloads"] == 2 and len(unloads) == 2 and stats["model_calls"] == 25 and stopped
+
+
+@check
+def memory_falling_fast_unloads_the_model_without_waiting_10_calls():
+    """launch-fixes: a prepare with the guard was still stopped from outside at about 3.8 GB free. The model is now
+    unloaded under 7 GB (every 10 calls), under 5.5 GB after any call, and the run stops cleanly under 4.5 GB, above
+    where it was stopped"""
+    rule = (not index.should_unload(8.0, 50) and not index.should_unload(6.5, 9) and index.should_unload(6.5, 10)
+            and index.should_unload(5.0, 1) and not index.should_unload(5.0, 0) and not index.should_unload(None, 50)
+            and index.MIN_FREE_RAM_GB > 4.0 and index.RELOAD_BELOW_GB > index.URGENT_BELOW_GB > index.MIN_FREE_RAM_GB)
+    unloads, frees = [], iter([20.0] * 3 + [5.0, 12.0] + [20.0] * 40)
+    times = [k * 6.0 for k in range(10)]
+    with tempfile.TemporaryDirectory() as tmp:
+        _, stats = run_labels(tmp, lambda *a: record(), ram=lambda: next(frees), times=times,
+                              unload=lambda m: unloads.append(m))
+    return rule and stats["reloads"] == 1 and len(unloads) == 1 and stats["model_calls"] == 10
 
 
 @check

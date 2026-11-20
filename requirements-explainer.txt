@@ -2,3 +2,6 @@
 # kokoro-onnx 0.6.x has the word timing but needs Python below 3.14, so .venv-tts runs on Python 3.13.
 kokoro-onnx==0.6.1
 onnxruntime==1.31.1
+# speech.py (spoken swearing in a finished Short): faster-whisper small.en on the CPU, int8 (MIT). The model
+# (464 MB) downloads to C:\AI\gta\models\whisper on first use. The audio is decoded by ffmpeg, not PyAV.
+faster-whisper==1.2.1

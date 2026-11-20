@@ -49,6 +49,7 @@ import calibrate as cal
 import calibrate_guided as guided
 import clip
 import footage_short
+import heavy
 import index
 import library
 import safety as safety_checks
@@ -82,6 +83,7 @@ SURE = 0.6               # a model answer with lower confidence is not used in t
 # --- Moments (mine) ---
 WINDOW_S = 30.0          # moments are scored as windows of this length (shorter where clean footage is shorter)
 MIN_WINDOW_S = 15.0
+MIN_RECORDING_S = 15.0   # launch-fixes: a recording under this is skipped (it can't hold a Short)
 WINDOW_STEP_S = 2.0
 APART_S = 5.0            # two moments of one recording keep this far apart
 MOMENTS_PER_10_MIN = 3   # moments kept per 10 min of a recording (at least 4)
@@ -102,6 +104,7 @@ RISE_PTS, RISE_PER_STAR, RISE_MAX = 2.0, 0.5, 4.0
 STAR_PTS, STAR_MAX = 0.5, 2.5
 CONF_PTS = 0.5
 CATEGORY_COST = 1.0      # pick_three: a category already picked costs this much
+DIALOGUE_COST = 1.5      # launch-fixes: a moment with mission dialogue on most of it is worth this much less (x share)
 MIN_APART_S = 300.0      # a pick from outside its third keeps this far (session time) from the others
 
 # --- Types (choose_types) ---
@@ -226,13 +229,26 @@ def last_guided_result(name):
     return data.get("result") if isinstance(data, dict) else None
 
 
+def guided_failure(name):
+    """Why the last guided calibration of this profile saved nothing or failed, in its own words: the reason the
+    unattended page gave up, else the problems its check found."""
+    session = read_json(cal.CALIB_ROOT / name / "session.json") or {}
+    failed = [e for e in session.get("log", []) if e.get("event") == "auto_accept_failed"]
+    if failed:
+        return failed[-1].get("why")
+    result = read_json(cal.CALIB_ROOT / name / "guided_result.json") or {}
+    return "; ".join(result.get("problems") or []) or None
+
+
 def choose_profile(name, game, recordings, durations, slots, log=print, guided_run=None, tries=3):
     """The profile to index with: {"profile", "mode": "hud" or "nohud", "stars": True/False, "why", "attempts"}.
 
     - profiles/<name>.json exists, its stars are done, and its last guided check (if any) didn't FAIL: use it.
-    - else guided calibration with every guess accepted, on the longest recording first. "PASS" ends it; "PASS for
-      the minimap. STARS NOT CALIBRATED" tries the next longest recording for the stars (at most `tries` runs), and
-      uses the profile without stars if none shows any; FAIL, or a run that can't start or save, means NO-HUD.
+    - else guided calibration with every guess accepted, on up to `tries` recordings at once (longest first): the
+      calibration scans each of them and uses the one that shows the HUD best (launch-fixes: launch night tried one
+      recording and gave up). "PASS" ends it; "PASS for the minimap. STARS NOT CALIBRATED" tries the next recordings
+      for the stars, and uses the profile without stars if none shows any; FAIL, or a run that can't start or save,
+      means NO-HUD, with the calibration's own reason.
     """
     guided_run = guided_run or guided.run
     nohud = f"{game}_nohud"
@@ -245,19 +261,30 @@ def choose_profile(name, game, recordings, durations, slots, log=print, guided_r
         prof = clip.load_profile(name)
         return {"profile": name, "mode": "hud", "stars": prof.stars_on, "attempts": attempts,
                 "why": f"profiles/{name}.json already exists" + ("" if prof.stars_on else " (wanted stars off)")}
-    for video in sorted(recordings, key=lambda v: -durations.get(Path(v).stem, 0.0))[:tries]:
-        log(f"  Guided calibration of {name} on {Path(video).name}, every guess accepted...")
-        code = guided_run(name, video, slots=slots, game=GAMES.get(game, {}).get("name"), browser=False,
-                          log=lambda m: log("    " + m), serve=guided.auto_accept)
+    order = sorted(recordings, key=lambda v: -durations.get(Path(v).stem, 0.0))
+    for k in range(0, min(len(order), 3 * tries), tries):
+        batch = [Path(v) for v in order[k:k + tries]]
+        errors = []
+
+        def glog(m, errors=errors):
+            if m.startswith("ERROR:"):
+                errors.append(m[6:].strip())
+            log("    " + m)
+        log(f"  Guided calibration of {name} on {', '.join(v.name for v in batch)}, every guess accepted...")
+        code = guided_run(name, batch, slots=slots, game=GAMES.get(game, {}).get("name"), browser=False,
+                          log=glog, serve=guided.auto_accept)
         result = last_guided_result(name) if code != 2 else None
-        attempts.append({"video": Path(video).name, "exit": code, "result": result})
-        if code != 0 or not result or result.startswith("FAIL") or result.startswith("SAVED"):
+        failed = code != 0 or not result or result.startswith("FAIL") or result.startswith("SAVED")
+        why = ((errors[-1] if errors else guided_failure(name)) if failed else None)
+        attempts.append({"videos": [v.name for v in batch], "exit": code, "result": result, "why": why})
+        if failed:
             return {"profile": nohud, "mode": "nohud", "stars": False, "attempts": attempts,
-                    "why": f"guided calibration on {Path(video).name} " + (f"ended {result}" if result else
-                                                                          "could not start or save a profile")}
+                    "why": f"guided calibration on {', '.join(v.name for v in batch)} "
+                           + (f"ended {result}" if result else "could not start or save a profile")
+                           + (f": {why}" if why else "")}
         if "STARS NOT CALIBRATED" not in result:
             return {"profile": name, "mode": "hud", "stars": True, "attempts": attempts,
-                    "why": f"guided calibration PASS on {Path(video).name}"}
+                    "why": f"guided calibration PASS on {', '.join(v.name for v in batch)}"}
     if guided.pending_parts(name) is not None:
         return {"profile": name, "mode": "hud", "stars": False, "attempts": attempts,
                 "why": "guided calibration PASS for the minimap; no recording showed wanted stars, so star counts are "
@@ -271,18 +298,39 @@ def clip_count(duration_s):
     return max(3, math.ceil(duration_s / 360.0))
 
 
+CLIP_DONE = "launch_clip_done.json"      # in a clip.py run folder: written by run_clip when that run finished
+
+
+def finished_clip_run(video, profile, out_root):
+    """launch-fixes: a stopped prepare carries on where it stopped, so a clip.py run this run folder already finished
+    for the same recording and profile is used again instead of running clip.py once more. None if there is none."""
+    runs = sorted((Path(out_root) / Path(video).stem).glob("*/" + CLIP_DONE))         if (Path(out_root) / Path(video).stem).is_dir() else []
+    for done in reversed(runs):
+        data = read_json(done) or {}
+        if data.get("profile") == profile and (done.parent / "scores.json").is_file():
+            return done.parent
+    return None
+
+
 def run_clip(video, profile, out_root, logs_dir):
     """clip.py on one recording, as it is (a subprocess, so its own rules and output stay exactly as always). Returns
-    its run folder, or None if it failed (the log says why)."""
+    its run folder, or None if it failed (the log says why). A run already finished in this folder is used again."""
     out_root, logs_dir = Path(out_root), Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
+    again = finished_clip_run(video, profile, out_root)
+    if again:
+        return again
     before = set((out_root / Path(video).stem).glob("*")) if (out_root / Path(video).stem).is_dir() else set()
     with open(logs_dir / f"clip_{Path(video).stem}.txt", "w", encoding="utf-8", errors="replace") as fh:
         done = subprocess.run([sys.executable, str(HERE / "clip.py"), str(video), "--profile", profile,
                                "--count", str(clip_count(probe_duration(video))), "--out", str(out_root)],
                               stdout=fh, stderr=subprocess.STDOUT, cwd=HERE)
     new = sorted(set((out_root / Path(video).stem).glob("*")) - before)
-    return new[-1] if done.returncode == 0 and new else None
+    if done.returncode == 0 and new:
+        write_json(new[-1] / CLIP_DONE, {"profile": profile, "video": str(video),
+                                         "finished": datetime.now().isoformat(timespec="seconds")})
+        return new[-1]
+    return None
 
 
 def probe_duration(video):
@@ -419,6 +467,35 @@ def score_window(rec, a, b):
     return points, terms
 
 
+def verify_terms(rec, m):
+    """launch-fixes: a moment's crash, explosion, stunt, police and shootout points stand only where the safety answers
+    (m["verified"]) saw them in its own frames, and its score and category follow; long mission dialogue (subtitles
+    on most of its safety sheets) costs DIALOGUE_COST. The labels taken away are kept in m["dropped_labels"]."""
+    v = m.get("verified")
+    if v is None:                                # no safety answers (a test of the older steps)
+        return []
+    a, b = m["start_s"], m["end_s"]
+    terms, dropped = dict(m["terms"]), []
+    for k in ("crash", "explosion", "stunt"):
+        if k in terms and not seen_near(v, VERIFY[k], a, b):
+            dropped.append(k)
+            del terms[k]
+    if "police" in terms and not seen_near(v, "police", a, b) and not terms.get("stars"):
+        dropped.append("police")
+        del terms["police"]
+    if terms.get("activity_label") == "shootout" and not seen_near(v, "shooting", a, b):
+        dropped.append("shootout")
+        terms.pop("activity", None)
+        terms.pop("activity_label", None)
+    share = mission_share(m, (a, b))
+    if share >= MISSION_SHARE:
+        terms["dialogue"] = round(-DIALOGUE_COST * share, 2)
+    m["terms"], m["dropped_labels"] = terms, dropped
+    m["score"] = round(sum(v for v in terms.values() if isinstance(v, (int, float))), 3)
+    m["category"] = category_of(terms)
+    return dropped
+
+
 def category_of(terms):
     """What a moment is mostly about, for spreading the picks over different kinds of moment."""
     ranked = [("star rise", terms.get("star_rise", 0)), ("crash", terms.get("crash", 0)),
@@ -469,6 +546,114 @@ def mine(rec, used=()):
     return moments
 
 
+# --- 5b. Topics first (launch-fixes) ---
+# The owner's rule: the main output is Shorts that teach one thing about GTA 6, with his footage as the proof. So the
+# pool starts from topics: shotlist.json's (each shot a library query) and the GTA 6 HUD's own (heat icons, the look of
+# the stars, read by proof.hud6). A footage match becomes a topic candidate; the safety and label checks then decide
+# whether the frames really show it. The facts a topic may use come from facts.json (TOPIC_FACTS: ids only).
+TOPIC_BONUS = 1.5            # a topic candidate is worth this much more than a moment of the same score
+TOPIC_WINDOW_S = 34.0        # a topic candidate's window round its match
+TOPIC_FACTS = {"wanted-system": ["wanted-six-stars", "wanted-witness-or-alarm"],
+               "police-chase": ["wanted-six-stars"],
+               "cops-outfit-car-change": ["wanted-police-know-outfit-car", "evidence-masks-clothes"],
+               "big-chases": ["wanted-six-stars"],
+               "heat-icons": ["wanted-heat-icons", "wanted-police-know-outfit-car", "evidence-masks-clothes"],
+               "star-looks": ["wanted-hollow-star", "wanted-red-star", "wanted-solid-star", "wanted-six-stars"]}
+HUD6_TOPICS = {"heat": ("heat-icons", "the small icons under the wanted stars (what the police know) change"),
+               "star look": ("star-looks", "the wanted stars change how they look (solid, outline)")}
+STAR_STRETCH_S = 10.0        # stars showing this long is worth reading with proof.hud6
+
+
+def topic_window(rec, at_s, length=TOPIC_WINDOW_S):
+    """A window of about `length` seconds round at_s inside one clean stretch (GUARD_S from its ends), or None."""
+    for a, b in rec["spans"]:
+        lo, hi = a + GUARD_S, b - GUARD_S
+        if lo <= at_s <= hi and hi - lo >= MIN_WINDOW_S:
+            start = min(max(lo, at_s - length * 0.4), max(lo, hi - length))
+            return round(start, 2), round(min(hi, start + length), 2), (a, b)
+    return None
+
+
+def topic_moment(rec, topic, shot, why, at_s, used, extra=None):
+    """One topic candidate (a moment with "topic") round at_s, scored like a mined moment plus TOPIC_BONUS."""
+    found = topic_window(rec, at_s)
+    if not found:
+        return None
+    a, b, span = found
+    if any(v == rec["stem"] and a < e and s < b for v, s, e in used):
+        return None
+    points, terms = score_window(rec, a, b)
+    terms["topic"] = TOPIC_BONUS
+    m = {"video": rec["stem"], "path": rec["path"], "profile": rec["profile"], "mode": rec["mode"], "start_s": a,
+         "end_s": b, "span": [round(span[0], 2), round(span[1], 2)], "session_s": round(rec["offset_s"] + (a + b) / 2, 1),
+         "score": round(points + TOPIC_BONUS, 3), "terms": terms, "category": f"topic: {topic}",
+         "topic": {"id": topic, "shot": shot, "why": why, "at_s": round(at_s, 2), "facts": TOPIC_FACTS.get(topic, [])}}
+    if extra:
+        m["topic"].update(extra)
+    return m
+
+
+def topic_candidates(recs, used=(), shotlist=None, hud6=None, log=print):
+    """launch-fixes: the topic candidates of the session, best first: every shot of a shotlist.json topic with facts
+    to teach (TOPIC_FACTS; the others are B-roll, not topics) that this night's footage matches (its library query
+    over the session's indexes), and, on GTA 6 with its HUD read, every change
+    of the heat icons or the stars' look (proof.hud6) while stars show. At most one candidate per topic and recording
+    stretch."""
+    import proof
+    shotlist = shotlist if shotlist is not None else library.load_shotlist()
+    indexes = [r["idx"] for r in recs.values()]
+    out = []
+    for topic in shotlist.get("topics", []):
+        if topic.get("id") not in TOPIC_FACTS:       # a shot-list topic with no facts to teach is B-roll, not a topic
+            continue
+        for shot in topic.get("shots", []):
+            try:
+                rows = library.find(indexes, **shot["query"])
+            except library.LibraryError:
+                continue
+            for row in rows:
+                rec = recs.get(row["video"])
+                if rec is None:
+                    continue
+                hits = row.get("text_hits") or []
+                at = hits[0]["t"] if hits else (row["start_s"] + row["end_s"]) / 2
+                m = topic_moment(rec, topic["id"], shot["id"], shot.get("want", ""), at, used)
+                if m:
+                    out.append(m)
+    hud6 = hud6 or proof.hud6
+    for rec in recs.values():
+        if rec["mode"] != "hud":
+            continue
+        try:
+            prof = clip.load_profile(rec["profile"])
+        except clip.ProfileError:
+            continue
+        if getattr(prof, "star_method", "outline") != "gta6":
+            continue
+        for a, b in clip.runs([c > 0 for c in rec["count"]]):
+            if b - a < STAR_STRETCH_S:
+                continue
+            series = hud6(rec["path"], a, b, prof)
+            for e in proof.hud6_events(series):
+                topic, why = HUD6_TOPICS[e["kind"]]
+                m = topic_moment(rec, topic, e["kind"], f"{why}: {e['before']} to {e['after']} at {hms(e['at_s'])}",
+                                 e["at_s"], used, {"event": e})
+                if m:
+                    m["terms"]["hud6"] = 1.0
+                    m["score"] = round(m["score"] + 1.0, 3)
+                    out.append(m)
+    best = {}
+    for m in sorted(out, key=lambda m: -m["score"]):
+        key = (m["topic"]["id"], m["video"], m["span"][0])
+        if key not in best:
+            best[key] = m
+    picked = sorted(best.values(), key=lambda m: -m["score"])
+    log(f"Topics: {len(picked)} topic candidate(s) from the shot list and the HUD"
+        + (": " + "; ".join(f"{m['topic']['id']} ({m['video'][-6:]} {hms(m['start_s'])})" for m in picked[:8])
+           if picked else ""))
+    return picked
+
+
 def pick_three(moments, session_s, ok=lambda m: (True, []), count=3, log=print):
     """count moments: the best one in each third of the session (a category already picked costs CATEGORY_COST),
     then, for an empty third, the best moment left at least MIN_APART_S from the picks. ok(moment) -> (passes,
@@ -509,6 +694,58 @@ def pick_three(moments, session_s, ok=lambda m: (True, []), count=3, log=print):
     return sorted(picked, key=lambda m: -m["score"]), rejected
 
 
+POOL_MIN, POOL_MAX = 15, 25   # launch-fixes: the candidates checked before picking (5 per Short asked for, in this range)
+POOL_APART_S = 60.0           # two candidates of one recording keep this far apart (start to start)
+
+
+def pool_of(moments, size, apart=POOL_APART_S):
+    """launch-fixes: the candidates worth checking: the best moments, spread over the recordings. Best first, a moment
+    joins when it is POOL_APART_S from the others of its recording and its recording has fewer than its share (the
+    pool size over the number of recordings, plus one); then the rest fill up by score."""
+    recordings = {m["video"] for m in moments}
+    cap = max(2, -(-size // max(1, len(recordings))) + 1)
+    pool, count = [], {}
+    for m in sorted(moments, key=lambda m: (-m["score"], m["session_s"])):
+        near = any(p["video"] == m["video"] and abs(p["start_s"] - m["start_s"]) < apart for p in pool)
+        if not near and count.get(m["video"], 0) < cap:
+            pool.append(m)
+            count[m["video"]] = count.get(m["video"], 0) + 1
+        if len(pool) >= size:
+            break
+    return pool
+
+
+def pick_pool(moments, ok, count=3, size=None, log=print):
+    """launch-fixes: (picks, rejected, pool). Every candidate of the pool (pool_of) goes through ok() (the safety checks,
+    the labels checked against the frames, the quality gate), not only the few that would be picked; then the `count`
+    best that pass are picked, a category already picked costing CATEGORY_COST. rejected lists every candidate that
+    failed, with why."""
+    size = size or max(POOL_MIN, min(POOL_MAX, 5 * count))
+    pool = pool_of(moments, size)
+    passed, rejected = [], []
+    for k, m in enumerate(pool, 1):
+        good, why = ok(m)
+        m["checked"] = {"passed": bool(good), "why": list(why)}
+        if good:
+            passed.append(m)
+        else:
+            rejected.append({"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
+                             "score": m["score"], "category": m.get("category"), "why": why})
+            log(f"  {m.get('id')} {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} failed: " + "; ".join(why))
+        if k % 5 == 0:
+            log(f"  checked {k} of {len(pool)} candidates: {len(passed)} pass so far")
+    picked = []
+    while len(picked) < count and passed:
+        best = max(passed, key=lambda m: (m["score"] - CATEGORY_COST * sum(1 for p in picked
+                                                                           if p["category"] == m["category"]),
+                                          -m["session_s"]))
+        picked.append(best)
+        passed.remove(best)
+    for m in passed:
+        m["checked"]["not_picked"] = "passed, but others scored higher"
+    return sorted(picked, key=lambda m: -m["score"]), rejected, pool
+
+
 # --- 6. Evidence and types ---
 
 def sheet_picture(rec, t):
@@ -517,22 +754,40 @@ def sheet_picture(rec, t):
     return str(path) if path.is_file() else None
 
 
-def evidence(rec, a, b):
-    """Everything the footage a..b shows that a line may point to, as items with an id (E1 ...), a kind, the times
-    in the recording, the numbers it supports and where it comes from. Kinds:
+# launch-fixes: what the safety answers must have seen for a label or an event to stay (safety.SEEN keys).
+VERIFY = {"crash": "crash", "explosion": "explosion", "stunt": "stunt", "police": "police", "shootout": "shooting"}
+VERIFY_SLACK_S = 2.0     # a seen answer this close to an item's own seconds counts for it
+
+
+def seen_near(verified, what, a, b):
+    """True when the safety answers saw `what` (a safety.SEEN key) within VERIFY_SLACK_S of a..b."""
+    return any(f0 - VERIFY_SLACK_S < b and a < f1 + VERIFY_SLACK_S for f0, f1 in (verified or {}).get(what, []))
+
+
+def evidence(rec, a, b, verified=None):
+    """Everything the footage a..b shows that a line may point to, as items with an id (E1, E2 ...), a kind, the times
+    in the recording, the numbers it supports and where it comes from. verified (launch-fixes): the safety answers'
+    seen spans (safety.seen_spans); when given, a crash, explosion, stunt, police or shootout stays only where the model
+    saw it in these frames, and a "seen" line keeps its words but marks the events it names that weren't seen
+    ("not_seen"), so no narration can lean on them. Kinds:
       activity  an index segment's label (chase, shootout, driving ...), with its length in seconds
       stars     a wanted-star rise (HUD, the exact half second) or the stars showing (HUD count); never in NO-HUD mode
       police    police seen by the model
       event     crash, explosion, stunt or character, from a notable line
       seen      the model's notable line for one sheet (6 s), word for word"""
     items = []
+    check = verified is not None
     for k, s in enumerate(rec["idx"]["segments"], 1):
         lo, hi = max(a, s["start_s"]), min(b, s["end_s"])
         if s["never_use"] or hi - lo < 1.0:
             continue
-        items.append({"kind": "activity", "value": s["activity"], "from_s": round(lo, 2), "to_s": round(hi, 2),
-                      "numbers": [round(hi - lo)], "source": f"index segment {k} ({s['decided_by']})"})
-        if s["police_visible"]:
+        value = s["activity"]
+        if check and value == "shootout" and not seen_near(verified, "shooting", lo, hi):
+            value = "on_foot"          # the index said shootout; nobody shoots in these frames
+        items.append({"kind": "activity", "value": value, "from_s": round(lo, 2), "to_s": round(hi, 2),
+                      "numbers": [round(hi - lo)], "source": f"index segment {k} ({s['decided_by']})"
+                      + (" (no shooting seen: relabelled)" if value != s["activity"] else "")})
+        if s["police_visible"] and (not check or seen_near(verified, "police", lo, hi)):
             items.append({"kind": "police", "value": "police seen", "from_s": round(lo, 2), "to_s": round(hi, 2),
                           "numbers": [], "source": f"index segment {k}: the model saw police"})
     if rec["mode"] == "hud":
@@ -557,17 +812,78 @@ def evidence(rec, a, b):
         if hi - lo < 1.5:
             continue
         pic = sheet_picture(rec, s["t"])
+        t0, t1 = s["t"], s["t"] + rec["every"]
+        unseen = [k for k in s["kinds"] if check and k in VERIFY and not seen_near(verified, VERIFY[k], t0, t1)]
         for k in s["kinds"]:
+            if k in unseen:
+                continue
             items.append({"kind": "police" if k == "police" else "event", "value": k if k != "police" else "police seen",
                           "from_s": s["t"], "to_s": round(s["t"] + rec["every"], 2), "numbers": [],
-                          "source": f"vision model, sheet at {hms(s['t'])}: \"{s['notable']}\"", "picture": pic})
-        items.append({"kind": "seen", "value": s["notable"], "from_s": s["t"], "to_s": round(s["t"] + rec["every"], 2),
-                      "numbers": [], "source": f"vision model, sheet at {hms(s['t'])} (confidence "
-                                                f"{s.get('confidence', 0):.2f})", "picture": pic})
+                          "source": f"vision model, sheet at {hms(s['t'])}: \"{s['notable']}\""
+                                    + (" (seen again in the safety frames)" if check else ""), "picture": pic})
+        seen_item = {"kind": "seen", "value": s["notable"], "from_s": s["t"], "to_s": round(s["t"] + rec["every"], 2),
+                     "numbers": [], "source": f"vision model, sheet at {hms(s['t'])} (confidence "
+                                              f"{s.get('confidence', 0):.2f})", "picture": pic}
+        if unseen:
+            seen_item["not_seen"] = unseen
+        items.append(seen_item)
     items.sort(key=lambda e: (e["from_s"], e["kind"]))
     for k, e in enumerate(items, 1):
         e["id"] = f"E{k}"
     return items
+
+
+STAR_LOOK_WORDS = {"red": "solid red", "red outline": "red outline", "white outline": "hollow white",
+                   "white": "solid white"}
+
+
+def hud6_evidence(rec, m, hud6=None):
+    """launch-fixes: GTA 6's heat icons and star looks over a pick's window as evidence items (appended, new ids):
+    each stretch of the same icon count or look (2 s or more), and each change. [] off GTA 6 or without its HUD."""
+    import proof
+    if rec["mode"] != "hud":
+        return []
+    try:
+        prof = clip.load_profile(rec["profile"])
+    except clip.ProfileError:
+        return []
+    if getattr(prof, "star_method", "outline") != "gta6":
+        return []
+    a, b = m["window"]
+    series = (hud6 or proof.hud6)(rec["path"], a, b, prof)
+    items = []
+    for key, idx, word in (("heat", 3, "heat icon"), ("star_look", 2, "stars")):
+        known = [(t, v) for t, *rest in series for v in [rest[idx - 1]] if v is not None]
+        runs, start = [], None
+        for k, (t, v) in enumerate(known):
+            if start is None or v != known[k - 1][1] or t - known[k - 1][0] > 1.0:
+                if start is not None:
+                    runs.append(start)
+                start = [t, t, v]
+            start[1] = t + proof.STEP_S
+        if start is not None:
+            runs.append(start)
+        for t0, t1, v in runs:
+            if t1 - t0 < 2.0 or (key == "heat" and v == 0):
+                continue
+            value = (f"{v} {word}{'s' if v != 1 else ''} under the wanted stars" if key == "heat"
+                     else f"{STAR_LOOK_WORDS.get(v, v)} wanted stars")
+            items.append({"kind": key, "value": value, "from_s": round(t0, 2), "to_s": round(t1, 2),
+                          "numbers": [v] if key == "heat" else [], "source": "GTA 6 HUD (proof.hud6, twice a second)"})
+    for e in proof.hud6_events(series):
+        if e["kind"] == "heat":
+            items.append({"kind": "heat", "value": f"heat icons {e['before']} to {e['after']}", "from_s": e["at_s"],
+                          "to_s": e["at_s"], "at_s": e["at_s"], "numbers": [e["before"], e["after"]],
+                          "source": "GTA 6 HUD: the icons under the stars change"})
+        else:
+            items.append({"kind": "star_look", "value": f"the stars turn from {STAR_LOOK_WORDS.get(e['before'])} to "
+                                                        f"{STAR_LOOK_WORDS.get(e['after'])}",
+                          "from_s": e["at_s"], "to_s": e["at_s"], "at_s": e["at_s"], "numbers": [],
+                          "source": "GTA 6 HUD: the stars change how they look"})
+    n = len(m["evidence"])
+    for k, e in enumerate(sorted(items, key=lambda e: e["from_s"]), n + 1):
+        e["id"] = f"E{k}"
+    return sorted(items, key=lambda e: e["from_s"])
 
 
 def distinct_items(items):
@@ -585,8 +901,11 @@ def distinct_items(items):
 
 
 def anchor(rec, m):
-    """The moment's main instant: a star rise, else a crash/explosion/stunt sheet's middle, else its best action."""
+    """The moment's main instant: a topic candidate's match (launch-fixes), else a star rise, else a
+    crash/explosion/stunt sheet's middle, else its best action."""
     a, b = m["start_s"], m["end_s"]
+    if m.get("topic") and a <= m["topic"]["at_s"] <= b:
+        return m["topic"]["at_s"]
     rises = [r["change_s"] for r in rec["rises"] if a <= r["change_s"] <= b]
     if rises:
         return rises[0]
@@ -631,17 +950,20 @@ def type_options(rec, m):
     nar = narrated_window(rec, m)
     out = {"anchor_s": round(t, 2)}
     terms = m["terms"]
+    verified = m.get("verified")
     if act:
-        items = evidence(rec, *act)
+        items = evidence(rec, *act, verified=verified)
         strong = any(terms.get(k) for k in ("crash", "explosion", "stunt")) or terms.get("activity_label") == "shootout"
         out["action"] = {"window": list(act), "evidence": items,
                          "fits": bool(strong or terms.get("action", 0) >= ACTION_STRONG),
                          "fit": round(terms.get("action", 0) + sum(terms.get(k, 0) for k in ("crash", "explosion",
                                                                                             "stunt")), 2)}
     if nar:
-        items = evidence(rec, *nar)
+        items = evidence(rec, *nar, verified=verified)
         n = distinct_items(items)
-        out["narrated"] = {"window": list(nar), "evidence": items, "fits": n >= NARRATED_ITEMS, "items": n,
+        # A topic candidate (launch-fixes) has its topic as one more thing to show.
+        need = NARRATED_ITEMS - 1 if m.get("topic") else NARRATED_ITEMS
+        out["narrated"] = {"window": list(nar), "evidence": items, "fits": n >= need, "items": n,
                            "fit": round(0.75 * n + 0.5 * terms.get("star_rise", 0), 2)}
     return out
 
@@ -663,7 +985,9 @@ def choose_types(picks, recs):
                     opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
         m["options"] = {k: v for k, v in opts.items() if k in ("action", "narrated")}
         fits = [k for k in ("action", "narrated") if opts.get(k, {}).get("fits")]
-        if len(fits) == 1:
+        if m.get("topic") and "narrated" in fits:      # topic first (launch-fixes): a topic is taught, narrated
+            m["type"], m["type_why"] = "narrated", f"a topic ({m['topic']['id']}): narrated, the footage as proof"
+        elif len(fits) == 1:
             m["type"], m["type_why"] = fits[0], f"only {fits[0]} fits"
         elif fits:
             k = max(fits, key=lambda k: (opts[k]["fit"], k == "action"))
@@ -891,6 +1215,8 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
                 if compare:
                     break
         formats = format_options(rec, m, nar["evidence"], nar["window"], game, dry_run, session_firsts, compare)
+        if m.get("topic"):                       # launch-fixes, topics first: the topic is the point (engine v3)
+            formats.append({"format": "T1", "why": f"a topic ({m['topic']['id']}): {m['topic']['why']}"})
     act = opts.get("action")
     payoff = []
     if act:
@@ -926,6 +1252,17 @@ def moment_sheet(path, start, end, out, every=2.0, cols=4, width=400):
     return done.returncode == 0 and Path(out).is_file()
 
 
+def hud_status(choice, modes, checks, hud_log):
+    """How the HUD was read over the whole run, for the top of candidates.json and review.html: "hud" (every recording
+    read with the profile), "partial" (some went NO-HUD, each with why) or "nohud" (none could be: the reason), and
+    where the full log is. Never silent (launch-fixes)."""
+    nohud = [stem for stem, m in modes.items() if m == "nohud"]
+    mode = "nohud" if choice["mode"] == "nohud" or (modes and len(nohud) == len(modes)) else "partial" if nohud else "hud"
+    return {"mode": mode, "profile": choice["profile"], "why": choice["why"], "log": str(hud_log),
+            "nohud_recordings": {stem: "; ".join((checks.get(stem) or {}).get("reasons") or [choice["why"]])
+                                 for stem in nohud}}
+
+
 # --- The whole prepare stage ---
 
 def preflight(model, log=print):
@@ -941,6 +1278,10 @@ def preflight(model, log=print):
         log(f"  Note: Ollama has {', '.join(others)} loaded; they are unloaded first so the model fits the GPU.")
         for m in others:
             vlm.unload(m)
+    if model in info["loaded"]:
+        # launch-fixes: a render minutes ago can leave our own model loaded (keep_alive), holding memory the free
+        # memory check below would blame on other programs. It loads again on the first call.
+        vlm.unload(model)
     free = index.free_ram_gb()
     if free is not None and free < index.RELOAD_BELOW_GB:
         raise LaunchError(f"only {free:.1f} GB of memory is free; close other programs (a browser with many tabs, "
@@ -948,7 +1289,8 @@ def preflight(model, log=print):
     return free
 
 
-def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run=False, input_dir=INPUT,
+def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run=False, input_dir=INPUT, count=3,
+            topics=True,
             shorts_dir=SHORTS_DIR, library_dir=index.LIBRARY, day=None, slots=None, safety="auto", log=print,
             index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True):
     """The prepare stage; returns the run folder (with candidates.json). safety "auto" asks the safety question
@@ -966,14 +1308,26 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     recordings, skipped = find_recordings(input_dir, library_dir, runs,
                                           videos or ([str(v) for v in sorted(Path(input_dir).iterdir())
                                                       if v.suffix.lower() in index.VIDEO_EXTS] if dry_run else None))
+    # launch-fixes: a recording too short for a Short (launch night had a 14.9 s one) is left out with a plain line,
+    # before anything else looks at it.
+    durations = {v.stem: probe_duration(v) for v in recordings}
+    for v in recordings:
+        if durations[v.stem] < MIN_RECORDING_S:
+            skipped[v.name] = (f"only {durations[v.stem]:.1f} s long; a Short needs a recording of "
+                               f"{MIN_RECORDING_S:g} s or more")
+    recordings = [v for v in recordings if durations[v.stem] >= MIN_RECORDING_S]
     for name, why in skipped.items():
         log(f"  Skipped {name}: {why}")
     if not recordings:
         raise LaunchError(f"no new recordings in {input_dir}. Copy the PS5 files there first (every file already "
-                          "in the library or taken by an earlier /launch run is skipped)")
+                          "in the library or taken by an earlier /launch run is skipped, and so is one under "
+                          f"{MIN_RECORDING_S:g} s)")
     folder = run_folder(shorts_dir, day, runs, dry_run)
+    resumed = not dry_run and any(Path(r["folder"]) == folder and r.get("status") == "preparing" for r in runs["runs"])
     folder.mkdir(parents=True, exist_ok=True)
-    log(f"Run folder: {folder}")
+    log(f"Run folder: {folder}" + (" (a stopped run: it carries on where it stopped; the model's answers so far and "
+                                   "the finished clip.py runs are used again)" if resumed else ""))
+    log(heavy.ram_line())
     lib_dir, cache_dir = Path(library_dir), None
     if dry_run:
         # Everything the trial makes stays in its folder: profiles, calibration sessions, the library. The model's
@@ -986,18 +1340,27 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         clip.PROFILE_DIR, cal.CALIB_ROOT = prof_dir, folder / "calib"
         os.environ["GTA_CLIPPER_PROFILES"] = str(prof_dir)    # for clip.py and star_check.py, run as subprocesses
     note_run(shorts_dir, folder, recordings, "preparing", dry_run)
-    durations = {v.stem: probe_duration(v) for v in recordings}
     log(f"Recordings ({len(recordings)}, {sum(durations.values()) / 60:.1f} min): "
         + ", ".join(f"{v.name} ({hms(durations[v.stem])})" for v in recordings))
 
-    # 2. The profile.
+    # 2. The profile. Every HUD step goes to logs/hud.txt too (launch-fixes: launch night's calibration failed and
+    # the run said only "could not start or save a profile").
     t = time.perf_counter()
-    choice = choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], log, guided_run)
+    (folder / "logs").mkdir(exist_ok=True)
+    hud_log = folder / "logs" / "hud.txt"
+
+    def hlog(m):
+        log(m)
+        with open(hud_log, "a", encoding="utf-8") as fh:
+            fh.write(m + "\n")
+    hlog(f"--- {datetime.now():%Y-%m-%d %H:%M:%S}: HUD for {len(recordings)} recording(s), profile {profile} ---")
+    choice = choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], hlog, guided_run)
     timing["calibration"] = round(time.perf_counter() - t, 1)
-    log(f"Profile: {choice['profile']} ({'HUD rules on' if choice['mode'] == 'hud' else 'NO-HUD MODE'}): "
-        f"{choice['why']}")
+    hlog(f"Profile: {choice['profile']} ({'HUD rules on' if choice['mode'] == 'hud' else 'NO-HUD MODE'}): "
+         f"{choice['why']}")
 
     # 3. Index, with clip.py running alongside.
+    log(heavy.ram_line() + " (before the index)")
     t = time.perf_counter()
     runner = clip_runner or (lambda v, p: run_clip(v, p, folder / "clip_runs", folder / "logs"))
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -1018,8 +1381,10 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                 except library.LibraryError as e:
                     ok, reasons, numbers = False, [str(e)], {}
                 checks[v.stem] = {"ok": ok, "reasons": reasons, "numbers": numbers}
+                hlog(f"  {v.name}: HUD check {'passed' if ok else 'FAILED'} {numbers}"
+                     + (f": {'; '.join(reasons)}" if reasons else ""))
                 if not ok:
-                    log(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
+                    hlog(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
                     mode = "nohud"
                     idx = do_index(v, profile=f"{game}_nohud", every=every, library=lib_dir, cache_dir=cache_dir,
                                    log=lambda m: log("  " + m))
@@ -1036,6 +1401,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             log(f"  WARNING: clip.py failed on {stem} (see {folder / 'logs'}); its action score counts as 0.")
 
     # 5. Moments.
+    log(heavy.ram_line() + " (before the safety checks)")
     t = time.perf_counter()
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
     recs, offset = {}, 0.0
@@ -1045,6 +1411,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         recs[v.stem] = recording_data(v.stem, idx, act, modes[v.stem], offset)
         offset += idx["video"]["duration_s"]
     moments = [m for rec in recs.values() for m in mine(rec, used)]
+    moments += topic_candidates(recs, used, log=log) if topics else []
     moments.sort(key=lambda m: -m["score"])
     for k, m in enumerate(moments, 1):
         m["id"] = f"M{k}"
@@ -1068,17 +1435,26 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         return found[topic[0]]
 
     def ok(m):
-        """The safety checks, then the owner's quality gate (PR 26): a moment with no clear point is skipped."""
+        """The safety checks, the labels checked against what the frames show (launch-fixes), then the owner's
+        quality gate (PR 26): a moment with no clear point is skipped."""
         passes, why = safe(m)
         if not passes:
             return passes, why
+        verify_terms(recs[m["video"]], m)
         return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
-    picks, rejected = pick_three(moments, offset, ok, log=log)
+    log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)...")
+    picks, rejected, pool = pick_pool(moments, ok, count=count, log=log)
     picks = settle_story_types(choose_types(picks, recs))
+    for m in picks:
+        try:
+            m["evidence"] = m["evidence"] + hud6_evidence(recs[m["video"]], m)
+        except Exception as e:                       # a close look that fails must not stop the night
+            log(f"  Note: the GTA 6 HUD look at {m['video']} failed ({e}); its pick keeps the index's evidence")
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
     if isinstance(safety, safety_checks.Checker):
         timing["safety_model"] = round(safety.seconds, 1)
-        log(f"Safety checks: {safety.calls} model call(s), {safety.cached} cached, {safety.seconds:.0f} s")
+        log(f"Safety checks: {safety.calls} model call(s), {safety.cached} cached, {safety.seconds:.0f} s"
+            + (f", the model unloaded {safety.reloads} time(s) for memory" if safety.reloads else ""))
         safety_checks.vlm.unload(safety.model)
     if not picks:
         raise LaunchError("no moment passed the checks: nothing to make a Short from")
@@ -1095,6 +1471,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         if m["mode"] == "nohud":
             m.setdefault("flags", []).append("NO-HUD MODE: no wanted-star counts; narration may not mention stars")
     timing["total"] = round(time.perf_counter() - t_start, 1)
+    log(heavy.ram_line() + " (end of prepare)")
     data = {"version": 1, "created": datetime.now().isoformat(timespec="seconds"), "dry_run": dry_run,
             "game": game, "game_name": GAMES[game]["name"], "folder": str(folder),
             "recordings": [{"name": v.name, "stem": v.stem, "path": str(v), "duration_s": round(durations[v.stem], 2),
@@ -1103,11 +1480,16 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                             "clip_run": str(clip_runs.get(v.stem)) if clip_runs.get(v.stem) else None}
                            for v in recordings],
             "session_s": round(offset, 2), "skipped": skipped, "calibration": choice,
+            "hud": hud_status(choice, modes, checks, hud_log),
             "settings": {"every_s": every, "window_s": WINDOW_S, "library": str(lib_dir)},
             "moments_found": len(moments),
             "top_moments": [{k: m[k] for k in ("id", "video", "start_s", "end_s", "session_s", "score", "category",
                                                "terms")} for m in moments[:10]],
             "rejected": rejected,
+            "count": count,
+            "pool": [{"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
+                      "score": m["score"], "category": m.get("category"), "terms": m.get("terms"),
+                      "dropped_labels": m.get("dropped_labels", []), "checked": m.get("checked")} for m in pool],
             "picks": [{k: v for k, v in m.items() if k not in ("options",)} | {
                 "other_type": {k: {"window": o["window"], "fits": o["fits"], "fit": o["fit"]}
                                for k, o in m["options"].items() if k != m["type"]}} for m in picks],
@@ -1416,7 +1798,8 @@ def render_narrated(short, m, out_dir, facts, today, indexes, log=print, timing=
 # --- Engine v2 (PR 26): the story layer ---
 
 STORY_LENGTH = (25.0, 40.0)              # a narrated story Short's length (the formats' 25-40 s)
-ENGINES = ("v2", "v1")                   # v1: PR 25's explainer.py render, kept with --engine v1
+ENGINES = ("v3", "v2", "v1")             # v3 (launch-fixes, default): the Step 0 sample's way, both types;
+                                         # v2: PR 26's story layer (narrated only); v1: PR 25's explainer.py render
 # Words that never anchor a line to a 'seen' item, however often the model's own lines use them.
 ANCHOR_STOP = {"with", "from", "into", "that", "this", "there", "their", "they", "then", "than", "what", "when",
                "where", "while", "your", "have", "been", "just", "like", "over", "onto", "through", "right", "behind",
@@ -1582,6 +1965,649 @@ def render_story(short, m, out_dir, facts, today, indexes, folder, dry_run, log=
             "shown": [[s["stem"], s["start_s"], s["end_s"]] for s in shown]}
 
 
+# --- Engine v3 (launch-fixes): every Short the way the Step 0 sample was made, with the owner's visual rules ---
+# The owner's rule after launch night: no Short ever ships as raw gameplay. Both types get a hook card from frame 0,
+# the am_puck voice with yellow word captions, music and sound effects, a setup -> payoff and a loop; an ACTION Short
+# has a short voice and the game's sound in.
+# The owner's rules after watching the posted sample (Nov 19), checked here in code:
+#   1. full-screen gameplay: every beat is a 9:16 window of the recording that follows the action (proof.py); a HUD
+#      close-up is only an inset on top, for at most 2 s. No card or compare (a small box over a blurred background).
+#   2. caption = picture: after the render, every caption word that names a HUD thing, a count, "gone", a star's look
+#      or something to see (police, a car, a street ...) is checked against the frame on screen at that moment (the
+#      HUD reader, and the vision model); one that disagrees fails the Short.
+#   3. B-roll is bright GTA 6: a beat that is too dark, mostly blank or only the character's back is rejected.
+#   4. safe zone: insets inside YouTube's safe area; a beat with game text under the title at the bottom is rejected.
+#   5. zoom cap: an inset zooms at most proof.ZOOM_CAP; a smaller detail gets a wider crop and a red box.
+ENGINE_V3_BEATS = ("full", "banner")
+TOPIC_LENGTH = (25.0, 39.0)              # a narrated (topic) Short's length
+ACTION_V3_LENGTH = (16.0, 32.0)          # an action Short's
+OPEN_CARD_CHARS = 13                     # explainer's open card: characters a line
+PAYOFF_V3 = (0.45, 0.85)                 # the payoff line starts this far in (the owner's sample: about 80 %)
+BEAT_NEAR_S = 60.0                       # a beat of the pick's own recording stays this near its window
+WORD_LOOK_S = 0.15                       # a caption is checked at its word's start plus this
+GONE_BACK_S = 15.0                       # "gone": something must have been there in the 15 s before
+HUD_NOUNS = {"star": "stars", "stars": "stars", "wanted": "stars", "icon": "icons", "icons": "icons",
+             "heat": "icons"}
+GONE_WORDS = {"gone", "disappear", "disappears", "disappeared", "vanish", "vanishes", "vanished", "cleared", "none",
+              "empty"}
+ALL_WORDS = {"last", "all", "every", "no", "none"}
+LOOK_WORDS = {"hollow": ("red outline", "white outline"), "outline": ("red outline", "white outline"),
+              "outlined": ("red outline", "white outline"), "red": ("red", "red outline"),
+              "white": ("white", "white outline"), "solid": ("red", "white")}
+SEEN_WORDS = {"police": "police", "cop": "police", "cops": "police", "officer": "police", "officers": "police",
+              "cruiser": "police", "car": "vehicle", "cars": "vehicle", "truck": "vehicle", "trucks": "vehicle",
+              "van": "vehicle", "suv": "vehicle", "bike": "vehicle", "motorbike": "vehicle", "boat": "vehicle",
+              "boats": "vehicle", "helicopter": "vehicle", "vehicle": "vehicle", "vehicles": "vehicle",
+              "crash": "crash", "crashes": "crash", "crashed": "crash", "wreck": "crash", "explosion": "explosion",
+              "explodes": "explosion", "exploded": "explosion", "fireball": "explosion", "shooting": "shooting",
+              "shoot": "shooting", "shoots": "shooting", "shootout": "shooting", "beach": "water", "ocean": "water",
+              "sea": "water", "water": "water", "river": "water", "street": "street", "streets": "street",
+              "road": "street", "traffic": "street", "highway": "street", "people": "people", "crowd": "people",
+              "pedestrians": "people", "night": "night", "skyline": "buildings", "city": "buildings",
+              "buildings": "buildings"}
+
+
+def open_card_text(hook):
+    """The hook as explainer's open card: upper case, 2-3 lines of at most OPEN_CARD_CHARS, or None if it can't fit."""
+    words, lines = str(hook).upper().split(), [""]
+    for w in words:
+        if len(w) > OPEN_CARD_CHARS:
+            return None
+        if lines[-1] and len(lines[-1]) + 1 + len(w) > OPEN_CARD_CHARS:
+            lines.append(w)
+        else:
+            lines[-1] = (lines[-1] + " " + w).strip()
+    return "|".join(lines) if 1 <= len(lines) <= 3 and lines[0] else None
+
+
+def auto_beats(line, by_id, n, action):
+    """Beats for a line that names none: full-screen footage at each cited evidence item (time order), with the stars
+    as an inset for a star, heat or star-look item (the icon row boxed for heat); at least 2 for a line of 7 words or
+    more."""
+    items = sorted((by_id[i] for i in line.get("evidence", []) if i in by_id), key=lambda e: e["from_s"])
+    beats = []
+    for e in items:
+        at = e.get("at_s", e["from_s"])
+        if e["kind"] in ("stars", "heat", "star_look"):
+            beats.append({"beat": "full", "at": at,
+                          "inset": {"zoom": "stars", "box": "icons" if e["kind"] == "heat" else "stars"}})
+        else:
+            beats.append({"beat": "full", "at": at + 0.5})
+    want = 2 if len(str(line.get("say", "")).split()) >= 7 else 1
+    while beats and len(beats) < want:
+        beats.append({"beat": "full", "at": beats[-1]["at"] + 2.0})
+    return beats
+
+
+def beat_key(spec):
+    import hashlib
+    return hashlib.sha1(json.dumps(spec, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def compose_beat(video, at, out_dir, prof, frame, inset=None, focus=None, sound=False, info=None):
+    """One beat's 1080x1920 clip (proof.CLIP_S long, reused when the same beat was made before): the recording from
+    `at`, full screen, the 9:16 window following the action (or held at `focus`, 0-1), with the inset on top. Returns
+    (clip path, its plan: the window's keys and the inset's rect, box and times)."""
+    import proof
+    info = info or clip.probe(shutil.which("ffprobe"), Path(video))
+    shown_w, shown_h = proof.shown_size(info)
+    cw = proof.crop_width(shown_h)
+    ins = None
+    if inset:
+        rect, detail = proof.inset_rect(inset.get("zoom", "stars"), prof, frame)
+        box = inset.get("box")
+        if isinstance(box, str):
+            box = proof.hud_box(box, prof)
+        elif box is None and detail is not None:
+            box = detail
+        t0 = float(inset.get("start", proof.INSET_START_S))
+        ins = {"rect": rect, "zoom": inset.get("zoom", "stars"), "t0": t0,
+               "t1": round(t0 + float(inset.get("length", proof.INSET_LEN_S)), 3),
+               "from_s": float(inset.get("at", at + t0)), "box": proof.box_in_inset(box, rect) if box else None,
+               "box_name": inset.get("box") if isinstance(inset.get("box"), str) else ("detail" if box else None)}
+    spec = {"video": str(video), "at": round(at, 3), "inset": ins, "focus": focus, "sound": bool(sound),
+            "clip_s": proof.CLIP_S, "v": 1}
+    path = Path(out_dir) / "beats" / f"{beat_key(spec)}.mp4"
+    plan_file = path.with_suffix(".json")
+    if path.is_file() and plan_file.is_file():
+        return path, json.loads(plan_file.read_text(encoding="utf-8"))
+    if focus is not None:
+        keys = [(0.0, min(max(0, round(focus * shown_w - cw / 2)), shown_w - cw))]
+    else:
+        frames, fw, fh = proof.gray_frames(video, at, proof.CLIP_S, proof.FOLLOW_FPS, proof.FOLLOW_W, info)
+        keys = proof.crop_keys(proof.follow_track(frames, fw, fh, cw / shown_w), proof.FOLLOW_FPS, shown_w, cw)
+    proof.vertical_clip(video, at, proof.CLIP_S, path, keys, ins, sound, info)
+    plan = {"keys": keys, "crop_w": cw, "shown": [shown_w, shown_h], "inset": ins}
+    plan_file.write_text(json.dumps(plan), encoding="utf-8")
+    return path, plan
+
+
+def plan_v3(short, m, videos=None):
+    """(plan, problems): every beat of every line as a spec, checked, nothing made yet. plan: per line, per beat
+    {"kind", "video", "path", "from_s", "own", "inset" (as written, or None), "focus", "sound", "label", "text",
+    "weight"}. videos: {recording stem: path} for B-roll from another recording ("video")."""
+    import proof
+    action = m["type"] == "action"
+    by_id = {e["id"]: e for e in m["evidence"]}
+    problems, plan = [], []
+    w0, w1 = m["window"]
+    videos = dict(videos or {}, **{m["video"]: m["path"]})
+    for n, line in enumerate(short.get("lines") or [], 1):
+        raw = line.get("beats") or auto_beats(line, by_id, n, action)
+        lp = []
+        for k, b in enumerate(raw, 1):
+            where = f"line {n}, beat {k}"
+            kind = b.get("beat", "full") if isinstance(b, dict) else None
+            if kind in ("card", "compare"):
+                problems.append(f"{where}: a {kind} puts the gameplay in a small box over a blurred background; use a "
+                                "full beat (a HUD close-up goes in its \"inset\", for at most 2 s)")
+                continue
+            if kind not in ENGINE_V3_BEATS:
+                problems.append(f"{where}: \"beat\" is one of {', '.join(ENGINE_V3_BEATS)}")
+                continue
+            at = b.get("at")
+            if isinstance(at, bool) or not isinstance(at, (int, float)):
+                problems.append(f"{where}: \"at\" is the second of the recording it shows")
+                continue
+            stem = b.get("video") or m["video"]
+            if stem not in videos:
+                problems.append(f"{where}: no recording {stem!r} in the library")
+                continue
+            own = stem == m["video"]
+            if own and not w0 - BEAT_NEAR_S <= at <= w1 + BEAT_NEAR_S:
+                problems.append(f"{where}: at {at:.1f} s is far from this pick's window ({w0:.0f}-{w1:.0f} s); "
+                                "B-roll from elsewhere names its \"video\"")
+                continue
+            inset = b.get("inset")
+            if inset is not None:
+                if not isinstance(inset, dict):
+                    problems.append(f"{where}: \"inset\" is {{\"zoom\": \"stars\", \"box\": \"icons\"}} or similar")
+                    continue
+                if not own:
+                    problems.append(f"{where}: an inset shows the pick's own HUD; it can't go on B-roll from "
+                                    "another recording")
+                    continue
+                length, start = inset.get("length"), inset.get("start")
+                if length is not None and (isinstance(length, bool) or not isinstance(length, (int, float))
+                                           or not 0.5 <= length <= proof.INSET_MAX_S):
+                    problems.append(f"{where}: an inset shows for 0.5-{proof.INSET_MAX_S:g} s (\"length\")")
+                    continue
+                if start is not None and (isinstance(start, bool) or not isinstance(start, (int, float))
+                                          or start < 0):
+                    problems.append(f"{where}: an inset's \"start\" is the seconds into its beat it appears")
+                    continue
+            focus = b.get("focus")
+            if focus is not None and (isinstance(focus, bool) or not isinstance(focus, (int, float))
+                                      or not 0 <= focus <= 1):
+                problems.append(f"{where}: \"focus\" is 0-1 (where across the picture the window sits)")
+                continue
+            if kind == "banner" and not str(b.get("text") or "").strip():
+                problems.append(f"{where}: a banner has \"text\" (1-3 words)")
+                continue
+            lp.append({"kind": kind, "video": stem, "path": videos[stem], "from_s": round(at, 2), "own": own,
+                       "inset": dict(inset) if inset else None, "focus": focus, "sound": bool(b.get("sound", action)),
+                       "label": b.get("label"), "text": b.get("text"), "weight": b.get("weight")})
+        plan.append(lp)
+    return plan, problems
+
+
+def v3_script(short, plan, files=None):
+    """The explainer script for a plan. files: per line, per beat, the composed clip (played from its start); without
+    them every beat points at its recording at its second (enough for explainer.timing)."""
+    lines = []
+    for n, (line, lp) in enumerate(zip(short.get("lines") or [], plan)):
+        beats = []
+        for k, e in enumerate(lp):
+            clip_file = files[n][k] if files else None
+            out = {"beat": e["kind"], "file": str(clip_file or e["path"]), "at": "0" if clip_file else f"{e['from_s']:.3f}"}
+            if e["sound"]:
+                out["sound"] = True
+            if e["kind"] == "banner":
+                out["text"] = str(e["text"])
+            elif e.get("label"):
+                out["label"] = e["label"]
+            if e.get("weight"):
+                out["weight"] = e["weight"]
+            beats.append(out)
+        out_line = {"say": line.get("say", ""), "beats": beats}
+        for key in ("green", "red"):
+            if isinstance(line.get(key), list):
+                out_line[key] = line[key]
+        lines.append(out_line)
+    hooks = short.get("hooks") or []
+    star = short.get("star")
+    hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
+    script = {"title": short.get("title") or "Short", "voice": "am_puck",
+              "speed": short.get("speed", 1.0) if isinstance(short.get("speed"), (int, float)) else 1.0,
+              "music": "auto", "sfx": True, "end_pill": END_PILL, "lines": lines}
+    card = short.get("open_card") or (open_card_text(hook) if hook else None)
+    if card:
+        script["open_card"] = card
+    return script
+
+
+def beat_slots(times):
+    """Per line, per beat: (start on the Short's timeline, seconds on screen), from explainer.timing."""
+    out, t = [], 0.0
+    for lengths in times["lines"]:
+        row = []
+        for seconds in lengths:
+            row.append((round(t, 3), seconds))
+            t += seconds
+        out.append(row)
+    return out
+
+
+def hud_words(words, line_say):
+    """The indexes of the spoken words that need the stars' inset on screen: a HUD word (star, icon, heat, wanted),
+    "gone" and the like, a number just before a HUD word, and a star's look in a line about stars."""
+    toks = word_tokens(line_say)
+    stars_line = any(x in ("star", "stars") for x in toks)
+    out = []
+    for k, w in enumerate(words):
+        word = (word_tokens(w["text"]) or [""])[0]
+        nxt = (word_tokens(words[k + 1]["text"]) or [""])[0] if k + 1 < len(words) else ""
+        nxt2 = (word_tokens(words[k + 2]["text"]) or [""])[0] if k + 2 < len(words) else ""
+        number = word.isdigit() or (word in truth.NUMBER_WORDS and word != "no")
+        if (word in HUD_NOUNS or word in GONE_WORDS or (word == "no" and nxt in HUD_NOUNS)
+                or (number and (nxt in HUD_NOUNS or nxt2 in HUD_NOUNS)) or (word in LOOK_WORDS and stars_line)):
+            out.append(k)
+    return out
+
+
+def place_insets(short, plan, times):
+    """Engine v3: each inset is timed to the words that name what it shows: from just before the first HUD word of
+    its beat to just after the last, at most proof.INSET_MAX_S (an inset written with "start" keeps it). A line that
+    names the HUD on a beat of its own footage with no inset gets one there (the stars, the icon row boxed for icons
+    or heat). Returns notes for the log."""
+    import proof
+    words = times.get("words") or []
+    slots = beat_slots(times)
+    notes = []
+    line_ends = [row[-1][0] + row[-1][1] if row else 0.0 for row in slots]
+    for n, (line, lp) in enumerate(zip(short.get("lines") or [], plan)):
+        lo = slots[n][0][0] if slots[n] else 0.0
+        hi = line_ends[n]
+        mine = [w for w in words if lo <= w["start_s"] < hi]
+        need = [mine[k] for k in hud_words(mine, line.get("say", ""))]
+        for k, (e, (start, seconds)) in enumerate(zip(lp, slots[n])):
+            inside = [w for w in need if start <= w["start_s"] < start + seconds]
+            ins = e.get("inset")
+            if ins is None and inside and e["own"]:
+                toks = word_tokens(line.get("say", ""))
+                ins = e["inset"] = {"zoom": "stars",
+                                    "box": "icons" if any(x in ("icon", "icons", "heat") for x in toks) else "stars"}
+                notes.append(f"line {n + 1}, beat {k + 1}: added the stars' inset for "
+                             + ", ".join(f'"{w["text"]}"' for w in inside))
+            if ins is None:
+                continue
+            if ins.get("start") is None:
+                if inside:
+                    t0 = max(0.0, inside[0]["start_s"] - start - 0.25)
+                    t1 = min(seconds, max(t0 + 0.8, inside[-1]["end_s"] - start + 0.35))
+                else:
+                    t0, t1 = proof.INSET_START_S, min(seconds, proof.INSET_START_S + proof.INSET_LEN_S)
+                ins["start"], ins["length"] = round(t0, 2), round(max(0.5, min(proof.INSET_MAX_S, t1 - t0)), 2)
+            elif ins.get("length") is None:
+                ins["length"] = proof.INSET_LEN_S
+    return notes
+
+
+def compose_plan(plan, out_dir, prof, frame, log=print):
+    """Every beat's full-screen clip (compose_beat); fills each plan entry's "clip" and "inset" (as made). Returns
+    (files per line per beat, problems)."""
+    import proof
+    files, problems = [], []
+    for n, lp in enumerate(plan, 1):
+        row = []
+        for k, e in enumerate(lp, 1):
+            try:
+                path, cplan = compose_beat(e["path"], e["from_s"], out_dir, prof, frame, e.get("inset"), e["focus"],
+                                           e["sound"])
+            except (proof.ProofError, clip.ProfileError) as err:
+                problems.append(f"line {n}, beat {k}: {err}")
+                row.append(None)
+                continue
+            e["clip"], e["inset"] = str(path), cplan.get("inset")
+            if cplan.get("inset"):
+                problems += proof.safe_zone_problems(proof.inset_screen_rect(), f"line {n}, beat {k}: the inset")
+            row.append(path)
+        files.append(row)
+    return files, problems
+
+
+def v3_spans(plan, times):
+    """Per line, the pick's own recording seconds on screen while it is spoken (B-roll from another recording left
+    out), and every beat: ([(from_s, to_s) or None per line], [(line, video, from_s, to_s, seconds) per beat])."""
+    line_spans, beats = [], []
+    for n, (lp, lengths) in enumerate(zip(plan, times["lines"]), 1):
+        own = []
+        for entry, seconds in zip(lp, lengths):
+            span = (n, entry["video"], entry["from_s"], round(entry["from_s"] + seconds, 2), seconds)
+            beats.append(span)
+            if entry["own"]:
+                own.append(span)
+        line_spans.append((min(s[2] for s in own), max(s[3] for s in own)) if own else None)
+    return line_spans, beats
+
+
+def frame_jpeg(clip_file, times, out, width=360, height=640, hide=None):
+    """A JPEG of a clip's frames at times, side by side (what the frame question looks at). hide: an [x, y, w, h]
+    rect of the 1080x1920 Short blurred out (launch-fixes: the beat question is about the gameplay, and our own
+    inset of the HUD's icons made the vision model call every inset beat "game text at the bottom")."""
+    import proof
+    tiles = len(times)
+    inputs, graph = [], []
+    for k, t in enumerate(times):
+        inputs += ["-ss", f"{max(0.0, t):.3f}", "-i", str(clip_file)]
+        if hide:
+            sx, sy = width / proof.W, height / proof.H
+            x, y = int(hide[0] * sx), int(hide[1] * sy)
+            w, h = max(2, int(hide[2] * sx) // 2 * 2), max(2, int(hide[3] * sy) // 2 * 2)
+            graph.append(f"[{k}:v]trim=end_frame=1,scale={width}:{height},split[a{k}][b{k}];"
+                         f"[b{k}]crop={w}:{h}:{x}:{y},boxblur=20:4[h{k}];[a{k}][h{k}]overlay={x}:{y}[f{k}]")
+        else:
+            graph.append(f"[{k}:v]trim=end_frame=1,scale={width}:{height}[f{k}]")
+    stack = "".join(f"[f{k}]" for k in range(tiles))
+    graph.append(f"{stack}hstack=inputs={tiles}[v]" if tiles > 1 else f"{stack}null[v]")
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", ";".join(graph), "-map", "[v]",
+                    "-frames:v", "1", "-q:v", "3", str(out)], capture_output=True)
+    return Path(out) if Path(out).is_file() else None
+
+
+def beat_checks(plan, times, out_dir, checker, log=print):
+    """Rules 3 and 4 for every beat, on the part of its clip that gets on screen: (problems, rejected shots,
+    flags). Measured: too dark or mostly blank (proof.shot_problems on 3 frames, the inset left out). Asked (the
+    vision model, frame_v1, 2 frames): too dark, empty, only the character's back, game text at the bottom (under
+    YouTube's title); text on the right edge is only a flag."""
+    import proof
+    problems, rejected, flags = [], [], []
+    for n, (lp, lengths) in enumerate(zip(plan, times["lines"]), 1):
+        for k, (entry, seconds) in enumerate(zip(lp, lengths), 1):
+            if seconds <= 0:
+                continue
+            where = f"line {n}, beat {k} ({entry['video'][-6:]} at {hms(entry['from_s'])})"
+            if seconds > proof.CLIP_S - 0.3:
+                problems.append(f"{where} is on screen {seconds:.1f} s; split it into two beats (a clip is "
+                                f"{proof.CLIP_S:g} s)")
+                continue
+            ts = [seconds * f for f in (0.2, 0.5, 0.8)]
+            why = []
+            ins = entry.get("inset")
+            sk = None
+            if ins:
+                x, y, w, h = proof.inset_screen_rect()
+                sk = [x // 4, y // 4, w // 4 + 1, h // 4 + 1]
+            found = []
+            for t, g in zip(ts, proof.clip_frames(entry["clip"], ts)):
+                if len(g) < 270 * 480:
+                    continue
+                on = bool(ins) and ins["t0"] <= t <= ins["t1"]
+                bad = proof.shot_problems(proof.frame_stats(g, 270, 480, sk if on else None))
+                if bad:
+                    found.append(bad)
+            if len(found) >= 2:                  # 2 of its 3 frames: one dark frame (a flash, a cut) is fine
+                why += found[-1]
+            if checker is not None:
+                jpg = frame_jpeg(entry["clip"], [seconds * 0.3, seconds * 0.7], Path(out_dir) / "checks" /
+                                 f"l{n}b{k}.jpg", hide=proof.inset_screen_rect() if ins else None)
+                answer, error = checker.frame(jpg, {"video": entry["video"], "clip": Path(entry["clip"]).name,
+                                                    "seconds": round(seconds, 2), "use": "beat"}) if jpg else (None,
+                                                                                                             "no frame")
+                if answer is None:
+                    why.append(f"the vision model couldn't judge it ({error})")
+                else:
+                    for key, text in (("dark", "too dark to see"), ("empty", "almost nothing to look at"),
+                                      ("back_only", "only the character's back in an empty place"),
+                                      ("text_bottom", "game text at the bottom, under YouTube's title")):
+                        if answer.get(key):
+                            why.append(f"{text} (vision model: \"{answer['note']}\")")
+                    if answer.get("text_right"):
+                        flags.append(f"TEXT ON THE RIGHT: {where} may have game text under YouTube's buttons; look")
+            if why:
+                why = list(dict.fromkeys(why))
+                rejected.append({"line": n, "beat": k, "video": entry["video"], "at": entry["from_s"], "why": why})
+                problems.append(f"{where}: " + "; ".join(why) + ". Pick brighter footage (a street, traffic, cars, "
+                                "people, the skyline, action)")
+    return problems, rejected, flags
+
+
+def word_tokens(text):
+    return [w.lower().strip("'’") for w in re.findall(r"[A-Za-z0-9'’]+", str(text))]
+
+
+def hud_at(series, t):
+    """(stars, look, icons) of the hud6 sample nearest t, or None."""
+    if not series:
+        return None
+    s = min(series, key=lambda s: abs(s[0] - t))
+    return s[1:] if abs(s[0] - t) <= 0.6 else None
+
+
+def caption_checks(run_log, plan, script_lines, checker, hud_series, out_dir, log=print):
+    """Rule 2, caption = picture, on the finished render (its log): every word that names a HUD thing must show while
+    the stars' inset is on; a count, "gone" or a star's look must be what the HUD reader reads in the inset at that
+    moment (the icon row boxed when only the icons are gone); a thing to see (police, a car, a street ...) must be in
+    the frame the vision model is shown. Returns the list of checks, each with "ok"."""
+    import proof
+    by_clip = {}
+    for lp in plan:
+        for entry in lp:
+            by_clip[str(Path(entry["clip"]))] = entry
+    visuals = run_log.get("visuals") or []
+    words = run_log.get("word_times") or []
+    checks = []
+
+    def shown_at(t):
+        for v in visuals:
+            if v["start_s"] <= t < v["start_s"] + v["seconds"]:
+                path = str(Path(str(v["source"]).split("@")[0].split(",")[0]))
+                entry = by_clip.get(path)
+                return v, entry, (v.get("source_start_s") or 0.0) + (t - v["start_s"])
+        return None, None, None
+    for k, w in enumerate(words):
+        t = w["start_s"] + WORD_LOOK_S
+        word = word_tokens(w["text"])
+        if not word:
+            continue
+        word = word[0]
+        v, entry, tau = shown_at(t)
+        if v is None or entry is None:
+            continue
+        line = script_lines[v["line"] - 1]["say"] if 0 < v["line"] <= len(script_lines) else ""
+        toks = word_tokens(line)
+        ins = entry.get("inset")
+        inset_on = bool(ins) and ins["t0"] <= tau <= ins["t1"] and ins.get("zoom") == "stars"
+        rec_ins = ins["from_s"] + (tau - ins["t0"]) if ins else None
+        nxt = word_tokens(words[k + 1]["text"]) if k + 1 < len(words) else []
+        prev = [word_tokens(x["text"])[0] for x in words[max(0, k - 2):k] if word_tokens(x["text"])]
+        base = {"word": w["text"], "t": round(w["start_s"], 2), "line": v["line"], "video": entry["video"],
+                "rec_s": round(entry["from_s"] + tau, 2)}
+        if word in HUD_NOUNS:
+            ok = inset_on
+            checks.append(dict(base, rule="the HUD is on screen", ok=ok,
+                               why=None if ok else f"\"{w['text']}\" shows while no close-up of the stars is on screen"))
+            if not ok:
+                continue
+            got = hud_at(hud_series.get(entry["video"]), rec_ins)
+            subject = HUD_NOUNS[word]
+            number = next((truth.NUMBER_WORDS.get(p, p) for p in reversed(prev) if p.isdigit() or (
+                p in truth.NUMBER_WORDS and p != "no")), None)
+            if number is not None:
+                have = None if got is None else (got[0] if subject == "stars" else got[2])
+                ok = have is not None and str(have) == str(number)
+                checks.append(dict(base, rule=f"{number} {subject}", ok=ok, saw=have,
+                                   why=None if ok else f"\"{number} {subject}\" but the HUD shows {have}"))
+        if word in GONE_WORDS or (word == "no" and nxt and nxt[0] in HUD_NOUNS):
+            subj = HUD_NOUNS.get(nxt[0]) if word == "no" and nxt else None
+            if subj is None:
+                before = [HUD_NOUNS[x] for x in toks[:toks.index(word) if word in toks else len(toks)] if x in HUD_NOUNS]
+                subj = before[-1] if before else ("icons" if "icon" in " ".join(toks) else "stars")
+            if not inset_on:
+                checks.append(dict(base, rule=f"{subj} gone", ok=False,
+                                   why=f"\"{w['text']}\" shows while no close-up of the {subj} is on screen"))
+                continue
+            got = hud_at(hud_series.get(entry["video"]), rec_ins)
+            have = None if got is None else (got[0] if subj == "stars" else got[2])
+            if any(x in ALL_WORDS for x in toks) or subj == "stars":
+                ok = have == 0
+                rule = f"no {subj} left"
+            else:
+                earlier = [s for s in hud_series.get(entry["video"]) or [] if rec_ins - GONE_BACK_S <= s[0] < rec_ins]
+                most = max(((s[1] if subj == "stars" else s[3]) or 0 for s in earlier), default=0)
+                ok = have is not None and have < most
+                rule = f"fewer {subj} than before"
+            if ok and subj == "icons" and got and got[0] and ins.get("box_name") != "icons":
+                ok, why = False, "the icons are gone but the stars are still lit: box the icon row (\"box\": \"icons\")"
+            else:
+                why = None if ok else f"\"{w['text']}\" but the HUD shows {have} {subj}"
+            checks.append(dict(base, rule=rule, ok=ok, saw=have, why=why))
+        if word in LOOK_WORDS and any(x in ("star", "stars") for x in toks):
+            got = hud_at(hud_series.get(entry["video"]), rec_ins) if inset_on else None
+            look = got[1] if got else None
+            ok = inset_on and look in LOOK_WORDS[word]
+            checks.append(dict(base, rule=f"{word} stars", ok=ok, saw=look,
+                               why=None if ok else (f"\"{w['text']}\" but the stars on screen are {look or 'not shown'}")))
+        if word in SEEN_WORDS and not (nxt and nxt[0] in ("icon", "icons")):
+            field = SEEN_WORDS[word]
+            answer, error = (None, "no vision model")
+            if checker is not None:
+                jpg = frame_jpeg(entry["clip"], [tau], Path(out_dir) / "checks" / f"w{k}_{word}.jpg", 540, 960)
+                answer, error = checker.frame(jpg, {"video": entry["video"], "clip": Path(entry["clip"]).name,
+                                                    "at": round(tau, 2), "use": "caption"}) if jpg else (None, "no frame")
+            ok = bool(answer) and bool(answer.get(field))
+            checks.append(dict(base, rule=f"{field} in the frame", ok=ok, saw=(answer or {}).get("note"),
+                               why=None if ok else (f"\"{w['text']}\" but the vision model sees no {field} "
+                                                    f"(\"{(answer or {}).get('note', error)}\")")))
+    return checks
+
+
+def full_screen_share(run_log):
+    """The share of the Short whose picture is gameplay full screen (explainer's "full" layout, insets included)."""
+    total = ((run_log.get("durations") or {}).get("video_s")) or sum(v["seconds"] for v in run_log.get("visuals") or [])
+    full = sum(v["seconds"] for v in run_log.get("visuals") or [] if v.get("layout") == "full")
+    return round(min(1.0, full / total), 3) if total else 0.0
+
+
+def v3_hud(plan, m, prof, hud6=None):
+    """{video stem: proof.hud6 series} round every stars inset of the plan (GTA 6 only)."""
+    import proof
+    spans = {}
+    for lp in plan:
+        for e in lp:
+            ins = e.get("inset")
+            if ins and ins.get("zoom") == "stars":
+                a, b = ins["from_s"] - GONE_BACK_S - 1, ins["from_s"] + (ins["t1"] - ins["t0"]) + 1
+                spans.setdefault(e["video"], []).append((max(0.0, a), b))
+    out = {}
+    for stem, parts in spans.items():
+        path = m["path"] if stem == m["video"] else None
+        if path is None:
+            continue
+        series = []
+        for a, b in sorted(parts):
+            series += (hud6 or proof.hud6)(path, a, b, prof)
+        out[stem] = sorted(set(series))
+    return out
+
+
+class V3Failed(RenderProblem):
+    """A rendered v3 Short whose checks failed: the problems, with the checks for the report."""
+
+    def __init__(self, text, checks):
+        super().__init__(text)
+        self.checks = checks
+
+
+def render_v3(short, m, out_dir, facts, today, indexes, used=(), log=print, timing=None, render=None, checker=None,
+              hud6=None):
+    """One Short with engine v3 (both types). Before anything is made: every beat (plan_v3), the voice's timing, the
+    lines (truth.check_short on that timing), every beat's footage clean in the index and not shown by an earlier
+    Short. Then the insets are timed to their words, the full-screen clips are made, and every beat must be bright,
+    full and free of game text under YouTube's title (beat_checks). After the render: every caption against its frame
+    (caption_checks). A Short that fails any check is FAILED, with the checks kept for the report."""
+    import explainer
+    out_dir = Path(out_dir)
+    prof = clip.load_profile(m["profile"]) if m.get("profile") else clip.load_profile("gta6")
+    frame = tuple(prof.frame)
+    videos = {i["video"]["stem"]: i["video"]["path"] for i in indexes or []}
+    plan, problems = plan_v3(short, m, videos)
+    if problems:
+        raise RenderProblem("\n  ".join(dict.fromkeys(problems)))
+    path = out_dir / "script_v3.json"
+    path.write_text(json.dumps(v3_script(short, plan), indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        times = (timing or explainer.timing)(path, GTA_ROOT)
+    except explainer.ScriptError as e:
+        raise RenderProblem(f"explainer.py can't read the script: {e}") from None
+    total = times["total_s"]
+    lo, hi = TOPIC_LENGTH if m["type"] == "narrated" else ACTION_V3_LENGTH
+    if not lo <= total <= hi:
+        words = footage_short.make_short.spoken_words({"lines": short.get("lines") or []})
+        change = round(((lo + hi) / 2 - total) * words / max(total, 1.0))
+        problems.append(f"the voice comes to {total:.1f} s with {words} words; a{'n action' if m['type'] == 'action' else ' narrated'} "
+                        f"Short is {lo:g}-{hi:g} s: {'add' if change > 0 else 'cut'} about {abs(change)} words")
+    line_spans, beats = v3_spans(plan, times)
+    pay = [n for n, l in enumerate(short.get("lines") or []) if l.get("payoff")]
+    if pay and total > 0:
+        at = sum(sum(x) for x in times["lines"][:pay[0]]) / total
+        if not PAYOFF_V3[0] <= at <= PAYOFF_V3[1]:
+            problems.append(f"the payoff (line {pay[0] + 1}) starts {at:.0%} into the Short; it belongs at "
+                            f"{PAYOFF_V3[0]:.0%}-{PAYOFF_V3[1]:.0%}: move lines before or after it")
+    paths = dict(videos, **{m["video"]: m["path"]})
+    shown = [{"video": paths.get(v, v), "start_s": a, "end_s": b, "line": n, "what": "footage"}
+             for n, v, a, b, _ in beats]
+    problems += footage_short.unclean(shown, indexes)
+    for n, v, a, b, _ in beats:
+        if any(u == v and a < e and st < b for u, st, e in used):
+            problems.append(f"line {n}: the footage of {v[-6:]} at {hms(a)}-{hms(b)} was shown by an earlier Short: "
+                            "move that beat")
+    more, flags, claims = truth.check_short(short, m, facts, today, line_spans, engine="v3")
+    problems += more
+    if problems:
+        raise RenderProblem("\n  ".join(dict.fromkeys(problems)))
+    if checker is None:
+        raise RenderProblem("the vision model isn't running, so the B-roll and caption checks can't run: open Ollama "
+                            "and render again")
+    for note in place_insets(short, plan, times):
+        log("  " + note)
+    files, more = compose_plan(plan, out_dir, prof, frame, log)
+    if more:
+        raise RenderProblem("\n  ".join(dict.fromkeys(more)))
+    script = v3_script(short, plan, files)
+    more, rejected, beat_flags = beat_checks(plan, times, out_dir, checker, log)
+    flags += beat_flags
+    checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": None}
+    if more:
+        raise V3Failed("\n  ".join(dict.fromkeys(more)), checks)
+    resolved = out_dir / "script_resolved.json"
+    resolved.write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.unlink(missing_ok=True)
+    if render:
+        render(resolved, out_dir)
+    else:
+        try:
+            explainer.render(resolved, GTA_ROOT, SHORTS_DIR, run_dir=out_dir)
+        except explainer.ScriptError as e:
+            raise RenderProblem(f"explainer.py can't render it: {e}") from None
+    run_log = json.loads((out_dir / "log.json").read_text(encoding="utf-8"))
+    checks["full_screen"] = full_screen_share(run_log)
+    checks["caption_checks"] = caption_checks(run_log, plan, script["lines"], checker, v3_hud(plan, m, prof, hud6),
+                                              out_dir, log)
+    (out_dir / "checks.json").write_text(json.dumps(checks, indent=2, ensure_ascii=False), encoding="utf-8")
+    bad = [c for c in checks["caption_checks"] if not c["ok"]]
+    if bad:
+        raise V3Failed("\n  ".join(f"caption \"{c['word']}\" at {c['t']:.1f} s (line {c['line']}): {c['why']}"
+                                   for c in bad), checks)
+    (out_dir / "claims.txt").write_text(truth.claims_text(short, m, claims, facts), encoding="utf-8")
+    sound = any(e["sound"] for lp in plan for e in lp)
+    used_spans = sorted({(v, a, b) for _, v, a, b, _ in beats})
+    return {"length_s": round((run_log.get("durations") or {}).get("video_s", total), 2), "flags": flags,
+            "line_spans": line_spans, "music": Path((run_log.get("music") or {}).get("file") or "").name or None,
+            "shown": [list(x) for x in used_spans], "engine": "v3", "game_sound": sound, "checks": checks}
+
+
 def explainer_error():
     import explainer
     return explainer.ScriptError
@@ -1592,8 +2618,8 @@ def short_folder(folder, n, title):
 
 
 def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
-               checker=None, timing=None, narrated_render=None, action_render=None, engine="v2", synth=None,
-               v2_render=None):
+               checker=None, timing=None, narrated_render=None, action_render=None, engine="v3", synth=None,
+               v2_render=None, v3_render=None, used=None, hud6=None):
     """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems)."""
     m = moment_for(cand, short)
     n = m["short"]
@@ -1611,15 +2637,16 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     if short.get("start_s") is not None:
         m, problems = trimmed(m, short["start_s"])
         entry["window"] = m["window"]
-    more, flags, _ = truth.check_short(short, m, facts, today)
+    more, flags, _ = truth.check_short(short, m, facts, today, engine=engine)
     problems += more
-    peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" else (None, []))
+    peak, peak_problems = (check_peak(short, m, no_cold_open) if m["type"] == "action" and engine != "v3"
+                           else (None, []))
     problems += peak_problems
     if problems:
         entry["problems"] = problems
         return entry
     out.mkdir(parents=True, exist_ok=True)
-    hook = hooks_list[star]
+    hook = hooks_list[star] if isinstance(star, int) and 0 <= star < len(hooks_list) else None
     try:
         if short.get("start_s") is not None and checker is not None:
             gore = safety_checks.bad_start(checker, recs_stub(m), m["path"],
@@ -1627,7 +2654,11 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
             if gore:
                 raise RenderProblem("start_s: the new first 7 s show blood or swearing ("
                                     + "; ".join(safety_checks.fmt(gore)) + "); pick another start")
-        if m["type"] == "action":
+        if engine == "v3":
+            done = render_v3(short, m, out, facts, today, indexes, used or (), log, timing, v3_render, checker, hud6)
+            flags += done.pop("flags", [])
+            peak = None
+        elif m["type"] == "action":
             if peak is not None and checker is not None:
                 cold = safety_checks.first_seconds(m["window"][0], peak)[0]
                 gore = safety_checks.bad_start(checker, recs_stub(m), m["path"], [cold], out / "safety")
@@ -1649,16 +2680,47 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
             flags += done.pop("flags", [])
     except RenderProblem as e:
         entry["problems"] = [str(e)]
+        if getattr(e, "checks", None):
+            entry["checks"] = e.checks
         return entry
     tp = safety_checks.guard_true_peak(out / "short.mp4", log=lambda s: log("  " + s))
     (out / "upload.txt").write_text(footage_short.make_short.upload_text(short), encoding="utf-8")
     if any(e["kind"] == "event" and e["value"] == "crash" for e in m["evidence"]):
         flags.append("CRASH: check that it looks cinematic, not clumsy")
-    flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is NOT "
-                 "checked (no speech-to-text): listen once before uploading")
+    game_sound = engine != "v3" or done.get("game_sound")
+    heard = speech_check(out / "short.mp4", log)
+    if heard is None:
+        if game_sound:
+            flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is "
+                         "NOT checked (no speech-to-text): listen once before uploading")
+    else:
+        if heard["early"]:
+            raise RenderProblem("spoken swearing in the first 7 s (speech check): "
+                                + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
+                                + "; pick another start or footage without that line")
+        for t, w in heard["later"]:
+            flags.append(f"SWEARING: {w!r} is said at {t:.1f} s (speech check); cut it or mute that part")
+        if game_sound and not heard["later"]:
+            flags.append(f"SOUND: the game's own sound is in; the speech check heard no swearing "
+                         f"({heard['words']} words). Listen once anyway: it can miss mumbled words")
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
+
+
+def speech_check(path, log=print, check=None):
+    """launch-fixes: speech.swearing on a finished Short, or None where faster-whisper isn't installed (or fails:
+    the Short then keeps the "listen once" flag)."""
+    import speech
+    if check is None:
+        if not speech.available():
+            return None
+        check = speech.swearing
+    try:
+        return check(path)
+    except Exception as e:                      # a broken speech check must not stop the night
+        log(f"  Note: the speech check failed ({e}); listen to this Short once")
+        return None
 
 
 def recs_stub(m):
@@ -1673,9 +2735,16 @@ def commands(folder, n):
             "hook": [f'{py} --run "{folder}" --short {n} --hook {k}' for k in (1, 2, 3)]}
 
 
+def kept_results(old, written):
+    """The earlier render.json entries a render keeps (a --short N render keeps the others): only those whose Short
+    is still in shorts.json (launch-fixes: a renumbered Short left its old FAILED entry on the review page)."""
+    now = {s.get("short") for s in written.get("shorts", []) if isinstance(s, dict)}
+    return {e["short"]: e for e in (old or {}).get("shorts", []) if e.get("short") in now}
+
+
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
            facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
-           engine="v2", synth=None, v2_render=None):
+           engine="v3", synth=None, v2_render=None, v3_render=None):
     """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
     Returns the render.json data; review.html is written next to it."""
     import facts as facts_file
@@ -1695,16 +2764,18 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
         except vlm.VlmError as e:
             log(f"  Note: the auto peak's gore check is off ({e}); the cold open is flagged for a look")
             checker = None
-    old = read_json(folder / RENDER_LOG) or {"shorts": []}
-    results = {e["short"]: e for e in old.get("shorts", [])}
+    results = kept_results(read_json(folder / RENDER_LOG), written)
     for short in written["shorts"]:
         if only is not None and short.get("short") != only:
             continue
         log(f"Short {short.get('short')}: {short.get('title')}")
         try:
+            mine_name = Path(short_folder(folder, short.get("short"), short.get("title"))).name + "@" + folder.name
+            used = [] if cand.get("dry_run") else [tuple(sp) for s2 in footage_short.load_used(shorts_dir)["shorts"]
+                                                   if s2.get("name") != mine_name for sp in s2.get("spans", [])]
             entry = render_one(short, cand, folder, facts, today, indexes, hook_choice if only else None,
                                no_cold_open and only is not None, log, checker, timing, narrated_render, action_render,
-                               engine, synth, v2_render)
+                               engine, synth, v2_render, v3_render, used)
         except RenderProblem as e:
             entry = {"short": short.get("short"), "status": "FAILED", "problems": [str(e)], "flags": []}
         entry["commands"] = commands(folder, entry["short"])
@@ -1724,6 +2795,31 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
         note_run(shorts_dir, folder, [r["path"] for r in cand["recordings"]], "rendered")
     log(f"Review page: {page}")
     return data
+
+
+def checks_block(checks):
+    """The engine v3 checks on the review page: how much of the Short is full-screen gameplay, every caption checked
+    against its frame, and every shot rejected (too dark, empty, game text under YouTube's title)."""
+    if not checks:
+        return ""
+    out = []
+    if checks.get("full_screen") is not None:
+        out.append(f"<p>Full-screen gameplay: <b>{checks['full_screen']:.0%}</b> of the Short</p>")
+    caps = checks.get("caption_checks") or []
+    if caps:
+        rows = "".join(f'<li class="{"ok" if c["ok"] else "bad"}">{"&#10003;" if c["ok"] else "&#10007;"} '
+                       f'{c["t"]:.1f} s "{esc(c["word"])}" (line {c["line"]}): {esc(c["rule"])}'
+                       + (f' &middot; {esc(c["why"])}' if c.get("why") else "")
+                       + (f' &middot; saw: {esc(c["saw"])}' if c.get("saw") not in (None, "") and c["ok"] else "")
+                       + "</li>" for c in caps)
+        out.append(f"<h3>Caption = picture ({sum(c['ok'] for c in caps)} of {len(caps)} pass)</h3>"
+                   f"<ul class=\"checks\">{rows}</ul>")
+    rej = checks.get("rejected_shots") or []
+    if rej:
+        rows = "".join(f'<li class="bad">line {r["line"]}, beat {r["beat"]} ({esc(r["video"])} at {library.hms(r["at"])})'
+                       f': {esc("; ".join(r["why"]))}</li>' for r in rej)
+        out.append(f"<h3>Shots rejected</h3><ul class=\"checks\">{rows}</ul>")
+    return "".join(out)
 
 
 def esc(text):
@@ -1816,7 +2912,7 @@ def write_review(folder, cand, written, data):
                 + f'{"NO-HUD MODE" if m.get("mode") == "nohud" else "HUD rules on"} &middot; why this type: '
                 f'{esc(m.get("type_why"))}')
         if short.get("format"):
-            story = (f'<b>{esc(short["format"])}</b> ({esc(truth.FORMATS.get(short["format"], ""))}): '
+            story = (f'<b>{esc(short["format"])}</b> ({esc({**truth.FORMATS, **truth.V3_FORMATS}.get(short["format"], ""))}): '
                      f'{esc(short.get("format_why"))}')
             if entry.get("payoff_at") is not None:
                 story += f' &middot; payoff at {entry["payoff_at"]:.0%}'
@@ -1825,6 +2921,7 @@ def write_review(folder, cand, written, data):
                           f'{entry.get("background_avg_s")} s')
             gaps = "; ".join(f'{g["from_s"]:.1f}-{g["to_s"]:.1f} s: {g["why"]}' for g in entry.get("gaps_over_2s") or [])
             meta += f'<br>Story: {story}' + (f'<br>Gaps over 2 s: {esc(gaps)}' if gaps else "")
+        checks_html = checks_block(entry.get("checks"))
         source = rel(folder, m["path"]) + f'#t={m["window"][0]:.1f},{m["window"][1]:.1f}' if m.get("path") else ""
         claims = (f' &middot; <a href="{rel(folder, entry["files"]["claims.txt"])}">claims.txt</a>'
                   if ok and "claims.txt" in entry.get("files", {}) else "")
@@ -1837,6 +2934,7 @@ def write_review(folder, cand, written, data):
   <div>
    {'<h3>Problems (not rendered)</h3><ul class="problems">' + problems + '</ul>' if problems else ''}
    <h3>Flags: check these</h3><ul class="flags">{flags or '<li class="ok">none</li>'}</ul>
+   {checks_html}
    <h3>Hooks (&#11088; = on the Short)</h3><ul class="hooks">{hooks_html}</ul>
    {'<h3>Script and its evidence</h3><ol class="lines">' + ''.join(lines) + '</ol>' if lines else ''}
    {f'<h3>Upload text</h3><pre class="upload">{esc(upload)}</pre><button data-copy="{esc(upload)}">Copy upload text</button>' if upload else ''}
@@ -1852,8 +2950,16 @@ def write_review(folder, cand, written, data):
                    + (f" &middot; {esc('; '.join(r['hud_check']['reasons']))}" if (r.get('hud_check') or {}).get('reasons')
                       else "") + "</li>" for r in run["recordings"])
     timing = ", ".join(f"{k} {v / 60:.1f} min" if v >= 60 else f"{k} {v:.0f} s" for k, v in run.get("timing_s", {}).items())
+    hud = run.get("hud") or {}
+    banner = ""
+    if hud.get("mode") in ("nohud", "partial"):
+        lost = "".join(f"<li>{esc(stem)}: {esc(why)}</li>" for stem, why in (hud.get("nohud_recordings") or {}).items())
+        banner = (f'<div class="hudwarn"><b>{"HUD NOT FOUND" if hud["mode"] == "nohud" else "HUD NOT READ ON SOME RECORDINGS"}'
+                  f'</b>: no wanted-star counts {"anywhere" if hud["mode"] == "nohud" else "for these recordings"}, so no '
+                  f'Short mentions stars there and labels come from the vision model alone. Why: {esc(hud.get("why", ""))}'
+                  f'{"<ul>" + lost + "</ul>" if lost else ""}Full log: <code>{esc(hud.get("log", ""))}</code></div>')
     page = REVIEW_PAGE.format(
-        title=esc(folder.name), dry=('<p class="dry">DRY RUN: nothing was logged as used footage; these Shorts are '
+        hudwarn=banner, title=esc(folder.name), dry=('<p class="dry">DRY RUN: nothing was logged as used footage; these Shorts are '
                                     'for testing.</p>' if run.get("dry_run") else ""),
         calibration=esc(f"{run['calibration']['profile']}: {run['calibration']['why']}"), recordings=recs,
         timing=esc(timing), cards="".join(cards),
@@ -1878,6 +2984,7 @@ main {{ max-width:1200px; margin:0 auto; padding:16px; }}
 h1 {{ font-size:22px; margin:0 0 6px; }} h2 {{ font-size:19px; margin:0 0 4px; }} h3 {{ font-size:14px; margin:14px 0 4px;
   color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }}
 .steps {{ background:#13233a; border:1px solid #2b4a75; border-radius:8px; padding:12px 16px; }}
+.hudwarn {{ background:#3a1518; border:2px solid var(--red); border-radius:8px; padding:12px 16px; margin:0 0 12px; }}
 .steps li {{ margin:4px 0; }}
 .dry {{ background:#3a2a10; border:1px solid var(--amber); border-radius:6px; padding:8px 12px; }}
 article {{ background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--green); border-radius:8px;
@@ -1910,6 +3017,7 @@ a {{ color:#93c5fd; }}
 @media (max-width:800px) {{ .grid {{ grid-template-columns:1fr; }} }}
 </style></head><body><main>
 <h1>Launch review: {title}</h1>
+{hudwarn}
 {dry}
 <div class="steps"><b>What to do (about 5 minutes per Short). {ready} of {total} Shorts are ready.</b>
 <ol>
@@ -1952,6 +3060,7 @@ def main():
     p.add_argument("--every", type=float, default=index.EVERY_S,
                    help=f"seconds of video per index sheet (default {index.EVERY_S:g})")
     p.add_argument("--star-slots", type=int, help="wanted-star slots for calibration (default: the game's)")
+    p.add_argument("--count", type=int, default=3, help="how many Shorts to make (default 3, at least 1)")
     p.add_argument("--dry-run", action="store_true",
                    help="a trial: its own folder, profile and library; _used_footage.json is neither read nor written")
     p.add_argument("--date", help="the date in the folder name (default today)")
@@ -1964,8 +3073,9 @@ def main():
     f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
     f.add_argument("--short", type=int, required=True, help="the pick's number")
     f.add_argument("--at", type=float, nargs="+", required=True, help="recording time(s) in seconds")
-    r.add_argument("--engine", choices=ENGINES, default="v2",
-                   help="v2 (default): the story layer (edit2.py); v1: PR 25's explainer.py render")
+    r.add_argument("--engine", choices=ENGINES, default="v3",
+                   help="v3 (default): every Short the Step 0 sample's way (hook card, voice, captions, close-ups); "
+                        "v2: PR 26's story layer (narrated only); v1: PR 25's explainer.py render")
     args = ap.parse_args()
     try:
         if args.stage == "frame":
@@ -1979,16 +3089,19 @@ def main():
                 out = Path(folder) / "moments" / f"{m['id']}_grid_{at:.1f}.jpg"
                 print(out if grid_frame(m["path"], at, out) else f"ERROR: no frame at {at} s")
         elif args.stage == "prepare":
-            prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input, day=args.date,
-                    slots=args.star_slots, log=lambda m: print(m, flush=True))
+            with heavy.job("launch.py prepare", log=lambda m: print(m, flush=True)):
+                prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input,
+                        count=max(1, args.count), day=args.date, slots=args.star_slots,
+                        log=lambda m: print(m, flush=True))
         else:
             if (args.hook or args.no_cold_open) and args.short is None:
                 ap.error("--hook and --no-cold-open need --short N")
-            data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True),
-                          engine=args.engine)
+            with heavy.job("launch.py render", log=lambda m: print(m, flush=True)):
+                data = render(args.run, args.short, args.hook, args.no_cold_open, log=lambda m: print(m, flush=True),
+                              engine=args.engine)
             if any(e["status"] != "READY" for e in data["shorts"]):
                 sys.exit(1)
-    except (LaunchError, index.IndexError_, safety_checks.SafetyError) as e:
+    except (LaunchError, index.IndexError_, safety_checks.SafetyError, heavy.Busy) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
 

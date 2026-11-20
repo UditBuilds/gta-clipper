@@ -1,0 +1,19 @@
+You are checking gameplay footage from the video game {GAME} before it goes into a YouTube Short.
+The picture is a sheet of 4 frames from one recording, in time order: top-left is first, then top-right, then bottom-left, and bottom-right is last. A fully black frame at the end only means the footage ended there.
+Look only at these frames. Answer true only for what you can clearly see in at least one frame.
+Normal gameplay shows a small minimap and a few icons in the corners of the picture; they are not a menu or a map.
+
+Answer in JSON with these fields, in this order:
+- note: one plain line of at most 15 words that says what the frames show.
+- phone_screen: true if the character's mobile phone is held up on the screen, or a phone screen (a call, contacts, messages, apps, a camera) is shown, even if it is small and in a corner.
+- menu_or_map: true if a pause menu, a map that fills the screen, a shop or weapon menu, a list of options, or a mission passed or failed screen is shown. The small minimap in a corner does not count.
+- loading_or_black: true if a loading screen, a logo screen, or a fully black or blank frame is shown (a black frame at the very end does not count).
+- cutscene: true if it is a film-like cinematic scene that the player does not control: characters talking or acting while the camera cuts between shots or close-ups, usually with no minimap or other HUD, sometimes with black bars above and below the picture.
+- blood_or_gore: true if blood, a wound, or a dead or bleeding body can be seen.
+- subtitles: true if lines of dialogue subtitles are written on the picture.
+- crash: true if a vehicle is clearly hitting something (another vehicle, a wall, a pole, a building, a person) or has just hit it, in at least one frame. A car only driving fast, turning or skidding is not a crash.
+- shooting: true if a character is clearly firing a gun, or aiming a gun at a person. A gun only held at the side or in a shop is not shooting.
+- police: true if police officers or police cars can be clearly seen.
+- explosion: true if an explosion, a fireball, or burning wreckage can be seen.
+- stunt: true if a vehicle is clearly in the air (a jump) or flipping over.
+- water: true if the character is swimming, diving, or on a boat out on the water.

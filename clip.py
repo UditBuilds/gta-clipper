@@ -19,6 +19,10 @@ v9 moves every HUD value (boxes, colours, thresholds, durations) into a profile,
 --profile (default gta5: GTA V on PS5, the values v2-v7 had in code). calibrate.py makes new profiles.
 v10 (--spread, default v10; --spread v9 is the old rule): a stretch with no minimap no longer ends an action sequence,
 so a short pause map inside a chase can't let that chase give more than MAX_PER_SEQ clips.
+launch-fixes (GTA 6): a profile may read the HUD two new ways. GTA 6's minimap has no coloured bars, so "minimap":
+{"method": "arrow"} looks for the player arrow instead (a dark disc with a white pointer, always at the same spot);
+its wanted stars are red, red outlines or white outlines over faint grey empty slots, so "stars": {"method": "gta6"}
+counts the lit slots by colour and shape, and the star score is that count. GTA V profiles are read as before.
 Each run also writes hooks.txt; --burn-hooks puts the hooks typed there on the finished clips, with a cold open and a zoom
 where a peak is typed (hooks.py). It runs no detection and picks nothing.
 
@@ -187,6 +191,23 @@ OFF_PHONE = {"box": [0, 0, 8, 4], "cell": [8, 4], "dark": {"area": [0, 0, 8, 4],
              "bright": {"area": [0, 0, 8, 4], "min_mean": 255.0},
              "grey": {"areas": [[0, 0, 8, 4]], "min": 0.0, "max": 0.0, "max_spread": 0.0, "max_tint": 0.0}}
 
+# GTA 6 (launch-fixes). "bars" and "outline" are GTA V's ways and stay the default.
+MINIMAP_METHODS = ("bars", "arrow")
+STAR_METHODS = ("outline", "gta6")
+# The player arrow: a dark disc (about 8.5 px radius at 1080p) with a white pointer in its middle. Seen when enough of
+# the middle is bright and enough of a ring inside the disc's edge is dark. The pointer turns with the heading, so
+# only part of the middle is ever white. Measured on 12 frames of 9 recordings (Nov 19); calibration sets its own.
+ARROW_DEFAULTS = {"core_r": 3.5, "ring": [6.0, 8.0], "core_min": 170.0, "core_share": 0.25, "ring_max": 95.0,
+                  "ring_share": 0.6}
+# GTA 6's stars, per slot of the row (lit slots fill from the right). A lit star is solid red (its middle red, round it
+# not), or an outline, red or white: a dark edge, darker than the star's middle and than what is round it (or with a
+# white stroke just inside it, which shows on a dark background too). Empty slots are a flat, see-through grey, and a
+# red wall or a sunset is red inside and round the slot alike. When no star is lit the money ("$160" and a green
+# wallet icon on a dark disc) sits in the row instead, so that means no stars. Set on 25 frames of 7 recordings (Nov 19).
+GTA6_COUNT = {"fill_from": "right", "red_mid": 0.4, "red_round": 0.15, "edge_drop": 25, "stroke": 20, "wallet": 0.03,
+              "wallet_dark": 0.3, "red_r": 90, "red_gap": 60}
+GTA6_BANDS = (1.2, 2.6, 3.0)               # px: the edge band inside the outline, the stroke band to 2.6, and round it
+
 
 def load_profile(name, path=None):
     """The HUD profile profiles/<name>.json (or path), checked, as a namespace with everything the HUD code uses.
@@ -241,8 +262,25 @@ def load_profile(name, path=None):
     ph = phone if phone_on else OFF_PHONE
 
     bar_box = rect(get(mm, "box", "minimap box"), "minimap box")
-    bars = get(mm, "bars", "minimap bars")
-    need(isinstance(bars, list) and len(bars) >= 2, "the minimap needs at least 2 bars")
+    method = mm.get("method", "bars")
+    need(method in MINIMAP_METHODS, f"minimap method must be one of {', '.join(MINIMAP_METHODS)}, not {method!r}")
+    arrow = None
+    if method == "arrow":
+        arrow = {**ARROW_DEFAULTS, **{k: v for k, v in mm.items() if k in ARROW_DEFAULTS}}
+        centre = get(mm, "centre", "minimap centre")
+        need(isinstance(centre, list) and len(centre) == 2 and all(isinstance(v, (int, float)) for v in centre),
+             f"minimap centre must be [x, y] (the middle of the player arrow), not {centre!r}")
+        need(bar_box[0] <= centre[0] <= bar_box[0] + bar_box[2] and bar_box[1] <= centre[1] <= bar_box[1] + bar_box[3],
+             f"the minimap centre {centre} is not inside the minimap box {list(bar_box)}")
+        ring = arrow["ring"]
+        need(isinstance(ring, list) and len(ring) == 2 and 0 < ring[0] < ring[1], "minimap ring must be [inner, outer]")
+        for k in ("core_r", "core_min", "core_share", "ring_max", "ring_share"):
+            num(arrow[k], f"minimap {k}")
+        arrow["centre"] = (float(centre[0]), float(centre[1]))
+        bars = []
+    else:
+        bars = get(mm, "bars", "minimap bars")
+        need(isinstance(bars, list) and len(bars) >= 2, "the minimap needs at least 2 bars")
     segments, rules = [], []
     for i, bar in enumerate(bars, 1):
         xr = get(bar, "x_range", f"x_range of bar {i}")
@@ -264,13 +302,18 @@ def load_profile(name, path=None):
             rule.append(tuple(terms))
         segments.append(tuple(xr))
         rules.append(tuple(rule))
-    min_bars = get(mm, "min_bars")
-    need(isinstance(min_bars, int) and 2 <= min_bars <= len(bars), f"min_bars must be 2 to {len(bars)}")
+    if method == "bars":
+        min_bars = get(mm, "min_bars")
+        need(isinstance(min_bars, int) and 2 <= min_bars <= len(bars), f"min_bars must be 2 to {len(bars)}")
+    else:
+        min_bars = 0
 
     star_box = rect(get(s, "box", "stars box"), "stars box")
     slots = get(s, "slots", "stars slots")
     need(isinstance(slots, int) and slots >= 1, "stars slots must be a whole number, at least 1")
     first, spacing = num(get(s, "first_tip_x"), "first_tip_x"), num(get(s, "tip_spacing"), "tip_spacing")
+    star_method = s.get("method", "outline")
+    need(star_method in STAR_METHODS, f"stars method must be one of {', '.join(STAR_METHODS)}, not {star_method!r}")
 
     phone_box = rect(get(ph, "box", "phone box"), "phone box")
     cell = get(ph, "cell", "phone cell")
@@ -295,8 +338,9 @@ def load_profile(name, path=None):
         hidden_pad=num(get(stretch, "pad_s", "stretch pad_s"), "stretch pad_s"),
         bar_box=bar_box, bar_segments=tuple(segments), bar_rules=tuple(rules),
         bar_names=tuple(b.get("name", f"bar {i}") for i, b in enumerate(bars, 1)),
-        bar_min_sat=num(get(mm, "min_sat"), "min_sat"), bar_min_count=min_bars,
-        bar_min_distinct=num(get(mm, "min_distinct"), "min_distinct"), min_share=num(get(mm, "min_share"), "min_share"),
+        bar_min_sat=num(mm.get("min_sat", 0.0) if arrow else get(mm, "min_sat"), "min_sat"), bar_min_count=min_bars,
+        bar_min_distinct=num(mm.get("min_distinct", 0.0) if arrow else get(mm, "min_distinct"), "min_distinct"),
+        min_share=num(get(mm, "min_share"), "min_share"), minimap_method=method, arrow=arrow, star_method=star_method,
         stars_on=stars_on, star_box=star_box, star_tips_x=tuple(first + spacing * k for k in range(slots)),
         star_tip_y=num(get(s, "tip_y"), "tip_y"), star_radius=num(get(s, "radius"), "radius"),
         star_inner=num(get(s, "inner"), "inner"), star_min_score=num(get(s, "min_score"), "min_score"),
@@ -315,6 +359,13 @@ def load_profile(name, path=None):
     prof.hud_w = max(star_box[2], bar_box[2], prof.phone_cols)
     prof.frame_bytes = prof.hud_w * (star_box[3] + bar_box[3] + prof.phone_rows) * 3
     prof.star_template = star_template(prof)
+    if arrow:
+        prof.arrow_pixels = arrow_pixels(prof)
+    if star_method == "gta6":
+        count = s.get("count") or {}
+        need(isinstance(count, dict), "stars count must be an object")
+        prof.gta6_rule = {**GTA6_COUNT, **{k: v for k, v in count.items() if k in GTA6_COUNT}}
+        prof.gta6_masks = gta6_masks(prof)
     return prof
 
 
@@ -369,8 +420,10 @@ def star_score(rgb, prof):
 
     Edges are used rather than brightness because filled (white), empty (grey) and flashing stars all
     have the same dark outline, and the ammo/cash text that sits in this row when you are not wanted
-    has different shapes.
+    has different shapes. A "gta6" stars profile scores the number of lit stars instead (gta6_star_count).
     """
+    if getattr(prof, "star_method", "outline") == "gta6":
+        return float(gta6_star_count(rgb, prof))
     w, h = prof.star_box[2], prof.star_box[3]
     hud_w = prof.hud_w
     lum = [0.2126 * rgb[i] + 0.7152 * rgb[i + 1] + 0.0722 * rgb[i + 2]
@@ -418,7 +471,10 @@ def minimap_seen(rgb, prof):
     The minimap itself flashes red and blue while wanted, so the bars are checked instead. At least min_bars
     must show their own colour (gta5: health green, or red when low; armour blue; ability yellow), and those
     must differ from each other, so a plain orange or beige background can't pass as two bars.
+    An "arrow" profile (GTA 6, no bars) checks the player arrow instead (arrow_seen).
     """
+    if getattr(prof, "minimap_method", "bars") == "arrow":
+        return arrow_seen(rgb, prof)
     ok = [c for c, rule in zip(bar_means(rgb, prof), prof.bar_rules)
           if bar_colour_ok(c, rule) and saturation(c) >= prof.bar_min_sat]
     return (len(ok) >= prof.bar_min_count
@@ -468,6 +524,177 @@ def phone_seen(rgb, prof):
     return (m["face_max"] <= prof.phone_face_max and m["battery_mean"] >= prof.phone_battery_min
             and lo <= m["panel_min"] and m["panel_max"] <= hi
             and m["panel_max"] - m["panel_min"] <= prof.phone_panel_spread and m["panel_tint"] <= prof.phone_panel_tint)
+
+
+def lum_at(rgb, p):
+    return 0.2126 * rgb[p] + 0.7152 * rgb[p + 1] + 0.0722 * rgb[p + 2]
+
+
+def arrow_pixels(prof):
+    """GTA 6: where to look in the minimap crop: (middle, ring) as byte offsets into the HUD frame (hud_filter's
+    layout, the minimap crop below the star crop). Distances are from the profile's centre, in frame pixels."""
+    a = prof.arrow
+    bx, by, bw, bh = prof.bar_box
+    off = prof.star_box[3] * prof.hud_w * 3
+    core, ring = [], []
+    for y in range(bh):
+        for x in range(bw):
+            d = math.hypot(bx + x + 0.5 - a["centre"][0], by + y + 0.5 - a["centre"][1])
+            p = off + (y * prof.hud_w + x) * 3
+            if d <= a["core_r"]:
+                core.append(p)
+            elif a["ring"][0] <= d <= a["ring"][1]:
+                ring.append(p)
+    return core, ring
+
+
+def arrow_measure(rgb, prof):
+    """GTA 6: (share of the arrow's middle that is bright, share of the ring inside its disc's edge that is dark)."""
+    a = prof.arrow
+    core, ring = prof.arrow_pixels
+    bright = sum(1 for p in core if lum_at(rgb, p) >= a["core_min"]) / max(1, len(core))
+    dark = sum(1 for p in ring if lum_at(rgb, p) <= a["ring_max"]) / max(1, len(ring))
+    return bright, dark
+
+
+def arrow_seen(rgb, prof):
+    """GTA 6: the minimap is on screen when its player arrow is: a white pointer in the middle of a dark disc."""
+    bright, dark = arrow_measure(rgb, prof)
+    return bright >= prof.arrow["core_share"] and dark >= prof.arrow["ring_share"]
+
+
+def star_polygons(prof):
+    """The outline of each star slot, as star_template() draws it: 10 points in the profile's frame pixels."""
+    polys = []
+    for tx in prof.star_tips_x:
+        cx, cy = tx, prof.star_tip_y + prof.star_radius
+        polys.append([(cx + r * math.cos(a), cy + r * math.sin(a))
+                      for i in range(10)
+                      for a, r in [(-math.pi / 2 + i * math.pi / 5,
+                                    prof.star_radius if i % 2 == 0 else prof.star_radius * prof.star_inner)]])
+    return polys
+
+
+def edge_dist(px, py, poly):
+    best = float("inf")
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+        best = min(best, math.hypot(px - ax - t * dx, py - ay - t * dy))
+    return best
+
+
+def point_inside(px, py, poly):
+    inside = False
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i], poly[(i + 1) % len(poly)]
+        if (ay > py) != (by > py) and px < ax + (py - ay) * (bx - ax) / (by - ay):
+            inside = not inside
+    return inside
+
+
+def star_slot_masks(prof, ring=(0.2, 1.6), core=2.6):
+    """Per star slot: (edge pixels, middle pixels), as indexes into the stars box (row * width + column). Edge
+    pixels are ring[0]-ring[1] px inside the star's outline, middle ones at least `core` px inside. The arms of
+    neighbouring stars overlap, so an edge pixel that is in or near another slot's star is left out."""
+    x0, y0, w, h = prof.star_box
+    polys = star_polygons(prof)
+    lo, hi = ring
+    masks = []
+    for k, poly in enumerate(polys):
+        edge, middle = [], []
+        others = [p for m, p in enumerate(polys) if m != k]
+        for y in range(h):
+            for x in range(w):
+                px, py = x0 + x + 0.5, y0 + y + 0.5
+                if abs(px - prof.star_tips_x[k]) > prof.star_radius + 1 or not point_inside(px, py, poly):
+                    continue
+                d = edge_dist(px, py, poly)
+                if d >= core:
+                    middle.append(y * w + x)
+                elif lo <= d <= hi and not any(point_inside(px, py, o) or edge_dist(px, py, o) <= hi for o in others):
+                    edge.append(y * w + x)
+        masks.append((edge, middle))
+    return masks
+
+
+def gta6_masks(prof):
+    """GTA 6, per star slot: pixel indexes into the stars box (row * width + column) for the edge band (inside the
+    outline, under GTA6_BANDS[0] px from it), the stroke band (to GTA6_BANDS[1]), the middle, and the ring round the
+    star (1 to GTA6_BANDS[2] px outside it, not inside a neighbour)."""
+    x0, y0, w, h = prof.star_box
+    e_in, s_in, out = GTA6_BANDS
+    polys = star_polygons(prof)
+    masks = []
+    for k, poly in enumerate(polys):
+        others = [p for m, p in enumerate(polys) if m != k]
+        m = {"edge": [], "stroke": [], "middle": [], "round": []}
+        for y in range(h):
+            for x in range(w):
+                px, py = x0 + x + 0.5, y0 + y + 0.5
+                if abs(px - prof.star_tips_x[k]) > prof.star_radius + out + 1:
+                    continue
+                d = edge_dist(px, py, poly)
+                if point_inside(px, py, poly):
+                    m["edge" if d < e_in else "stroke" if d < s_in else "middle"].append(y * w + x)
+                elif 1.0 <= d <= out and not any(point_inside(px, py, o) for o in others):
+                    m["round"].append(y * w + x)
+        masks.append(m)
+    return masks
+
+
+def gta6_slot_features(rgb, prof):
+    """GTA 6, per star slot in row order: {"edge", "stroke", "middle", "round": median brightness of each band,
+    "red_mid", "red_round": share of strong red in the middle and round the star}, and the share of green in the
+    slot at the row's filling end (the money's wallet icon sits there when no star is lit)."""
+    rule, w, hud_w = prof.gta6_rule, prof.star_box[2], prof.hud_w
+
+    def at(i):
+        return ((i // w) * hud_w + i % w) * 3
+
+    def red(p):
+        return rgb[p] >= rule["red_r"] and rgb[p] - max(rgb[p + 1], rgb[p + 2]) >= rule["red_gap"]
+
+    out = []
+    for m in prof.gta6_masks:
+        f = {}
+        for band, idx in m.items():
+            pts = [at(i) for i in idx]
+            f[band] = statistics.median(lum_at(rgb, p) for p in pts) if pts else 0.0
+            if band in ("middle", "round"):
+                f["red_mid" if band == "middle" else "red_round"] = sum(map(red, pts)) / max(1, len(pts))
+        out.append(f)
+    end = prof.gta6_masks[-1] if rule["fill_from"] == "right" else prof.gta6_masks[0]
+    pts = [at(i) for i in end["edge"] + end["stroke"] + end["middle"]]
+    green = sum(1 for p in pts if rgb[p + 1] >= 90 and rgb[p + 1] - max(rgb[p], rgb[p + 2]) >= 40) / max(1, len(pts))
+    # The wallet is a green icon on a dark disc: green behind a star (trees) is not it.
+    dark = sum(1 for p in pts if lum_at(rgb, p) < 60) / max(1, len(pts))
+    return out, (green if dark >= rule["wallet_dark"] else 0.0)
+
+
+def gta6_lit(f, rule):
+    """One GTA 6 star slot is lit: solid red, or an outline (a dark edge, with something lighter both in its middle
+    and round it, or a white stroke just inside it)."""
+    if f["red_mid"] >= rule["red_mid"] and f["red_round"] <= rule["red_round"]:
+        return True
+    return (f["middle"] - f["edge"] >= rule["edge_drop"]
+            and (f["round"] - f["edge"] >= rule["edge_drop"] or f["stroke"] - f["middle"] >= rule["stroke"]))
+
+
+def gta6_star_count(rgb, prof):
+    """GTA 6: how many wanted stars are lit, counted from the end the row fills from, stopping at the first slot that
+    isn't. 0 when the money's wallet sits in the row."""
+    rule = prof.gta6_rule
+    slots, green = gta6_slot_features(rgb, prof)
+    if green >= rule["wallet"]:
+        return 0
+    n = 0
+    for f in (slots[::-1] if rule["fill_from"] == "right" else slots):
+        if not gta6_lit(f, rule):
+            break
+        n += 1
+    return n
 
 
 GPU_INPUT = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]  # decode on the GPU, frames stay there

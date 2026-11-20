@@ -523,6 +523,30 @@ The model took 3.37-3.41 s per sheet on every video, and all 696 sheets ended wi
 again (about 5 s). In the full runs only test1 needed that (3 reloads); test2 and the two October 26 recordings
 finished with none. I don't know why test1 differed, so the guard stays.
 
+Launch night (Nov 19) showed the guard was too late: a prepare was stopped from outside at about 3.8 GB free, under
+the old 2 GB stop. Now (index and the safety checks alike) the model is unloaded under **7 GB** free (at most every 10
+calls), under **5.5 GB** after any call, and the run stops cleanly under **4.5 GB** (`ERROR: ...`, exit 2; the answers
+so far are cached and the same command carries on). The re-run of that night's prepare dropped from 11 to 7.4 GB free
+in about a minute during the safety checks; the guard unloaded the model 4 times, the lowest was 6.8 GB, and it
+finished in 25 minutes.
+
+**One heavy job at a time** (`heavy.py`). `launch.py prepare` and `render`, `index.py`, `tag_media.py`,
+`footage_short.py` and the suites that render (`launchtest`, `topictest`, `storytest`, `footagetest`,
+`explainertest`) take one lock, `C:\AI\gta\_heavy_job.json`. A second one stops with `ERROR: another heavy job is
+running: ...` naming the one that holds it; a lock whose process is gone is taken over. Each prints `Free memory: X GB`
+when it starts; prepare also prints it before the index, before the safety checks and at the end.
+
+**A stopped prepare carries on.** Its run stays "preparing" in `_launch_runs.json`; the next prepare reuses that folder,
+the cached model answers and the clip.py runs that finished (`launch_clip_done.json` in each).
+
+**Spoken swearing** (`speech.py`, .venv-tts only). After each render the finished Short is transcribed with
+faster-whisper small.en (CPU, int8, about 4 s a Short; the 464 MB model is in `C:\AI\gta\models\whisper`). The
+subtitle check's swear words said in the first 7 s fail the Short; later ones are a SWEARING flag; a Short with the
+game's sound and none heard says so in its SOUND flag (listen once anyway: mumbled words can be missed). Without
+faster-whisper the old "listen once" flag stays. The audio goes in through ffmpeg (faster-whisper's PyAV decoder
+breaks with PyAV 19).
+
+
 **Star count check.** `star_check.py` builds `C:\AI\gta\library\star_check.html`: frames the index says show a given
 number of stars, each large, with the star corner zoomed and the index's count under it. On 18 frames (6 at 3 stars
 and 6 at 4 stars from the two October 26 recordings, 3 at 1 star, and 3 at 2 stars from test1 because those
@@ -820,3 +844,56 @@ flagged DRYRUN STAND-IN, and render refuses that outside a dry run. LAUNCH_NIGHT
 - **Action clips have none of the v2 extras** (slow-mo on the impact, a ring on the stars, a replay ending).
 - **The split-screen break and a real F1 (GTA 6 vs my GTA 5 clip) haven't run on real footage.**
 - **F4 can only run on GTA 6.**
+
+## Launch fixes (Nov 19): every Short like the posted sample
+
+On launch night /launch made 1 Short instead of 3, and it was raw gameplay. The causes, the fixes and the order I
+asked for: the GTA 6 HUD (its own profile, `profiles/gta6.json`, calibrated on my footage: PASS), then **topics
+first**, then **the story layer for every Short**, then labels and picking. The bar is the Step 0 sample I posted,
+"How to make GTA 6 cops FORGET you": the hook on screen from frame 0, the am_puck voice with yellow captions, music
+and sound effects, setup -> payoff, my footage as the proof.
+
+**Engine v3 (the default render, `launch.py render`)** makes every Short that way, both types:
+
+- Claude writes the lines and their **beats** (full screen, a framed card, a before/after compare, a banner), each at
+  a second of the pick's own recording. A beat with `"zoom": "stars"` (or `"tip"`, `"minimap"`, or a box) is a
+  close-up cut by `proof.py`: the star row with the heat icons under it, the game's tip box, the minimap. That is what
+  made the sample readable on a phone.
+- The starred hook is the opening card from frame 0; line 1 is the spoken hook. A silent subscribe pill and a loop
+  end every Short.
+- An **action Short** has a short voice too (3-5 lines, setup -> payoff) with the game's sound in. A Short with no
+  lines is refused: no Short ships as raw gameplay.
+- truth.py checks every line (evidence on screen while it is said, facts, numbers, names, no play-by-play), the words
+  each beat puts on screen, one payoff at 45-85 %, a narrated Short of 25-39 s (action 16-32 s), and no beat on
+  footage an earlier Short showed or that isn't clean in the index. `--engine v2` and `v1` keep the older renders.
+
+**Topics first (prepare).** Topic candidates come first in the pool (+1.5 points): every `shotlist.json` shot the
+night's footage matches, and on GTA 6 every change of the heat icons or of the stars' look, read by `proof.hud6` twice
+a second. Each lists the facts.json ids its topic may use. A topic pick is NARRATED when its window fits, anchored on
+the second its topic shows. Its evidence gains `heat` items (how many icons, and when they change) and `star_look`
+items (solid red, red outline, hollow white, solid white), so a line may say "two icons are left" only when the HUD
+shows it.
+
+**Labels from the frames (safety_v3).** The safety question now also asks what the frames show: a crash, shooting,
+police, an explosion, a jump, swimming or a boat. A candidate's crash, explosion, stunt, shootout or police points
+stand only where those frames saw them (police also while the HUD shows stars); a "shootout" nobody shoots in is
+relabelled on foot; a model line that names an event the frames didn't show can't support a word. Mission dialogue
+(subtitles on 30 % or more of its sheets) costs up to 1.5 points. What was dropped is in each pick's
+`dropped_labels`.
+
+**The pool.** 15-25 candidates (5 per Short asked for), spread over every recording (60 s apart, each recording
+its share), are all checked before picking; every one that fails is listed in `candidates.json` with why. The best
+`--count` (default 3) that pass are picked.
+
+```powershell
+.\.venv\Scripts\python.exe launch.py prepare --count 3          # the default; --count 5 for more
+.\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
+.\.venv\Scripts\python.exe facts.py own                        # facts from my own footage, waiting for my yes
+.\.venv-tts\Scripts\python.exe topictest.py                     # 15 checks, about 15 s
+```
+
+**Known limits:**
+
+- Hollow white stars over a dark background are read as no stars (recording _022442 at 16:15): the calibrated star
+  rule needs a lighter middle. Those seconds are "no stars", never a wrong number.
+- Spoken swearing is still not checked (faster-whisper not installed yet): listen once to a Short with game sound.

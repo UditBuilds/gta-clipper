@@ -278,3 +278,13 @@ the answer keys) was chosen before either prompt saw it.
 "Caught" = any blocking answer on the sheet. v2 is the one /launch uses. With the HUD rules on, cutscenes, menus and
 maps are already never_use (no minimap), so this matters most in NO-HUD mode, where 8 of 31 cutscene sheets and 7 of
 17 menu or map sheets of set B still get through the question alone (the index's own labels are the other guard).
+
+## safety_v3 (`safety_v3.txt`), 2026-11-19 (launch-fixes), reason logged before running
+
+On launch night the labels came from words: pick 2 was "shootout" because a gun moment just after its clip
+overlapped the window it was scored on, and "crash" because the index's line called a burnout a crash; pick 3 was a
+"crash" because the line about a diving mission said "wreck". The safety question already looks at every candidate's
+frames, one a second, so v3 adds what it sees there: crash, shooting, police, explosion, stunt, water. The six v2
+fields come first and are worded as before, so its blocking answers should stay as measured; v3 has not been measured
+against the answer keys yet. A label (and a crash, explosion, stunt or shootout the narration may name) is kept only
+where these answers saw it.

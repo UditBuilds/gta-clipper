@@ -3261,9 +3261,11 @@ def timing(script_path, root, kokoro=None):
     before the render. Returns {"total_s", "lines": [[seconds per shot of that line, 0.0 for a shot that gets no
     time], ...], "loop_s": the loop ending's length (it repeats the first shot), "first": (line, shot) of the shot
     the loop ending repeats, or None, "behind": {(line, shot) of a text card: (line, shot) of the picture blurred
-    behind it}}. Lines and shots count from 0."""
+    behind it}, "words": every spoken word with its start and end (as the render's log has them)}. Lines and shots
+    count from 0."""
     script = load_script(script_path, root)
-    audio, rate, _, line_starts, _ = synthesize(kokoro or load_kokoro(), script["lines"], script["voice"], script["speed"])
+    audio, rate, words, line_starts, _ = synthesize(kokoro or load_kokoro(), script["lines"], script["voice"],
+                                                    script["speed"])
     with tempfile.TemporaryDirectory(prefix="timing_") as work:
         work = Path(work)
         save_wav(work / "raw.wav", audio, rate)
@@ -3285,7 +3287,8 @@ def timing(script_path, root, kokoro=None):
         v = script["lines"][n]["visuals"][i]
         if v["kind"] in ("card", "snippet") and id(v.get("bg")) in where:
             behind[(n, i)] = where[id(v["bg"])]
-    return {"total_s": total_frames / FPS, "lines": lines, "loop_s": loop_s, "first": first, "behind": behind}
+    return {"total_s": total_frames / FPS, "lines": lines, "loop_s": loop_s, "first": first, "behind": behind,
+            "words": [{"text": w["text"], "start_s": round(w["start"], 3), "end_s": round(w["end"], 3)} for w in words]}
 
 
 def shot_stats(slots):

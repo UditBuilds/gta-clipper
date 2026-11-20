@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import calibrate as cal
 import clip
@@ -161,8 +162,10 @@ def stand_in_guided(results, saves=True):
 
     def run(name, video, slots=None, game=None, browser=True, log=print, serve=None):
         result = results[len(calls)]
-        calls.append((name, Path(video).name, slots, serve))
+        calls.append((name, [Path(v).name for v in video] if isinstance(video, list) else Path(video).name, slots,
+                       serve))
         if result is None:
+            log("ERROR: video not found: made up")
             return 2
         if saves:
             prof = json.loads((HERE / "profiles" / "gta5.json").read_text(encoding="utf-8"))
@@ -191,24 +194,26 @@ def with_profile_dirs(fn):
 
 @check
 def the_profile_is_calibrated_with_every_guess_accepted_or_the_run_goes_without_hud():
-    """no profile: guided calibration with auto_accept on the longest recording; PASS uses it; stars missing tries the
-    next recording; FAIL or a run that can't start means NO-HUD; a finished profile is used as it is, unless its last
-    guided check FAILED"""
-    durations = {"short": 100.0, "long": 900.0, "mid": 400.0}
+    """no profile: guided calibration with auto_accept on the 3 longest recordings at once (launch-fixes: launch
+    night tried one); PASS uses it; stars missing tries the next recordings; FAIL or a run that can't start means
+    NO-HUD, with the calibration's own reason; a finished profile is used as it is, unless its last guided check
+    FAILED"""
+    durations = {"short": 100.0, "long": 900.0, "mid": 400.0, "tiny": 50.0}
     vids = [Path(f"{s}.webm") for s in durations]
 
-    def case(results, existing=None):
+    def case(results, existing=None, tries=3):
         def inner(tmp):
             if existing:
                 existing(tmp)
             run, calls = stand_in_guided(results)
-            got = launch.choose_profile("gta6", "gta6", vids, durations, 6, log=lambda m: None, guided_run=run)
+            got = launch.choose_profile("gta6", "gta6", vids, durations, 6, log=lambda m: None, guided_run=run,
+                                        tries=tries)
             return got, calls
         return with_profile_dirs(inner)
 
     ok_run, calls = case(["PASS"])
     stars_later, calls2 = case(["PASS for the minimap. STARS NOT CALIBRATED", "PASS"])
-    never_stars, _ = case(["PASS for the minimap. STARS NOT CALIBRATED"] * 3)
+    never_stars, _ = case(["PASS for the minimap. STARS NOT CALIBRATED"] * 3, tries=1)
     failed, _ = case(["FAIL"])
     cannot, _ = case([None])
 
@@ -221,11 +226,14 @@ def the_profile_is_calibrated_with_every_guess_accepted_or_the_run_goes_without_
     kept, calls3 = case([], finished)
     distrusted, _ = case([], finished_but_failed)
     return (ok_run["mode"] == "hud" and ok_run["profile"] == "gta6" and ok_run["stars"]
-            and calls[0][1] == "long.webm" and calls[0][2] == 6 and calls[0][3] is launch.guided.auto_accept
-            and stars_later["stars"] and [c[1] for c in calls2] == ["long.webm", "mid.webm"]
+            and calls[0][1] == ["long.webm", "mid.webm", "short.webm"] and calls[0][2] == 6
+            and calls[0][3] is launch.guided.auto_accept
+            and stars_later["stars"] and [c[1] for c in calls2] == [["long.webm", "mid.webm", "short.webm"],
+                                                                     ["tiny.webm"]]
             and never_stars["mode"] == "hud" and not never_stars["stars"] and len(never_stars["attempts"]) == 3
             and failed["mode"] == "nohud" and failed["profile"] == "gta6_nohud"
-            and cannot["mode"] == "nohud" and kept["mode"] == "hud" and calls3 == []
+            and cannot["mode"] == "nohud" and "video not found: made up" in cannot["why"]
+            and kept["mode"] == "hud" and calls3 == []
             and distrusted["mode"] == "nohud")
 
 
@@ -414,9 +422,32 @@ def stand_in_checker(tmp, rules, subs=()):
         return {"answer": parse(json.dumps(answer)), "error": None, "wall_s": 0.1}
 
     checker = safety.Checker("GTA 6", tempfile.mkdtemp(dir=tmp), ask=ask, sheets=sheets,
-                             info={"digest": "x", "capabilities": []}, log=lambda m: None)
+                             info={"digest": "x", "capabilities": []}, log=lambda m: None,
+                             ram=lambda: 20.0, unload=lambda model: None)
     checker.read_log = read
     return checker, asked
+
+
+@check
+def the_safety_checks_unload_the_model_when_memory_runs_low():
+    """launch-fixes: launch night's first prepare was stopped by Claude Code during the safety checks (Ollama 8.5 GB,
+    3.8 GB free), which had no memory guard. Now, as in the index: under 5 GB free the model is unloaded (at most
+    every 10 calls) and loads again on the next call; under 2 GB even then, the run stops with a plain reason and
+    the answers so far stay cached"""
+    with tempfile.TemporaryDirectory() as tmp:
+        checker, _ = stand_in_checker(tmp, [])
+        frees, unloaded = iter([20.0] * 10 + [4.0, 9.0] + [20.0] * 20), []
+        checker.ram, checker.unload = lambda: next(frees), unloaded.append
+        checker.look("rec.webm", 0.0, 240.0, 4.0, Path(tmp))
+        low, _ = stand_in_checker(tmp, [])
+        low.ram = lambda: 1.0
+        stopped = None
+        try:
+            low.look("rec.webm", 0.0, 8.0, 4.0, Path(tmp))
+        except safety.MemoryError_ as e:
+            stopped = str(e)
+    return (unloaded == [launch.index.MODEL] and checker.reloads == 1 and checker.calls >= 12
+            and stopped and "memory" in stopped and "cached" in stopped)
 
 
 def shoot_moment(rec):
@@ -425,16 +456,22 @@ def shoot_moment(rec):
 
 @check
 def safety_answers_must_be_complete():
-    """the safety answer needs a note and true/false for all six questions; anything else is unusable"""
+    """the safety answer needs a note and true/false for all six questions; anything else is unusable. launch-fixes
+    (safety_v3): what the frames show (crash, shooting, police ...) is true/false too; one left out counts as not
+    seen, one answered with anything else makes the answer unusable"""
     good = safety.parse_answer(json.dumps({"note": "car on a road", **{k: False for k in safety.WHAT}}))
+    seen = safety.parse_answer(json.dumps({"note": "a car hits a wall", **{k: False for k in safety.WHAT},
+                                           "crash": True}))
     bad = 0
     for reply in ("not json", "[]", json.dumps({"note": "x", "phone_screen": "yes"}),
-                  json.dumps({"note": "", **{k: False for k in safety.WHAT}})):
+                  json.dumps({"note": "", **{k: False for k in safety.WHAT}}),
+                  json.dumps({"note": "x", **{k: False for k in safety.WHAT}, "crash": "yes"})):
         try:
             safety.parse_answer(reply)
         except ValueError:
             bad += 1
-    return good["phone_screen"] is False and good["note"] == "car on a road" and bad == 4
+    return (good["phone_screen"] is False and good["note"] == "car on a road" and bad == 5
+            and all(good[k] is False for k in safety.SEEN) and seen["crash"] is True and seen["police"] is False)
 
 
 @check
@@ -780,6 +817,19 @@ def only_jason_and_lucia_may_be_named_and_no_spoilers():
 
 
 @check
+def titles_and_hooks_may_use_title_case():
+    """launch-fixes: a title or a hook in normal Title Case passes ("How To Make GTA 6 Cops FORGET You"); a trailer
+    name is still refused there, and a capitalised name mid sentence is still refused in a line or a description"""
+    pick = chase_pick()
+    items = pick["evidence"]
+    title = truth.text_problems("How To Make GTA 6 Cops FORGET You", items, False, "title")
+    hook = truth.text_problems("Can The Cops Catch Me?", items, False, "hook 1")
+    named = truth.text_problems("Driving With Boobie Tonight", items, False, "title")
+    desc = truth.text_problems("A chase starts. Then Michael shows up.", items, False, "description")
+    return title == [] and hook == [] and any("boobie" in p for p in named) and any("Michael" in p for p in desc)
+
+
+@check
 def hooks_titles_and_descriptions_follow_the_rules():
     """3 hooks of 3-6 words, no emoji, a starred index; the title by make_short's rules; exactly 2 sentences of
     description; narrated line 1 is the starred hook word for word; an ACTION CLIP has no lines"""
@@ -934,7 +984,8 @@ def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
     """render() of an ACTION CLIP on a real made-up video: the clip is cut to 1080x1920, the starred hook is burned
     in, the auto peak gives a cold open (the Short is longer than its window by the cold open) and is flagged AUTO
     PEAK with the command to drop it; the music bed is mixed under the game sound; the true peak is under -1.0 dBTP;
-    --short 1 --no-cold-open renders it again without the cold open, and --hook 1 swaps in the first hook"""
+    --short 1 --no-cold-open renders it again without the cold open, and --hook 1 swaps in the first hook.
+    launch-fixes: this is the old way (no voice), kept only behind --engine v2; /launch's default is v3"""
     with tempfile.TemporaryDirectory() as tmp:
         src, music = Path(tmp) / "rec_b.mp4", Path(tmp) / "bed.wav"
         if not made_up_footage(src):
@@ -957,15 +1008,15 @@ def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
         launch.pick_music = lambda seconds, seed: (music, "made up")
         try:
             first = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS,
-                                  checker=None, indexes=[])["shorts"][0]
+                                  checker=None, indexes=[], engine="v2")["shorts"][0]
             tp = safety.true_peak(first["files"]["short.mp4"]) if first["status"] == "READY" else None
             size = launch.subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries",
                                           "stream=width,height", "-of", "csv=p=0", first["files"]["short.mp4"]],
                                          capture_output=True, text=True).stdout.strip()
             again = launch.render(folder, 1, None, True, shorts_dir=shorts, today=TODAY, log=lambda m: None,
-                                  facts=FACTS, checker=None, indexes=[])["shorts"][0]
+                                  facts=FACTS, checker=None, indexes=[], engine="v2")["shorts"][0]
             swapped = launch.render(folder, 1, 1, False, shorts_dir=shorts, today=TODAY, log=lambda m: None,
-                                    facts=FACTS, checker=None, indexes=[])["shorts"][0]
+                                    facts=FACTS, checker=None, indexes=[], engine="v2")["shorts"][0]
         finally:
             launch.pick_music = old
     return (first["status"] == "READY" and first["hook"] == "Wait for the crash" and first["cold_open"]
@@ -997,7 +1048,8 @@ def the_no_hud_profiles_never_see_a_hud():
 @check
 def a_failed_calibration_runs_the_whole_night_without_hud():
     """when the guided calibration FAILs, every recording is indexed with gta6_nohud, the run says NO-HUD MODE and
-    why, no pick has a wanted-star item or a star-rise peak, and every pick is flagged"""
+    why, no pick has a wanted-star item or a star-rise peak, and every pick is flagged; launch-fixes: every HUD step
+    is in the run's logs/hud.txt, and review.html says HUD NOT FOUND, with why, at the very top"""
     def run(tmp):
         tmp = Path(tmp)
         inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
@@ -1024,15 +1076,22 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
                                     clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
         finally:
             launch.probe_duration = old
-        return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked
+        data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
+        log = (folder / "logs" / "hud.txt").read_text(encoding="utf-8")
+        page = launch.write_review(folder, data, {"shorts": []}, {"shorts": []}).read_text(encoding="utf-8")
+        return data, asked, log, page
     old_env = launch.os.environ.get("GTA_CLIPPER_PROFILES")
     try:
-        data, asked = with_profile_dirs(run)
+        data, asked, log, page = with_profile_dirs(run)
     finally:
         if old_env is None:
             launch.os.environ.pop("GTA_CLIPPER_PROFILES", None)
     picks = data["picks"]
-    return (asked == ["gta6_nohud", "gta6_nohud"] and data["calibration"]["mode"] == "nohud"
+    top = page.find("HUD NOT FOUND")
+    return (data["hud"]["mode"] == "nohud" and "FAIL" in data["hud"]["why"] and data["hud"]["log"].endswith("hud.txt")
+            and "Guided calibration of gta6" in log and "NO-HUD MODE" in log
+            and 0 < top < page.find("What to do") and "FAIL" in page[top:page.find("What to do")]
+            and asked == ["gta6_nohud", "gta6_nohud"] and data["calibration"]["mode"] == "nohud"
             and "FAIL" in data["calibration"]["why"] and all(r["mode"] == "nohud" for r in data["recordings"])
             and picks and all(p["mode"] == "nohud" for p in picks)
             and not any(e["kind"] == "stars" for p in picks for e in p["evidence"])
@@ -1041,6 +1100,49 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
 
 
 # --- The whole prepare stage, with stand-ins ---
+
+@check
+def a_recording_under_15_s_is_skipped_with_a_plain_line():
+    """launch-fixes: launch night had a 14.9 s recording. prepare() leaves a recording under 15 s out before
+    calibrating or indexing it, says so in one plain line and in candidates.json's "skipped", and goes on with the
+    rest; when every new recording is that short it stops with a plain reason"""
+    def run(tmp, short_ones):
+        tmp = Path(tmp)
+        inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
+        for d in (inp, shorts, lib):
+            d.mkdir(exist_ok=True)
+        (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
+        for name in ("GTA_20261119000000.webm", "GTA_20261119010000.webm"):
+            (inp / name).write_bytes(b"x")
+        guided_run, _ = stand_in_guided(["PASS"])
+        asked, lines = [], []
+
+        def index_video(video, profile, every, library, cache_dir, log):
+            asked.append(Path(video).stem)
+            return made_up_idx(Path(video).stem, video)
+        old = launch.probe_duration
+        launch.probe_duration = lambda v: 14.9 if Path(v).stem in short_ones else DURATION
+        try:
+            folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
+                                    log=lines.append, index_video=index_video, guided_run=guided_run,
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+        finally:
+            launch.probe_duration = old
+        return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked, lines
+    with tempfile.TemporaryDirectory() as tmp:
+        data, asked, lines = run(tmp, {"GTA_20261119000000"})
+    stopped = None
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            run(tmp, {"GTA_20261119000000", "GTA_20261119010000"})
+        except launch.LaunchError as e:
+            stopped = str(e)
+    why = data["skipped"].get("GTA_20261119000000.webm", "")
+    return (asked == ["GTA_20261119010000"] and "14.9 s" in why and "15 s or more" in why
+            and any(l.strip().startswith("Skipped GTA_20261119000000.webm: only 14.9 s") for l in lines)
+            and [r["name"] for r in data["recordings"]] == ["GTA_20261119010000.webm"]
+            and stopped and "under 15 s" in stopped)
+
 
 @check
 def prepare_writes_candidates_with_evidence_and_logs_the_run():
@@ -1127,6 +1229,118 @@ def a_frame_sheet_shows_the_moment_with_its_times():
         return ok and size == "1600,226"
 
 
+
+@check
+def one_heavy_job_at_a_time():
+    """launch-fixes: prepare, render and the suites that render take one lock. A second job refuses with a plain line
+    naming the holder; a lock whose process is gone (or a reused pid) is taken over; the holder's own process and its
+    child processes (they inherit GTA_HEAVY_JOB) pass; release removes only its own lock"""
+    import heavy
+    with tempfile.TemporaryDirectory() as tmp:
+        lock = Path(tmp) / "lock.json"
+        live = {111: 1000.0, 222: 1000.0}
+        alive = lambda pid: live.get(pid)
+        env_a, env_b = {}, {}
+        tok = heavy.acquire("launch.py prepare", lock, alive, pid=111, env=env_a)
+        try:
+            heavy.acquire("storytest.py", lock, alive, pid=222, env=env_b)
+            refused = False
+        except heavy.Busy as e:
+            refused = "launch.py prepare" in str(e) and "111" in str(e)
+        nested = heavy.acquire("render inside", lock, alive, pid=111, env={}) is None
+        child = heavy.acquire("explainer.py", lock, alive, pid=333, env={heavy.ENV: tok}) is None
+        heavy.release("not-mine", lock, env={})
+        kept = lock.exists()
+        heavy.release(tok, lock, env=env_a)
+        freed = not lock.exists() and heavy.ENV not in env_a
+        tok2 = heavy.acquire("first", lock, alive, pid=111, env={})
+        del live[111]                                       # the holder died without releasing
+        stale = heavy.acquire("second", lock, alive, pid=222, env={}) is not None
+        later = lambda pid: 5000.0                          # pid 222 reused by a process started after the lock
+        reused = heavy.holder(lock, alive) is not None and heavy.holder(lock, later) is None
+        heavy.acquire("third", lock, later, pid=444, env={})
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        line = heavy.ram_line(12.34) == "Free memory: 12.3 GB" and heavy.ram_line(None).startswith("Free memory:")
+    return (tok and refused and nested and child and kept and freed and tok2 and stale and data["what"] == "third"
+            and reused and line)
+
+
+@check
+def a_stopped_prepare_uses_the_finished_clip_runs_again():
+    """launch-fixes: prepare carries on where it stopped; a clip.py run that finished in the run folder (for the same
+    recording and profile) is used again and clip.py is not run once more; an unfinished one, or another profile's,
+    is not"""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, logs, video = Path(tmp) / "clip_runs", Path(tmp) / "logs", Path(tmp) / "rec_a.webm"
+        done_run = out / "rec_a" / "20261119-180131"
+        half_run = out / "rec_a" / "20261119-190000"
+        done_run.mkdir(parents=True)
+        half_run.mkdir(parents=True)
+        (done_run / "scores.json").write_text("{}", encoding="utf-8")
+        launch.write_json(done_run / launch.CLIP_DONE, {"profile": "gta6"})
+        ran = []
+        saved = launch.subprocess.run
+        launch.subprocess.run = lambda *a, **k: ran.append(a) or SimpleNamespace(returncode=1, stdout="")
+        try:
+            again = launch.run_clip(video, "gta6", out, logs)
+            other = launch.finished_clip_run(video, "gta6_nohud", out)
+            none_yet = launch.finished_clip_run(Path(tmp) / "rec_b.webm", "gta6", out)
+        finally:
+            launch.subprocess.run = saved
+    return again == done_run and not ran and other is None and none_yet is None
+
+
+
+@check
+def a_short_no_longer_in_shorts_json_leaves_the_review_page():
+    """launch-fixes: render keeps earlier render.json entries (so --short N keeps the others), but only for Shorts
+    still in shorts.json; a renumbered Short's old FAILED entry is dropped"""
+    old = {"shorts": [{"short": 1, "status": "READY"}, {"short": 3, "status": "FAILED"}]}
+    kept = launch.kept_results(old, {"shorts": [{"short": 1}, {"short": 4}]})
+    return list(kept) == [1] and launch.kept_results(None, {"shorts": [{"short": 1}]}) == {}
+
+
+
+@check
+def spoken_swearing_in_the_first_7_s_is_found():
+    """launch-fixes: speech.swearing (faster-whisper's words, stood in here) finds the subtitle check's swear words in
+    what is said: before 7 s they are "early" (the Short fails), later ones are flags; mild words pass; a speech check
+    that breaks gives None (the Short keeps its "listen once" flag)"""
+    import speech
+    said = [(0.5, 0.8, "Hey"), (2.0, 2.3, "shit,"), (4.0, 4.2, "damn"), (9.1, 9.4, "fuck"), (12.0, 12.2, "nice")]
+    got = speech.swearing("x.mp4", transcribe=lambda p: said)
+    clean = speech.swearing("x.mp4", transcribe=lambda p: [(1.0, 1.2, "hello")])
+
+    def broken(path):
+        raise RuntimeError("no model")
+    none = launch.speech_check("x.mp4", log=lambda m: None, check=broken)
+    return (got["words"] == 5 and [w for _, w in got["early"]] == ["shit"] and [w for _, w in got["later"]] == ["fuck"]
+            and not clean["early"] and not clean["later"] and none is None), got
+
+
+
+@check
+def the_preflight_unloads_our_own_model_before_it_measures_memory():
+    """launch-fixes: with the memory floor at 7 GB, a qwen3-vl left loaded by a render minutes ago (keep_alive) could
+    make /launch refuse with "close other programs"; the preflight now unloads it (and any other model) first"""
+    unloaded, saved = [], (launch.vlm.check_ollama, launch.vlm.unload, launch.index.free_ram_gb)
+    launch.vlm.check_ollama = lambda m: {"loaded": [launch.index.MODEL, "other:1b"], "digest": "x", "capabilities": []}
+    launch.vlm.unload = unloaded.append
+    launch.index.free_ram_gb = lambda: 12.0 if launch.index.MODEL in unloaded else 6.5
+    try:
+        free = launch.preflight(launch.index.MODEL, log=lambda m: None)
+    finally:
+        launch.vlm.check_ollama, launch.vlm.unload, launch.index.free_ram_gb = saved
+    return free == 12.0 and set(unloaded) == {launch.index.MODEL, "other:1b"}
+
+
+@check
+def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
+    """launch-fixes: the safety step's memory stop is a SafetyError, so launch.py prints ERROR: and exits 2 (the run
+    stays "preparing" and carries on next time) instead of a traceback"""
+    return issubclass(safety.MemoryError_, safety.SafetyError)
+
+
 def main():
     ok = True
     for fn in CHECKS:
@@ -1142,4 +1356,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import heavy                          # one heavy job at a time (launch-fixes)
+    heavy.main_guard("launchtest.py")
     main()

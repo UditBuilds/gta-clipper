@@ -317,16 +317,19 @@ def refine_star_row(grid, w, h, p):
     return best, tuple(p)
 
 
-def star_scores(box, geom, raws):
-    """clip.star_score of each raw star box (bytes, the box's own width) with the outline geom (frame pixels)."""
+def star_scores(box, geom, raws, style="outline"):
+    """clip.star_score of each raw star box (bytes, the box's own width) with the outline geom (frame pixels). The
+    "gta6" style scores the number of lit stars (clip.gta6_star_count), GTA V's the outline match."""
     prof = SimpleNamespace(star_box=tuple(box), hud_w=box[2], star_tip_y=geom["tip_y"], star_radius=geom["radius"],
-                           star_inner=geom["inner"],
+                           star_inner=geom["inner"], star_method=style,
                            star_tips_x=tuple(geom["first_tip_x"] + geom["tip_spacing"] * k for k in range(geom["slots"])))
     prof.star_template = clip.star_template(prof)
+    if style == "gta6":
+        prof.gta6_rule, prof.gta6_masks = dict(clip.GTA6_COUNT), clip.gta6_masks(prof)
     return [clip.star_score(raw, prof) for raw in raws]
 
 
-def fit_stars(box, yes_raws, no_raws, slots=None):
+def fit_stars(box, yes_raws, no_raws, slots=None, style="outline"):
     """The star row inside box ([x, y, w, h], whole frame pixels) from the star box of the "stars: yes" and "no"
     pictures (raw RGB bytes, box size); slots None = find the number too. Of the best rows the target picks, the
     best fitting one whose clip.star_score separates the two groups wins (the best fitting one if none does).
@@ -341,7 +344,7 @@ def fit_stars(box, yes_raws, no_raws, slots=None):
     for _, (tx, sp, ty, r, inner, n) in fit_star_row(grid, w, h, slots):  # best fitting first
         geom = {"first_tip_x": round(x0 + tx, 2), "tip_spacing": round(sp, 3), "tip_y": round(y0 + ty, 2),
                 "radius": round(r, 2), "inner": round(inner, 3), "slots": n}
-        yes, no = star_scores(box, geom, yes_raws), star_scores(box, geom, no_raws)
+        yes, no = star_scores(box, geom, yes_raws, style), star_scores(box, geom, no_raws, style)
         if best is None or min(yes) > max(no) >= best[0]:  # the first one that separates, else the first
             best = (min(yes) - max(no), geom, yes, no)
         if best[0] > 0:
@@ -349,7 +352,7 @@ def fit_stars(box, yes_raws, no_raws, slots=None):
     gap, geom, yes, no = best
     return {**geom, "box": list(box), "slots_typed": bool(slots), "yes": len(yes), "no": len(no),
             "lowest_yes": round(min(yes), 3), "highest_no": round(max(no), 3), "separates": gap > 0,
-            "confirmed": False}
+            "confirmed": False, "style": style}
 
 
 def in_frame(rect, frame, what="box"):
@@ -658,6 +661,15 @@ def hud_why(means, prof):
     return f"{len(ok)} of {len(means)} bars pass as coloured bars" + (f" ({'; '.join(fails)})" if fails else "")
 
 
+def arrow_why(m, prof):
+    """GTA 6: why minimap_seen() says what it says on one frame, in plain words."""
+    bright, dark = m
+    a = prof.arrow
+    parts = [f"{bright:.0%} of the arrow's middle is bright (needs {a['core_share']:.0%})",
+             f"{dark:.0%} of the disc round it is dark (needs {a['ring_share']:.0%})"]
+    return "; ".join(parts)
+
+
 def phone_why(m, prof):
     """Which of phone_seen()'s checks fail on one frame, in plain words."""
     lo, hi = prof.phone_panel_range
@@ -714,26 +726,55 @@ def number_row(key, what, shown, hidden, kind, override, digits=1):
 
 # --- Profiles ---
 
+ARROW_BOX = 31          # GTA 6: the minimap crop round the player arrow's middle (px, whole picture)
+
+
+def arrow_box(centre, frame):
+    """The box clip.py reads round the minimap arrow's middle, inside the picture."""
+    half = ARROW_BOX // 2
+    x = min(max(0, round(centre[0]) - half), frame[0] - ARROW_BOX)
+    y = min(max(0, round(centre[1]) - half), frame[1] - ARROW_BOX)
+    return [x, y, ARROW_BOX, ARROW_BOX]
+
+
 def geometry_profile(name, game, frame, drawing):
     """A profile with the drawn geometry and stand-in limits, for measuring. Missing parts are left off and
     reported; the minimap needs its bars before anything can be measured. Every box is cut to the picture's
     edges first (in_frame); the drawing itself is left as drawn."""
     d = drawing
     notes = []
-    bars = d.get("bars") or []
-    try:
-        mm_box, xr = bar_row([in_frame(b["box"], frame, f"bar {i} box") for i, b in enumerate(bars, 1)])
-    except CalibError as e:
-        notes.append(("minimap", str(e)))
-        mm_box, xr = [0, 0, 16, 2], [[0, 8], [8, 16]]
     profile = {"name": name, "game": game or "this game", "frame": list(frame),
-               "stretch": {"min_s": DEFAULTS["stretch_min_s"], "pad_s": DEFAULTS["stretch_pad_s"]},
-               "minimap": {"box": mm_box,
-                           "bars": [{"name": f"bar {i}", "x_range": r,
-                                     "any_of": [[{"hi": "r", "lo": ["g"], "min": 0}]]} for i, r in enumerate(xr, 1)],
-                           "min_sat": 0.0, "min_bars": max(2, len(xr) - 1), "min_distinct": 0.0,
-                           "min_share": DEFAULTS["min_share"]}}
+               "stretch": {"min_s": DEFAULTS["stretch_min_s"], "pad_s": DEFAULTS["stretch_pad_s"]}}
+    arrow = d.get("arrow") or {}
+    if arrow:   # GTA 6: no bars by the minimap; its player arrow is checked instead (launch-fixes)
+        try:
+            if not arrow.get("centre"):
+                raise CalibError("click the middle of the white arrow on the minimap")
+            if not arrow.get("confirmed"):
+                raise CalibError("check the yellow ring sits on the minimap's arrow, then press 'Looks right' (or "
+                                 "click the arrow's middle)")
+            box = arrow_box(arrow["centre"], frame)
+        except CalibError as e:
+            notes.append(("minimap", str(e)))
+            box = arrow_box([frame[0] / 2, frame[1] / 2], frame)
+        cx, cy = (arrow.get("centre") or [box[0] + box[2] / 2, box[1] + box[3] / 2])
+        profile["minimap"] = {"method": "arrow", "box": box, "centre": [round(cx, 1), round(cy, 1)],
+                              **{k: v for k, v in clip.ARROW_DEFAULTS.items()},
+                              "core_share": 0.0, "ring_share": 0.0, "min_share": DEFAULTS["min_share"]}
+    else:
+        bars = d.get("bars") or []
+        try:
+            mm_box, xr = bar_row([in_frame(b["box"], frame, f"bar {i} box") for i, b in enumerate(bars, 1)])
+        except CalibError as e:
+            notes.append(("minimap", str(e)))
+            mm_box, xr = [0, 0, 16, 2], [[0, 8], [8, 16]]
+        profile["minimap"] = {"box": mm_box,
+                              "bars": [{"name": f"bar {i}", "x_range": r,
+                                        "any_of": [[{"hi": "r", "lo": ["g"], "min": 0}]]} for i, r in enumerate(xr, 1)],
+                              "min_sat": 0.0, "min_bars": max(2, len(xr) - 1), "min_distinct": 0.0,
+                              "min_share": DEFAULTS["min_share"]}
     st = d.get("stars") or {}
+    star_style = "gta6" if arrow or st.get("style") == "gta6" else "outline"
     if st.get("off"):
         profile["stars"] = {"on": False}
     else:
@@ -771,6 +812,8 @@ def geometry_profile(name, game, frame, drawing):
             profile["stars"] = {"on": True, "box": box, "slots": slots,
                                 **{k: g[k] for k in ("first_tip_x", "tip_spacing", "tip_y", "radius", "inner")},
                                 "min_score": 1.0, "boost": DEFAULTS["star_boost"]}
+            if star_style == "gta6":
+                profile["stars"].update(method="gta6", min_score=0.5)
             if abs(g.get("level_px", 0)) > 2:
                 notes.append(("stars", f"the first and last top points are {abs(g['level_px']):g} px apart in "
                                        "height; the outline uses the first one"))
@@ -965,12 +1008,17 @@ class Session:
         yes = [f for f in frames if f["labels"].get("stars") == "yes"]
         no = [f for f in frames if f["labels"].get("stars") == "no"]
         raws = self.read_area(yes + no, box)
-        fit = fit_stars(box, [raws[f["id"]] for f in yes], [raws[f["id"]] for f in no], slots)
+        style = "gta6" if self.data["drawing"].get("arrow") or st.get("style") == "gta6" else "outline"
+        fit = fit_stars(box, [raws[f["id"]] for f in yes], [raws[f["id"]] for f in no], slots, style)
         st["fit"] = fit
         self.event("fit_stars", box=box, slots_typed=slots, slots=fit["slots"], separates=fit["separates"])
         self.save()
         found = f"{fit['slots']} star slot{'s' if fit['slots'] > 1 else ''}" + (" (the number you typed)" if slots else "")
-        if fit["separates"]:
+        if fit["separates"] and style == "gta6":
+            msg = (f"Found {found} in your box, from {fit['yes']} pictures with stars and {fit['no']} without. "
+                   f"With these outlines every picture with stars shows at least {fit['lowest_yes']:g} lit star(s) "
+                   f"and every picture without shows {fit['highest_no']:g}, so they can be told apart.")
+        elif fit["separates"]:
             msg = (f"Found {found} in your box, from {fit['yes']} pictures with stars and {fit['no']} without. "
                    f"With these outlines every picture with stars scores at least {fit['lowest_yes']:.3f} and every "
                    f"picture without at most {fit['highest_no']:.3f}, so they can be told apart.")
@@ -1024,12 +1072,24 @@ class Session:
         report = {"rules": {}, "frames": []}
         prof = json.loads(json.dumps(geom))
 
-        # Minimap bars
-        means = {fid: clip.bar_means(raws[fid], gprof) for fid in raws}
+        # Minimap: GTA V's bars, or GTA 6's player arrow (launch-fixes)
         hud_yes, hud_no = ids("hud", "shown"), ids("hud", "hidden")
         rows, bad = [], []
+        is_arrow = prof["minimap"].get("method") == "arrow"
+        if is_arrow:
+            am = {fid: clip.arrow_measure(raws[fid], gprof) for fid in raws}
+            means = {fid: [[round(v * 100) for v in am[fid]]] for fid in raws}   # shares in %, for the report
+        else:
+            means = {fid: clip.bar_means(raws[fid], gprof) for fid in raws}
         if not hud_yes:
             bad.append("tick at least one frame as 'HUD shown'")
+        elif is_arrow:
+            for key, i, what in (("minimap.core_share", 0, "the arrow's middle: share of bright pixels at least"),
+                                 ("minimap.ring_share", 1, "the dark disc round it: share of dark pixels at least")):
+                v, row = number_row(key, what, [am[f][i] for f in hud_yes], [am[f][i] for f in hud_no], "at least", ov,
+                                    3)
+                prof["minimap"][key.split(".")[1]] = v
+                rows.append(row)
         else:
             for i, bar in enumerate(prof["minimap"]["bars"], 1):
                 any_of, r = fit_bar(i, [means[f][i - 1] for f in hud_yes], [means[f][i - 1] for f in hud_no], ov)
@@ -1069,8 +1129,9 @@ class Session:
                 rows.append(row)
             else:
                 bad.append("on no 'HUD shown' frame do 2 bars pass: check the bar boxes")
-        report["rules"]["minimap"] = {"rows": rows, "bad": bad,
-                                      "min_bars": prof["minimap"]["min_bars"], "bars": len(prof["minimap"]["bars"])}
+        report["rules"]["minimap"] = {"rows": rows, "bad": bad, "method": prof["minimap"].get("method", "bars"),
+                                      "min_bars": prof["minimap"].get("min_bars"),
+                                      "bars": len(prof["minimap"].get("bars", []))}
 
         # Stars
         srows, sbad = [], []
@@ -1137,11 +1198,13 @@ class Session:
             fid, lb = f["id"], lab[f["id"]]
             raw = raws[fid]
             got = {"hud": "shown" if clip.minimap_seen(raw, final) else "hidden"}
-            why = {"hud": hud_why(clip.bar_means(raw, final), final)}
+            why = {"hud": arrow_why(clip.arrow_measure(raw, final), final) if is_arrow
+                   else hud_why(clip.bar_means(raw, final), final)}
             if final.stars_on:
                 score = clip.star_score(raw, final)
                 got["stars"] = "yes" if score >= final.star_min_score else "no"
-                why["stars"] = f"star outline match {score:.3f}, limit {final.star_min_score:g}"
+                why["stars"] = (f"{score:g} lit star(s) counted" if final.star_method == "gta6"
+                                else f"star outline match {score:.3f}, limit {final.star_min_score:g}")
             if final.phone_on:
                 got["phone"] = "yes" if clip.phone_seen(raw, final) else "no"
                 why["phone"] = phone_why(clip.phone_measure(raw, final), final)
@@ -1197,7 +1260,10 @@ class Session:
                                "set_by_hand": sorted(self.data.get("overrides") or {}),
                                "inherited": report["inherited"],
                                "status": {k: v["status"] for k, v in report["rules"].items()},
-                               "bars": ("found by the tool from one rough box" if bars and all(b.get("auto") for b in bars)
+                               "bars": ("GTA 6: no bars; the minimap's player arrow, " + (
+                                   "found by the tool and confirmed" if (self.data["drawing"].get("arrow") or {}).get("auto")
+                                   else "clicked by you") if self.data["drawing"].get("arrow")
+                                        else "found by the tool from one rough box" if bars and all(b.get("auto") for b in bars)
                                         else "drawn by hand"),
                                "stars": star_source(self.data["drawing"].get("stars") or {}),
                                "labels": label_summary(self.data["frames"]),
@@ -1210,6 +1276,7 @@ class Session:
                        if off]
             prof["calibration"]["guided"] = {"video": guided.get("video_name"), "pending": pending,
                                              "bars_found_by_scan": bool(guided.get("bars")),
+                                             "arrow_found_by_scan": bool(guided.get("arrow")),
                                              "stars_found_by_scan": guided.get("stars") == "found"}
             if "stars" in pending:
                 prof["calibration"]["stars"] = "not calibrated"
@@ -1245,8 +1312,11 @@ def star_source(st):
 
 def inherited(prof):
     out = [f"stretch min_s {prof['stretch']['min_s']} and pad_s {prof['stretch']['pad_s']}",
-           f"minimap min_share {prof['minimap']['min_share']}",
-           f"minimap min_bars {prof['minimap']['min_bars']} (bars - 1, at least 2)"]
+           f"minimap min_share {prof['minimap']['min_share']}"]
+    if prof["minimap"].get("method") == "arrow":
+        out.append(f"minimap arrow middle radius {prof['minimap']['core_r']} px and disc ring {prof['minimap']['ring']} px")
+    else:
+        out.append(f"minimap min_bars {prof['minimap']['min_bars']} (bars - 1, at least 2)")
     if prof["stars"].get("on"):
         out.append(f"stars boost {prof['stars']['boost']}")
     if prof["phone"].get("on"):
@@ -1384,7 +1454,9 @@ def main():
                     help="one command for launch night: the tool finds frames, bars and stars itself, you confirm or "
                          "fix, then it checks the saved profile (needs --profile and --video)")
     ap.add_argument("--profile", help="guided mode: the profile's name (as NAME above)")
-    ap.add_argument("--video", type=Path, help="guided mode: the recording to calibrate from")
+    ap.add_argument("--video", type=Path, nargs="+",
+                    help="guided mode: the recording(s) to calibrate from; with several, each is scanned and the one "
+                         "that shows the HUD best is used")
     ap.add_argument("--star-slots", type=int, metavar="N",
                     help="guided mode: how many wanted-star slots the game has, if you know (GTA V: 5, GTA 6: 6)")
     ap.add_argument("--game", help="guided mode: the game's name for messages (default: guessed from the profile name)")
@@ -1399,7 +1471,7 @@ def main():
         if args.name or args.add or not args.profile or not args.video:
             ap.error("guided mode is: calibrate.py --guided --profile NAME --video RECORDING")
         import calibrate_guided   # it imports this module, so it is loaded only here
-        sys.exit(calibrate_guided.run(args.profile, args.video, slots=args.star_slots, game=args.game,
+        sys.exit(calibrate_guided.run(args.profile, list(args.video), slots=args.star_slots, game=args.game,
                                       port=args.port, browser=not args.no_browser, skip_index=args.skip_index,
                                       log=lambda m: print(m, flush=True)))
     if not args.name:

@@ -78,9 +78,15 @@ One long run works too, but it takes about 1 hour 45 minutes for 2 hours of foot
 cd C:\AI\gta-clipper
 claude
 ```
-In Claude Code type `/model sonnet`, then `/launch`. It asks you nothing. It makes **1 to 3** Shorts (a moment with
-nothing to teach is skipped: fewer good Shorts beat 3 weak ones). When it is done it prints the review page:
-`C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).
+In Claude Code type `/model sonnet`, then `/launch` (or `/launch --count 5` for more). It asks you nothing. It makes
+**at least 3** Shorts when 3 picks keep the rules, every one like the posted sample (hook from frame 0, voice, yellow
+captions, music and sound effects, setup -> payoff, close-ups of the HUD as proof); topic explainers come first,
+action clips get a short voice too. A pick that can only be a plain clip is left out, and the report says why. When
+it is done it prints the review page: `C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).
+
+**Every night after launch:** copy the new recordings to `C:\AI\gta\input` and type `/launch` again. Only the new
+recordings are indexed (the old ones stay in the library), and footage a Short already showed, the posted ones
+included, is never picked again (`C:\AI\gta\shorts\_used_footage.json`).
 
 The index stays at one sheet every 6 s. One every 12 s was measured on Nov 17: about 40 % faster, but it found
 only 3 of the 5 answer-key moments of test1 (6 s: 5 of 5), so it is not used.
@@ -96,6 +102,10 @@ Upload slots: **about 4:30 AM IST** and **about 10:30 PM IST**.
 ## If something goes wrong
 
 - `ERROR: ... Ollama ...`: open the Ollama app, then type `/launch` again. It carries on where it stopped.
+- `ERROR: another heavy job is running: ...`: wait for that one to finish (one heavy job at a time on the laptop),
+  then type the same command again.
+- `ERROR: only ... GB of memory free`: close the browser and anything else big, then type `/launch` again. It
+  carries on where it stopped.
 - `ERROR: no new recordings`: the files aren't in `C:\AI\gta\input` yet, or that part was already done.
 - **NO-HUD MODE** on the page: the HUD couldn't be read, so nothing mentions wanted stars. Check the flags more
   carefully.

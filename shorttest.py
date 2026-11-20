@@ -720,6 +720,50 @@ def the_real_facts_file_reads_and_keeps_the_owners_statuses():
 
 
 @check
+def own_footage_facts_are_added_and_confirmed_without_touching_the_rest():
+    """launch-fixes: facts from the owner's own footage. add_facts appends in facts.json's hand-written style and
+    never overwrites an id that is there; set_status (the owner's `facts.py confirm`) changes only that fact's status,
+    day and who checked it, and every other byte of the file stays; own_footage_text lists them with the confirm
+    command. In the real facts.json every own-footage fact quotes or describes the screen, says where in which
+    recording, has a picture, and is unverified or was confirmed by the owner, never by Claude"""
+    base = {"about": ["x"], "facts": [
+        {"id": "a", "claim": "A {brace} \"quote\".", "safe_wording": "a", "status": "confirmed", "time_sensitive": False,
+         "source": "https://x", "checked_on": "2026-11-12"},
+        {"id": "b", "claim": "B.", "safe_wording": "b reportedly", "status": "reported", "time_sensitive": True,
+         "source": "https://y", "checked_on": "2026-11-13"}]}
+    own = {"id": "own-x", "kind": facts.OWN_FOOTAGE, "claim": "The game's tip says: \"Heat {cleared}\".",
+           "safe_wording": "the game says heat cleared", "status": "unverified", "time_sensitive": False,
+           "source": "own footage: rec.webm, 1.0-2.0 s", "footage": {"video": "rec", "from_s": 1.0, "to_s": 2.0},
+           "picture": "C:\\pic.jpg", "checked_on": "2026-11-19", "checked_by": "claude"}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "facts.json"
+        path.write_text(json.dumps(base, indent=2), encoding="utf-8")
+        before = path.read_text(encoding="utf-8")
+        added = facts.add_facts([own, dict(own, claim="changed")], path)
+        again = facts.add_facts([dict(own, claim="changed")], path)
+        mid = path.read_text(encoding="utf-8")
+        listed = facts.own_footage_text(facts.load_facts(path))
+        changed = facts.set_status(["own-x"], "confirmed", "owner", "2026-11-20", path)
+        after = path.read_text(encoding="utf-8")
+        got = facts.load_facts(path)
+        missing = raises(facts.FactsError, facts.set_status, ["nope"], "confirmed", "owner", None, path)
+    head = before[:before.rstrip().rfind("]")].rstrip()
+    cut = mid.find('{"id": "own-x"')
+    real = [f for f in facts.load_facts().values() if f.get("kind") == facts.OWN_FOOTAGE]
+    return (added == ["own-x"] and again == [] and mid.startswith(head) and '    {"id": "own-x",\n     "kind": ' in mid
+            and changed == ["own-x"] and after[:cut] == mid[:cut]
+            and got["own-x"]["status"] == "confirmed" and got["own-x"]["checked_by"] == "owner"
+            and got["own-x"]["checked_on"] == "2026-11-20" and got["own-x"]["claim"] == own["claim"]
+            and got["a"]["claim"] == "A {brace} \"quote\"." and got["b"]["status"] == "reported"
+            and "own-x" in listed and "facts.py confirm own-x" in listed and missing and "no such fact" in missing
+            and len(real) >= 10
+            and all(f["claim"].startswith(("The game", "In the gun store", "Under the wanted stars",
+                                           "When the last icon", "The wanted HUD"))
+                    and f["footage"]["video"] and f["footage"]["to_s"] > f["footage"]["from_s"] and f.get("picture")
+                    and (f["status"] == "unverified" or f.get("checked_by") == "owner") for f in real))
+
+
+@check
 def every_fact_says_if_it_changes_and_when_it_was_checked():
     """a facts file is refused when a fact has no "time_sensitive" true/false, no "checked_on", a checked_on that is
     not a real YYYY-MM-DD day, the old "checked" key, or is confirmed with no day; in the real facts.json every fact
