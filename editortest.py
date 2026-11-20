@@ -184,6 +184,17 @@ def pieces_split_at_the_game_camera_cuts():
             and steady.split_points(10.0, 30, []) == [30])
 
 
+@check
+def a_fast_camera_swing_is_not_a_cut_and_the_payoff_is_judged_apart():
+    """a run of scene spikes (the camera swinging round as you get out) is not a camera cut, a lone spike is; and a
+    shot is split just before its payoff, so the calm setup can stay as it is while the jolt is steadied (one piece
+    for both kept the jolt, Nov 20)"""
+    run = [279.823, 279.856, 279.89, 279.923, 279.956, 279.99]
+    lone = steady.lone_spikes([270.247, 270.747] + run)
+    payoff_split = steady.split_points(265.0, 198, [270.247, 270.747, 268.6 - steady.PAYOFF_SPLIT_S])
+    return lone == [270.247, 270.747] and payoff_split == [99, 58, 15, 26]
+
+
 def make_video(path, seconds=8, blur_until=0.0, shake=0, loud_at=None, size="640x360"):
     """A made-up recording: testsrc2 with a fixed fine texture (testsrc2 alone is mostly flat colour, unlike
     gameplay), optionally shaking (a window moving over a bigger picture), blurred until blur_until, with a quiet

@@ -2669,7 +2669,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     cuts = cuts or (lambda v, a, b: steady().scene_cuts(v, a, b))
     clear = clear or (lambda v, a, latest, focus: steady().clear_start(v, a, latest, focus=focus))
     make_shot = make_shot or (lambda v, s, out, grade, log: steady().make_shot(v, s["from"], s["frames"], out,
-                                                                                focus=s["focus"], grade=grade, log=log))
+                                                                                focus=s["focus"], grade=grade, log=log,
+                                                                                splits=s.get("splits", ())))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
@@ -2726,6 +2727,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     (out_dir / "shots").mkdir(parents=True, exist_ok=True)
     report = []
     for s, ins in zip(plan["shots"], insets):
+        split = pay["from"] - 0.3                 # steady.PAYOFF_SPLIT_S: the setup and the payoff's jolt apart
+        s["splits"] = [split] if s["from"] + 0.5 < split < s["to"] - 0.5 else []
         path = out_dir / "shots" / f"shot{s['n']}.mp4"
         rep = make_shot(m["path"], s, path, grade, log)
         if ins:

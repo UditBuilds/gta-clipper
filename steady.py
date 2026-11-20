@@ -27,7 +27,13 @@ STAB_MOVE = "vidstabtransform=input={trf}:smoothing=15:optzoom=0:zoom=5:interpol
 STAB_MIN_FRAMES = 12                      # a piece shorter than this (0.4 s) is left as it is
 SHAKE_MIN_PX = 2.0                        # a piece calmer than this (jitter RMS, screen px) is left as it is
 SHAKE_BETTER = 0.85                       # stabilised is kept only when it measures this much calmer or better
-SCENE = 0.25                              # ffmpeg's scene score over this is a camera cut
+SCENE = 0.25                              # ffmpeg's scene score over this is a camera cut...
+CUT_ALONE_S = 0.15                        # ...when no other spike is this near: a run of spikes is a fast camera
+                                          # swing (getting out of a car), not a cut (Nov 20: 6 in a row at 4:39.8)
+LEAD_S = 0.45                             # vidstab measures from this far before a piece (same camera), so its
+                                          # correction starts near zero where the piece joins the one before
+PAYOFF_SPLIT_S = 0.3                      # a shot is also split this long before its payoff: the calm setup and the
+                                          # jolt are judged apart (one piece for both kept the jolt, Nov 20)
 # First frame (calibrated Nov 20 on part3 Short 2's leaf: blocked frames 3.0-7.5 detail and 41-65 % flat; clear
 # gameplay frames 11.7-17.9 detail and at most 15 % flat).
 FLAT_BLOCK, FLAT_LEVEL, FLAT_MAX = 30, 2.0, 0.30
@@ -155,12 +161,19 @@ def keep_stabilised(raw, stab):
     return max(rx, ry) >= SHAKE_MIN_PX and math.hypot(sx, sy) < SHAKE_BETTER * math.hypot(rx, ry) and not black
 
 
+def lone_spikes(times, alone=CUT_ALONE_S):
+    """The spikes with no other spike within `alone` seconds: the game's camera cuts. A run is a fast swing."""
+    times = sorted(times)
+    return [t for k, t in enumerate(times)
+            if (k == 0 or t - times[k - 1] > alone) and (k + 1 == len(times) or times[k + 1] - t > alone)]
+
+
 def scene_cuts(video, a, b, threshold=SCENE):
     """The recording's seconds in a..b where the picture cuts (the game switching camera)."""
     done = subprocess.run(["ffmpeg", "-hide_banner", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(video), "-an",
                            "-vf", f"select='gt(scene,{threshold})',showinfo", "-f", "null", "-"],
                           capture_output=True, text=True)
-    return [round(a + float(t), 3) for t in re.findall(r"pts_time:([0-9.]+)", done.stderr)]
+    return lone_spikes([round(a + float(t), 3) for t in re.findall(r"pts_time:([0-9.]+)", done.stderr)])
 
 
 def split_points(a, frames, cuts):
@@ -176,9 +189,10 @@ def split_points(a, frames, cuts):
     return sizes
 
 
-def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, stabilise=True):
-    """A shot's clip: split at the game's camera cuts, each piece measured raw and stabilised, the calmer one kept,
-    joined. Returns the report: per piece its seconds, both measures and what was kept."""
+def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, stabilise=True, splits=()):
+    """A shot's clip: split at the game's camera cuts (and at `splits`, such as just before the payoff), each piece
+    measured raw and stabilised, the calmer one kept, joined. vidstab measures a piece from LEAD_S before it when the
+    same camera was on then. Returns the report: per piece its seconds, both measures and what was kept."""
     import numpy as np  # noqa: F401  (fails early under .venv)
     out = Path(out)
     info = info or info_of(video)
@@ -186,13 +200,16 @@ def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, 
     work = out.parent / f"{out.stem}_pieces"
     work.mkdir(parents=True, exist_ok=True)
     pieces, report, done = [], [], 0
-    for k, n in enumerate(split_points(a, frames, cuts)):
+    for k, n in enumerate(split_points(a, frames, list(cuts) + list(splits))):
         src = a + done / FPS
+        camera_from = max([a] + [c for c in cuts if c <= src + 1e-6])
         raw = make_piece(video, src, n, work / f"p{k}_raw.mp4", info, focus, False, grade=grade)
         entry = {"from_s": round(src, 3), "frames": n, "raw_px": None, "stabilised_px": None, "stabilised": False}
         if stabilise and n >= STAB_MIN_FRAMES:
             r = shake_of(gray_frames(raw))
-            stab = make_piece(video, src, n, work / f"p{k}_stab.mp4", info, focus, True, grade=grade)
+            lead = max(camera_from, src - LEAD_S)
+            stab = make_piece(video, src, n, work / f"p{k}_stab.mp4", info, focus, True, grade=grade,
+                              detect=(lead, src + n / FPS + 0.05))
             s = shake_of(gray_frames(stab))
             keep = keep_stabilised(r, s)
             entry.update(raw_px=[round(r[0], 1), round(r[1], 1)], stabilised_px=[round(s[0], 1), round(s[1], 1)],
