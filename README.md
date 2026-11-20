@@ -853,7 +853,7 @@ first**, then **the story layer for every Short**, then labels and picking. The 
 "How to make GTA 6 cops FORGET you": the hook on screen from frame 0, the am_puck voice with yellow captions, music
 and sound effects, setup -> payoff, my footage as the proof.
 
-**Engine v3 (the default render, `launch.py render`)** makes every Short that way, both types:
+**Engine v3 (the default render until Nov 20, now `--engine v3`; see Editor v3 below)** makes every Short that way, both types:
 
 - Claude writes the lines and their **beats** (full screen, a framed card, a before/after compare, a banner), each at
   a second of the pick's own recording. A beat with `"zoom": "stars"` (or `"tip"`, `"minimap"`, or a box) is a
@@ -897,3 +897,40 @@ its share), are all checked before picking; every one that fails is listed in `c
 - Hollow white stars over a dark background are read as no stars (recording _022442 at 16:15): the calibrated star
   rule needs a lighter middle. Those seconds are "no stars", never a wrong number.
 - Spoken swearing is still not checked (faster-whisper not installed yet): listen once to a Short with game sound.
+
+## Editor v3 (Nov 20): payoff first, nothing twice, a steady picture
+
+None of the 3 READY Shorts from launch night part 3 was postable. Short 3's crash was skipped, scenes repeated, the
+picture wobbled, Short 2 opened on a blurry leaf and claimed six stars with no stars on screen, and the voice was slow
+and described instead of talking to the viewer. **Engine v4** (the default render now) plans the picture first and
+puts the voice into it:
+
+- **Payoff first.** Every Short names its one payoff in `shorts.json`: `"payoff": {"from": s, "to": s, "what": ...}`.
+  It plays whole, at real speed, inside one shot. An action payoff must hold the loudest moment of its footage (the
+  hit). No clear payoff, no Short: it is FAILED with the reason, and the review page shows every payoff.
+- **Why Short 3 lost its crash:** engine v3 took each beat as one second of the recording and let the voice decide how
+  long it stayed up. Line 2's beats at 267.0 s and 270.0 s were up 1.53 s each, so the impact (268.7-270.1 s) fell in
+  the gap. The clipper's peak (270.0) was the game's camera switch, not the hit. Line 1's beats overlapped (the same
+  seconds three times), and the loop ending replayed the first beat back and forth.
+- **Shots are spans** (`"shots": [{"from", "to"}]`), in order. No second of the recording is shown twice and there is
+  no loop ending. Too little unique footage makes a shorter Short (15 s at least), never a repeat.
+- **A steady picture** (`steady.py`, numpy, `.venv-tts`): one fixed 9:16 window per shot, 5 % in, with no pan or zoom.
+  Each piece between the game's own camera cuts is measured raw and through vidstab, and it is steadied only where
+  that measures calmer. Measured on my footage: calm chase-cam driving is already steady, the impact jolt goes from
+  8.8 to 2.0 px.
+- **First frame:**
+  - A blurry or blocked frame 0 moves the start later, 0.1 s at a time, up to 1.5 s. It is measured by detail and by
+    flat area; the leaf frames measured 41-65 % flat.
+  - A hook that names the stars opens on their close-up.
+- **The voice goes into the picture** (`cutplan.py`):
+  - Each line starts at its own second (`"at"`) and ends before its shot's cut.
+  - Every cut lands on a sentence end or a footage event.
+  - No line talks over an action payoff; the game's sound plays it, brought up to about -15 LUFS.
+  - am_puck speaks at 1.2. Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
+    like "Wait for it." claim nothing.
+
+```powershell
+.\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
+.\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 24 checks, about 40 s
+```

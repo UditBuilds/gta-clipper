@@ -168,18 +168,23 @@ def evidence_numbers(items):
     return {str(n) for e in items for n in e.get("numbers", [])}
 
 
-def line_problems(n, line, by_id, nohud, facts, line_span=None):
+def line_problems(n, line, by_id, nohud, facts, line_span=None, engine="v2"):
     """Everything wrong with one narrated line. line_span: (from_s, to_s) of the footage on screen while it is
-    spoken, in the recording's seconds; None skips the on-screen timing check (before the voice is timed)."""
+    spoken, in the recording's seconds; None skips the on-screen timing check (before the voice is timed).
+    engine v4 also takes "hype" lines (CLAIMS_V4)."""
     where = f"line {n}"
     say = line.get("say") if isinstance(line.get("say"), str) else ""
     claim = line.get("claim")
     ids = line.get("evidence", [])
     fact_ids = line.get("facts", [])
     out = []
-    if claim not in CLAIMS_V2:
+    if claim not in (CLAIMS_V4 if engine == "v4" else CLAIMS_V2):
         out.append(f"{where}: needs \"claim\": \"on_screen\" (it describes the footage), \"fact\" (how the game "
-                   "works, from facts.json) or \"ask\" (a question a later line answers)")
+                   "works, from facts.json) or \"ask\" (a question a later line answers)"
+                   + (" or \"hype\" (a few words to the viewer that claim nothing)" if engine == "v4" else ""))
+    if claim == "hype" and len(words_of(say)) > HYPE_WORDS:
+        out.append(f"{where}: a hype line is at most {HYPE_WORDS} words (\"Watch this.\", \"Wait for it.\"); a longer "
+                   "line says what is on screen (on_screen, with its evidence)")
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         out.append(f"{where}: \"evidence\" is a list of evidence ids such as [\"E2\"]")
         ids = []
@@ -267,6 +272,10 @@ def upload_problems(short):
 
 # --- The story layer (PR 26): the owner's rules for what a Short says ---
 CLAIMS_V2 = CLAIMS + ("ask",)
+# Engine v4 (editor-v3, Nov 20): the owner's punchy style talks to the viewer ("Watch this.", "Wait for it."). A
+# "hype" line claims nothing: at most HYPE_WORDS words, no evidence, and every thing it names still needs evidence.
+CLAIMS_V4 = CLAIMS_V2 + ("hype",)
+HYPE_WORDS = 5
 FORMATS = {"F1": "GTA 5 vs GTA 6: what changed", "F2": "a test: can you ...? and the answer",
            "F3": "3 things this moment shows", "F4": "first look: what it looks like in GTA 6"}
 # launch-fixes (engine v3): a topic Short teaches one thing about GTA 6 with the footage (and the game's own HUD or
@@ -407,8 +416,9 @@ def story_problems(short, moment, facts, engine="v2"):
     lines = short.get("lines") or []
     fmt = short.get("format")
     offered = moment.get("format_options")
-    known = {**FORMATS, **V3_FORMATS} if engine == "v3" else FORMATS
-    if offered is not None and engine == "v3":
+    v3 = engine in ("v3", "v4")
+    known = {**FORMATS, **V3_FORMATS} if v3 else FORMATS
+    if offered is not None and v3:
         offered = list(offered) + ([{"format": "A1"}] if moment.get("type") == "action" else [])
         offered += [{"format": "T1"}] if moment.get("type") == "narrated" and moment.get("topic") else []
     if fmt not in known:
@@ -452,13 +462,15 @@ def story_problems(short, moment, facts, engine="v2"):
                               if i in facts).lower()
         out += overlay_problems(n, line, by_id, nohud, facts_text)
     payoffs = [n for n, l in enumerate(lines, 1) if l.get("payoff")]
-    if len(payoffs) != 1:
+    if engine == "v4":           # the Short's own "payoff" (a span of the recording) is checked by cutplan.py
+        pass
+    elif len(payoffs) != 1:
         out.append("payoff: mark exactly one line \"payoff\": true (the answer or the thing the Short was for)")
     elif lines[payoffs[0] - 1].get("claim") not in CLAIMS:
         out.append(f"line {payoffs[0]}: the payoff states something (on_screen or fact), it isn't a question")
-    if lines and lines[0].get("claim") not in CLAIMS_V2:
+    if lines and lines[0].get("claim") not in (CLAIMS_V4 if engine == "v4" else CLAIMS_V2):
         out.append("line 1: the hook is a claim or a question the Short pays off")
-    if lines:
+    if lines and engine != "v4":   # v4 has no loop ending: it replayed the first shot (no second twice)
         last = lines[-1]
         if not last.get("loop"):
             out.append(f"line {len(lines)}: the last line has \"loop\": true and runs into line 1, so the Short loops")
@@ -494,7 +506,7 @@ def check_short(short, moment, facts, today, line_spans=None, engine="v2"):
         if isinstance(short.get(key), str):
             problems += text_problems(short[key], items, nohud, key)
     claims = []
-    voiced = moment.get("type") == "narrated" or engine == "v3"
+    voiced = moment.get("type") == "narrated" or engine in ("v3", "v4")
     if voiced:
         lines = short.get("lines")
         if not isinstance(lines, list) or not lines or not all(isinstance(l, dict) for l in lines):
@@ -502,12 +514,12 @@ def check_short(short, moment, facts, today, line_spans=None, engine="v2"):
                                "needs its lines (every Short has a voice)"], flags, claims
         hooks = short.get("hooks") or []
         star = short.get("star")
-        if (engine != "v3" and isinstance(star, int) and 0 <= star < len(hooks)
+        if (engine not in ("v3", "v4") and isinstance(star, int) and 0 <= star < len(hooks)
                 and lines[0].get("say", "").strip() != hooks[star].strip()):
             problems.append("line 1 must be the starred hook, word for word (the narrated hook is spoken)")
         for n, line in enumerate(lines, 1):
             span = line_spans[n - 1] if line_spans and n - 1 < len(line_spans) else None
-            problems += line_problems(n, line, by_id, nohud, facts, span)
+            problems += line_problems(n, line, by_id, nohud, facts, span, engine)
             if engine == "v3":
                 problems += beat_text_problems(n, line, by_id, nohud, facts)
         problems += story_problems(short, moment, facts, engine)
