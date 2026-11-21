@@ -116,8 +116,9 @@ def posted_topics_cost_points_and_match_only_their_own_moments():
     names = {t["name"] for t in now}
     return (star[0] == launch.STRONG_REPEAT_COST and "wanted stars" in star[1] and "crime reported" in star[1]
             and bike == (launch.REPEAT_COST, ["motorbike crash (Short 6)"]) and truck == (0.0, [])
-            and bike_then == (0.0, []) and {"motorbike crash (Short 6)", "tree effigy / passing out"} <= names
-            and len(now) - len(then) == 2), (star, bike, truck)
+            and bike_then == (0.0, []) and {"motorbike crash (Short 6)", "tree effigy / passing out",
+                                             "crime needs a witness"} <= names
+            and len(now) - len(then) == 3), (star, bike, truck)
 
 
 @check
@@ -232,6 +233,62 @@ def repick_runs_on_cached_data_and_leaves_the_run_alone():
         return (before == after and (out / "repick.json").is_file() and "OLD PICKS" in text and "NEW PICKS" in text
                 and data["old_picks"][0]["id"] == "M1" and data["new_picks"]
                 and all(p["pick_why"] and p["payoff_strength"] for p in data["new_picks"])), data["new_picks"]
+
+
+def made_up_posted(topics):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "posted_topics.json"
+        path.write_text(json.dumps({"topics": topics}), encoding="utf-8")
+        return launch.load_posted(path, log=quiet)
+
+
+@check
+def no_crash_right_after_a_posted_crash_unless_nothing_else_meets_the_bar():
+    """the owner's rule (Nov 21): with a crash among the last 2 posted Shorts, a crash isn't picked while another
+    candidate meets the payoff bar (a star rise with police on screen, 2/3); with only quieter candidates (1/3) the
+    crash is picked and says why, but only one crash a run while anything else is free; a planned topic is not
+    one of the last 2 posted"""
+    posted = made_up_posted([
+        {"name": "old star", "type": "star rise", "posted": "2026-11-13", "rules": [{"words": ["zzz"]}]},
+        {"name": "bike crash", "type": "crash", "posted": "2026-11-20", "rules": [{"words": ["zzz"]}]},
+        {"name": "effigy", "type": "discovery", "posted": "2026-11-21", "rules": [{"words": ["zzz"]}]},
+        {"name": "witness", "type": "star rise", "planned": "2026-11-21", "rules": [{"words": ["zzz"]}]}])
+    crash = mo("c", A, 0, 9.0, "crash", {"crash": 1.5})
+    cause = mo("s", B, 0, 3.0, "star rise", {"star_rise": 2.5, "police": 0.5})
+    quiet_one = mo("q", B, 0, 3.0, "chase", {"activity": 2.0, "activity_label": "chase"})
+    held = launch.pick_varied([dict(crash), dict(cause)], 1, posted, None, quiet)
+    allowed = launch.pick_varied([dict(crash), dict(quiet_one)], 1, posted, None, quiet)
+    crash2 = mo("c2", "rec_x", 0, 8.0, "crash", {"crash": 1.5})
+    one = launch.pick_varied([dict(crash), dict(crash2), dict(quiet_one)], 2, posted, None, quiet)
+    if sorted(m["id"] for m in one) != ["c", "q"]:          # the fallback lets one crash through, not two
+        return False, [m["id"] for m in one]
+    free = launch.pick_varied([dict(crash), dict(cause)], 1, posted[:1], None, quiet)
+    recent = launch.recent_posted(posted)
+    return (held[0]["id"] == "s" and allowed[0]["id"] == "c" and "nothing else meets the payoff bar" in allowed[0]["pick_why"]
+            and free[0]["id"] == "c" and recent == [("crash", "bike crash"), ("discovery", "effigy")]), (
+        [m["id"] for m in held], [m["id"] for m in allowed], recent)
+
+
+@check
+def a_moment_that_failed_its_shot_check_at_render_is_not_picked_again():
+    """M21 of the Nov 20 re-pick was part2's Short 4 again (the jet ski over an empty ocean, refused by the shot check
+    at render): failed_renders reads every run's render.json, and a moment mostly inside a failed Short's window is
+    left out before the pool, with why; a READY Short, or one that failed for another reason, leaves its footage be"""
+    with tempfile.TemporaryDirectory() as tmp:
+        run = Path(tmp) / "launch-2026-11-20-part2"
+        run.mkdir()
+        shorts = [{"short": 4, "status": "FAILED", "video": B, "window": [769.15, 804.15],
+                   "checks": {"rejected_shots": [{"why": ["only the character's back in an empty place"]}]}},
+                  {"short": 5, "status": "FAILED", "video": B, "window": [100.0, 130.0], "problems": ["a line runs on"]},
+                  {"short": 6, "status": "READY", "video": B, "window": [457.0, 477.0]}]
+        (run / "render.json").write_text(json.dumps({"shorts": shorts}), encoding="utf-8")
+        failed = launch.failed_renders(tmp)
+    m21 = mo("M21", B, 784.5, 4.56, "chase", {"activity": 2.0})
+    m25 = mo("M25", B, 460.5, 3.43, "crash", {"crash": 1.5})
+    m_text = mo("Mx", B, 105.0, 3.0, "action", {"action": 1.0})
+    hit = launch.failed_before(m21, failed)
+    return (len(failed) == 1 and hit and hit["where"] == "launch-2026-11-20-part2 Short 4" and "empty place" in hit["why"]
+            and launch.failed_before(m25, failed) is None and launch.failed_before(m_text, failed) is None)
 
 
 def main():

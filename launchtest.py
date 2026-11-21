@@ -1073,7 +1073,8 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
         try:
             folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
                                     log=lambda m: None, index_video=index_video, guided_run=guided_run,
-                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None,
+                                    posted_file=Path(tmp) / "posted_topics.json")   # none posted: the owner's real list changes
         finally:
             launch.probe_duration = old
         data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
@@ -1125,7 +1126,8 @@ def a_recording_under_15_s_is_skipped_with_a_plain_line():
         try:
             folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
                                     log=lines.append, index_video=index_video, guided_run=guided_run,
-                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None,
+                                    posted_file=Path(tmp) / "posted_topics.json")   # none posted
         finally:
             launch.probe_duration = old
         return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked, lines
@@ -1180,7 +1182,8 @@ def prepare_writes_candidates_with_evidence_and_logs_the_run():
             folder = launch.prepare("gta6", videos=[str(v) for v in vids] if dry else None, dry_run=dry,
                                     input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
                                     log=lambda m: None, index_video=index_video, guided_run=guided_run,
-                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None)
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None,
+                                    posted_file=Path(tmp) / "posted_topics.json")   # none posted: the owner's real list changes
         finally:
             launch.probe_duration = old
         data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))

@@ -958,6 +958,12 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
 
   A topic matches by rules (category, topic id, score term, words in what the frames say), so "black SUV crash on the
   bridge" doesn't match the motorbike crash.
+- **No same type back to back** (the owner, Nov 21). A moment of the same type as one of the last 2 posted Shorts
+  (`posted_topics.json`: `type`, `posted` day; a `planned` one doesn't count until it is posted) is held back
+  while another candidate meets the payoff bar (2/3). No crash right after a crash.
+- **A moment that already failed is not picked again.** Every run's `render.json` is read. A moment mostly inside
+  a Short that FAILED its shot check is left out before the pool, with why. The Nov 20 re-pick's M21 was part2's
+  Short 4 again: the jet ski over an empty ocean.
 - **The report.** `candidates.json` gives each pick its `payoff_strength`, `repeats` and `pick_why`: why it won and
   what it beat. The review page shows "why this moment".
 - **`launch.py repick`** runs the picking step again on an old run's cached data: each `index.json` and `clip.py` run,
@@ -974,5 +980,5 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
 
 ```powershell
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
-.\.venv\Scripts\python.exe varietytest.py                                                 # 9 checks, a few seconds
+.\.venv\Scripts\python.exe varietytest.py                                                 # 11 checks, a few seconds
 ```

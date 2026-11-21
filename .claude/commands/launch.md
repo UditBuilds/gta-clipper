@@ -39,7 +39,9 @@ visible cause, 1 a HUD change alone or action with no single event, 0 quiet), th
 picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2 picks a recording** unless
 nothing else qualifies; **both an action clip and a topic** when the pool has them; a moment that repeats a topic
 already posted (`posted_topics.json`: the owner's list) costs points, "wanted stars" / "stars appear" and "crime
-reported" the most. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
+reported" the most; **no Short of the same type as one of the last 2 posted** (no crash right after a crash) while
+another candidate meets the payoff bar (2/3); a moment that **already failed the shot check** at an earlier render
+is left out before the pool. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
 
 ## 2. Look at each pick
 
@@ -112,7 +114,9 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
 ]}
 ```
 
-**Hooks.** 3 options in English, 3-6 words, readable in one second, true to the footage, no emoji; `star` is the best
+**Hooks.** 3 options in English, 3-6 words, readable in one second, true to the footage, no emoji. **An action
+hook names what to watch in the first second ("Watch the black SUV") and never states the result ("ends badly")**:
+the SUV Short kept 71 % of viewers, the bike Short ("This bike ride ends badly") only 32 %. `star` is the best
 one, shown as the opening card from frame 0 (`open_card` sets it by hand, `"LINE 1|LINE 2"`). Whatever it tells the
 viewer to watch must be easy to find in the picture (no ring is drawn for you): pick footage where it is clear.
 
