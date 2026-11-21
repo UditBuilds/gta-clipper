@@ -592,6 +592,18 @@
      "picture": "C:\\AI\\gta\\facts\\own\\own-hud-stars-turn-outlines.jpg",
      "checked_on": "2026-11-19",
      "checked_by": "claude",
-     "note": "What the HUD shows in the owner's recording. What an outline star means comes from facts.json's reported wanted-hollow-star, not from this."}
+     "note": "What the HUD shows in the owner's recording. What an outline star means comes from facts.json's reported wanted-hollow-star, not from this."},
+
+    {"id": "tree-effigies-three",
+     "claim": "Kirk's Strangers & Freaks side mission \"Search for Tree Effigies\" asks you to find and inspect 3 Tree Effigies (trees carved like a figure) in the swamps of Pelican Valley.",
+     "safe_wording": "there are reportedly three of these hidden out here",
+     "also_ok": ["reportedly, there are three Tree Effigies to find"],
+     "status": "reported",
+     "time_sensitive": false,
+     "source": "https://www.powerpyx.com/gta-6-search-for-tree-effigies-locations-walkthrough/",
+     "more_sources": ["https://www.powerpyx.com/gta-6-all-strangers-freaks-side-missions/", "https://www.gtabase.com/gta-6/strangers/search-for-tree-effigies", "https://game8.co/games/GTA-6/archives/637143"],
+     "checked_on": "2026-11-20",
+     "checked_by": "claude",
+     "note": "Status given by the owner on 2026-11-20 (reported: fan guides, not Rockstar). PowerPyx's walkthrough, read 2026-11-20: \"Find 3 Tree Effigies\" and \"To solve the quest you need to inspect 3 Tree Effigies in the swamps. You can find them in any order.\" Its Strangers & Freaks list puts it under Kirk as mission 2 of 3. GTABase says the same (3 carved trees). Used by the hand-made Short effigy-2026-11-20 over the owner's recording Grand Theft Auto VI_20261120175255, in the owner's own words \"Game guides say there are three of these hidden out here.\" (approved 2026-11-20; \"game guides say\" stands in for \"reportedly\" there only). Do not name or describe what the next mission in the chain is about (spoiler), and do not call the effigies secret or undiscovered."}
   ]
 }

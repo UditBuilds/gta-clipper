@@ -33,8 +33,15 @@ indexes them, then builds a **pool of 15-25 candidates** spread over all recordi
 shot-list topics the footage matches, and GTA 6 HUD changes such as the heat icons or the stars' look), then the best
 action moments. Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood in the first 7 s or
 swearing in the subtitles; and its **labels are checked against what the vision model sees in its own frames** (a
-"crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. The best that pass
-are picked. Everything is in `<run folder>\candidates.json`.
+"crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. Then the picks
+(PR 29): **the clearest payoff first** (`payoff_strength`: 3 an impact the frames confirmed, 2 a HUD change with a
+visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **no near-duplicates** (two
+picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2 picks a recording** unless
+nothing else qualifies; **both an action clip and a topic** when the pool has them; a moment that repeats a topic
+already posted (`posted_topics.json`: the owner's list) costs points, "wanted stars" / "stars appear" and "crime
+reported" the most; **no Short of the same type as one of the last 2 posted** (no crash right after a crash) while
+another candidate meets the payoff bar (2/3); a moment that **already failed the shot check** at an earlier render
+is left out before the pool. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
 
 ## 2. Look at each pick
 
@@ -42,6 +49,7 @@ For every entry of `picks`:
 - `type`: `narrated` (a topic explainer, 15-39 s) or `action` (15-25 s). Decided in code; keep it.
 - `topic` (a topic candidate): what the footage proves (`id`, `why`, `at_s`) and the facts.json ids it may use
   (`facts`). `format_options`: the formats this moment can teach (T1 a topic, F1-F4 as before); an action pick is A1.
+- `payoff_strength` and `pick_why` (why this moment won), `repeats` (posted topics it repeats).
 - `window`, `anchor_s`, `evidence` (E1, E2 ...: what the footage shows, when, and where that comes from: the HUD's stars,
   `heat` (the icons under the stars) and `star_look` (red, red outline, white outline), activities, events the frames
   confirmed, the model's lines), `flags`, `mode`, `mission`, `dropped_labels` (what the frames did not confirm).
@@ -77,7 +85,13 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    screen while it is said, and `teaches`), `fact` (`facts` from facts.json), `ask` (a question with `answered_by`)
    or **`hype`**: at most 5 words that claim nothing ("Watch this.", "Wait for it."). Anything a line names (a truck,
    the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (`"speed"` changes it).
-6. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
+6. **One slow-mo replay, action Shorts only** (the only second shown twice): `"replay": {"from": s, "to": s}` names
+   the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
+   plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
+   with the game's sound slowed and no voice. Use it when the hit is too fast to see; skip it otherwise. No ring is
+   drawn on it (nothing tracks the object reliably). End the payoff before the game's camera swings away: the
+   replay comes straight after it (Short 6's payoff ran 0.3 s into a swing, which flashed just before the replay).
+7. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
    "He's here"). The swear check transcribes the finished Short; if its words differ from yours, reword.
 
 ```json
@@ -100,7 +114,9 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
 ]}
 ```
 
-**Hooks.** 3 options in English, 3-6 words, readable in one second, true to the footage, no emoji; `star` is the best
+**Hooks.** 3 options in English, 3-6 words, readable in one second, true to the footage, no emoji. **An action
+hook names what to watch in the first second ("Watch the black SUV") and never states the result ("ends badly")**:
+the SUV Short kept 71 % of viewers, the bike Short ("This bike ride ends badly") only 32 %. `star` is the best
 one, shown as the opening card from frame 0 (`open_card` sets it by hand, `"LINE 1|LINE 2"`). Whatever it tells the
 viewer to watch must be easy to find in the picture (no ring is drawn for you): pick footage where it is clear.
 
@@ -145,7 +161,8 @@ can fix; otherwise say so in the report.
 
 1. HUD first: if `candidates.json` `hud.mode` isn't `hud`, say so at the very top, with why.
 2. The review page path: `<run folder>\review.html`.
-3. For each Short: READY or FAILED, the type and format, **its payoff (what, and where in the Short)**, the 3 hooks
+3. For each Short: READY or FAILED, the type and format, **its payoff (what, and where in the Short)**, its payoff
+   strength and why it was picked (`pick_why`), the replay if it has one, the 3 hooks
    with the starred one marked, what it teaches or shows, the length, the title, its flags.
 4. Candidates left out and why (`candidates.json` `rejected`, and picks you didn't write).
 5. How long prepare and render took. Ask nothing.

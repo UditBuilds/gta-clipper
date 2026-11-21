@@ -699,14 +699,15 @@ POOL_MIN, POOL_MAX = 15, 25   # launch-fixes: the candidates checked before pick
 POOL_APART_S = 60.0           # two candidates of one recording keep this far apart (start to start)
 
 
-def pool_of(moments, size, apart=POOL_APART_S):
-    """launch-fixes: the candidates worth checking: the best moments, spread over the recordings. Best first, a moment
-    joins when it is POOL_APART_S from the others of its recording and its recording has fewer than its share (the
-    pool size over the number of recordings, plus one); then the rest fill up by score."""
+def pool_of(moments, size, apart=POOL_APART_S, rank=None):
+    """launch-fixes: the candidates worth checking: the best moments, spread over the recordings. Best first (by
+    rank(m), the score by default; PR 29: pool_rank), a moment joins when it is POOL_APART_S from the others of its
+    recording and its recording has fewer than its share (the pool size over the number of recordings, plus one)."""
+    rank = rank or (lambda m: m["score"])
     recordings = {m["video"] for m in moments}
     cap = max(2, -(-size // max(1, len(recordings))) + 1)
     pool, count = [], {}
-    for m in sorted(moments, key=lambda m: (-m["score"], m["session_s"])):
+    for m in sorted(moments, key=lambda m: (-rank(m), m["session_s"])):
         near = any(p["video"] == m["video"] and abs(p["start_s"] - m["start_s"]) < apart for p in pool)
         if not near and count.get(m["video"], 0) < cap:
             pool.append(m)
@@ -716,13 +717,14 @@ def pool_of(moments, size, apart=POOL_APART_S):
     return pool
 
 
-def pick_pool(moments, ok, count=3, size=None, log=print):
+def pick_pool(moments, ok, count=3, size=None, log=print, posted=(), text_of=None):
     """launch-fixes: (picks, rejected, pool). Every candidate of the pool (pool_of) goes through ok() (the safety checks,
     the labels checked against the frames, the quality gate), not only the few that would be picked; then the `count`
-    best that pass are picked, a category already picked costing CATEGORY_COST. rejected lists every candidate that
-    failed, with why."""
+    picks are made by pick_varied (PR 29: payoff strength first, no near-duplicates, at most PER_RECORDING a recording,
+    both types, posted topics cost). rejected lists every candidate that failed, with why. posted: the posted-topics
+    list (load_posted); text_of(m): what the frames say about m (moment_text), for matching it."""
     size = size or max(POOL_MIN, min(POOL_MAX, 5 * count))
-    pool = pool_of(moments, size)
+    pool = pool_of(moments, size, rank=lambda m: pool_rank(m, posted, text_of))
     passed, rejected = [], []
     for k, m in enumerate(pool, 1):
         good, why = ok(m)
@@ -735,16 +737,283 @@ def pick_pool(moments, ok, count=3, size=None, log=print):
             log(f"  {m.get('id')} {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])} failed: " + "; ".join(why))
         if k % 5 == 0:
             log(f"  checked {k} of {len(pool)} candidates: {len(passed)} pass so far")
-    picked = []
-    while len(picked) < count and passed:
-        best = max(passed, key=lambda m: (m["score"] - CATEGORY_COST * sum(1 for p in picked
-                                                                           if p["category"] == m["category"]),
-                                          -m["session_s"]))
-        picked.append(best)
-        passed.remove(best)
+    picked = pick_varied(passed, count, posted, text_of, log)
     for m in passed:
-        m["checked"]["not_picked"] = "passed, but others scored higher"
-    return sorted(picked, key=lambda m: -m["score"]), rejected, pool
+        if m not in picked:
+            m["checked"]["not_picked"] = m.get("not_picked_why") or "passed, but others scored higher"
+    return picked, rejected, pool
+
+
+# --- 5c. Variety (PR 29): payoff strength first, no near-duplicates, both types, posted topics ---
+# The Nov 20 run picked three "stars appear" moments of one recording (M1, M5 and M8 of _135610: only one was usable),
+# while the night's best moment, the motorbike crash (M25), came in only on a --count 6 re-run. So the picks are now
+# ranked by how clear their payoff is before anything else, two picks of one recording must be clearly different
+# moments, a run aims for both an action clip and a topic, and a moment that repeats a topic already posted costs points.
+IMPACT_TERMS = ("crash", "explosion", "stunt")
+PAYOFF_LABELS = {3: "impact", 2: "HUD change with a visible cause", 1: "no single clear event", 0: "quiet"}
+PER_RECORDING = 2            # picks from one recording, unless nothing else qualifies
+NEAR_DUP_S = 600.0           # two picks of one recording of the same kind closer than this are the same moment twice
+                             # (M1 and M5 of the Nov 20 run were 321 s apart and the owner called them near-identical)
+REPEAT_COST, STRONG_REPEAT_COST = 2.0, 4.0   # a moment repeating a posted topic (a "strong" one: the owner's worst)
+POOL_PAYOFF_BONUS = 1.0      # pool_of: a candidate's place in the pool also counts its payoff tier this much a step
+POSTED_FILE = HERE / "posted_topics.json"    # the topics already posted (the owner's list)
+RULE_KEYS = {"category", "topic", "term", "profile", "words", "all_words"}
+RECENT_POSTED = 2            # the owner (Nov 21): no crash while a crash is one of the last 2 posted Shorts...
+PAYOFF_BAR = 2               # ...unless nothing else meets the payoff bar (payoff tier 2 or more)
+FAILED_SHARE = 0.5           # a moment this much inside a Short that failed its shot check at render is left out
+
+
+def payoff_strength(m):
+    """(tier 0-3, label, why): how clear and visible a moment's payoff is. 3: an impact (a crash, explosion or stunt
+    its own frames confirmed: verify_terms drops one they don't show); 2: a HUD change with a visible cause (the stars
+    rise with police or a shootout on screen); 1: a HUD change alone, or action with no single event; 0: quiet."""
+    terms = m.get("terms") or {}
+    point = (m.get("point") or {}).get("action_payoff") or []
+    hits = [k for k in IMPACT_TERMS if terms.get(k) or k in point]
+    if hits:
+        return 3, PAYOFF_LABELS[3], f"a {hits[0]} seen in its own frames"
+    hud = bool(terms.get("star_rise") or terms.get("hud6") or "star rise" in point)
+    cause = (["police"] if terms.get("police") else []) + (["a shootout"] if terms.get("activity_label") == "shootout"
+                                                          else [])
+    if hud and cause:
+        return 2, PAYOFF_LABELS[2], f"the stars rise with {cause[0]} on screen"
+    if hud:
+        return 1, PAYOFF_LABELS[1], "the HUD changes (stars or icons), but no cause is seen"
+    if terms.get("activity", 0) > 0:
+        return 1, PAYOFF_LABELS[1], f"{terms.get('activity_label', 'action')} with no single clear event"
+    return 0, PAYOFF_LABELS[0], "nothing clear happens"
+
+
+def load_posted(path=POSTED_FILE, as_of=None, log=print):
+    """The posted-topics list (posted_topics.json), read only. as_of: an ISO time; topics added after it are left out,
+    and a "posted" day after its day counts as not posted yet (a re-pick of an old run sees the list as it was then; a
+    topic with no "added" was on the owner's first list). A missing file means no topic costs, said in the log."""
+    path = Path(path)
+    if not path.is_file():
+        log(f"  No posted-topics list ({path}): no topic repeats are counted")
+        return []
+    data = read_json(path) or {}
+    out = []
+    for t in data.get("topics", []):
+        if not isinstance(t, dict) or not t.get("name") or not isinstance(t.get("rules"), list):
+            raise LaunchError(f"{path}: every topic has a \"name\" and \"rules\" (a list): {t!r}")
+        for r in t["rules"]:
+            if not isinstance(r, dict) or not r or set(r) - RULE_KEYS:
+                raise LaunchError(f"{path}: topic {t['name']!r}: a rule uses only {', '.join(sorted(RULE_KEYS))}")
+        for k in ("posted", "planned"):
+            if t.get(k) is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(t[k])):
+                raise LaunchError(f"{path}: topic {t['name']!r}: {k} is a day, YYYY-MM-DD")
+        if as_of and t.get("added") and str(t["added"]) > str(as_of):
+            continue
+        t = dict(t)
+        if as_of and t.get("posted") and t["posted"] > str(as_of)[:10]:
+            t.pop("posted")
+        out.append(t)
+    return out
+
+
+def recent_posted(posted, n=RECENT_POSTED):
+    """[(type, name)] of the last n POSTED topics (by their posted day, then their place in the list); a planned topic
+    is not one of them until it has a posted day."""
+    dated = [(t["posted"], k, t) for k, t in enumerate(posted) if t.get("posted")]
+    return [(t.get("type"), t["name"]) for _, _, t in sorted(dated, key=lambda x: x[:2])[-n:]]
+
+
+def moment_type(m):
+    """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt) or else its
+    category (star rise, chase, heat-icons ...)."""
+    terms, point = m.get("terms") or {}, (m.get("point") or {}).get("action_payoff") or []
+    hits = [k for k in IMPACT_TERMS if terms.get(k) or k in point]
+    return hits[0] if hits else str(m.get("category", "")).replace("topic: ", "")
+
+
+def moment_text(rec, m):
+    """What the frames say about a moment: the vision model's notable lines over its seconds, and a topic's reason."""
+    a, b = m["start_s"], m["end_s"]
+    lines = [s.get("notable") or "" for s in rec.get("sheets", []) if overlap(a, b, s["t"], s["t"] + rec["every"]) > 0]
+    return " ".join(lines + [str((m.get("topic") or {}).get("why") or "")]).lower()
+
+
+def rule_holds(rule, m, text):
+    """Every condition of one posted-topic rule holds for the moment (each a list: any of it; all_words: all)."""
+    terms = m.get("terms") or {}
+    tests = {"category": lambda v: m.get("category") in v or str(m.get("category", "")).replace("topic: ", "") in v,
+             "topic": lambda v: (m.get("topic") or {}).get("id") in v
+             or str(m.get("category", "")).replace("topic: ", "") in v,
+             "term": lambda v: any(terms.get(k) for k in v),
+             "profile": lambda v: m.get("profile") in v,
+             "words": lambda v: any(re.search(rf"\b{re.escape(w.lower())}", text) for w in v),
+             "all_words": lambda v: all(re.search(rf"\b{re.escape(w.lower())}", text) for w in v)}
+    return all(tests[k](v if isinstance(v, list) else [v]) for k, v in rule.items())
+
+
+def topic_repeats(m, posted, text):
+    """(cost, names): the posted topics this moment repeats and what that costs (the dearest one, not a sum)."""
+    names, cost = [], 0.0
+    for t in posted:
+        if any(rule_holds(r, m, text) for r in t["rules"]):
+            names.append(t["name"])
+            cost = max(cost, STRONG_REPEAT_COST if t.get("strong") else REPEAT_COST)
+    return cost, names
+
+
+def pool_rank(m, posted=(), text_of=None):
+    """A candidate's place in the pool: its score, its payoff tier (from its unchecked terms) and any posted-topic
+    cost, so a strong crash isn't left out of the pool by a run of star rises (M25 only just made it on Nov 20)."""
+    tier = payoff_strength(m)[0]
+    cost = topic_repeats(m, posted, text_of(m) if text_of else "")[0] if posted else 0.0
+    return m["score"] + POOL_PAYOFF_BONUS * tier - cost
+
+
+def moment_name(m):
+    return m.get("id") or f"{m['video'][-6:]} {hms(m['start_s'])}"
+
+
+def near_duplicate(m, p):
+    """Why m is the same moment again as the pick p, or None: same recording, same kind (category), and closer than
+    NEAR_DUP_S. Two picks of one recording must differ in kind or be far apart."""
+    if m["video"] != p["video"] or m.get("category") != p.get("category"):
+        return None
+    apart = abs(m["start_s"] - p["start_s"])
+    if apart >= NEAR_DUP_S:
+        return None
+    return (f"the same kind of moment as {moment_name(p)} ({m.get('category')}, same recording, {apart:.0f} s apart): "
+            "a near-duplicate")
+
+
+def can_be(kind, m):
+    """Can this moment make that kind of Short? action: an impact payoff; topic: something to teach in a narrated
+    Short, i.e. a format the quality gate found (which needs a narrated window: the Nov 20 re-pick's M1 had a topic
+    but only 17 s of clean footage, so it was made an action clip). Without the gate (older steps' tests), a topic."""
+    if kind == "action":
+        return payoff_strength(m)[0] == 3
+    if m.get("point") is not None:
+        return bool(m["point"].get("formats"))
+    return bool(m.get("topic"))
+
+
+def pick_varied(passed, count, posted=(), text_of=None, log=print):
+    """The picks from the candidates that passed every check, best first (PR 29). Each step takes the free candidate
+    with the clearest payoff (payoff_strength's tier), then the most points: its score, less a posted topic it repeats
+    (topic_repeats) and CATEGORY_COST for each pick already of its category. A candidate is not free when it is a
+    near-duplicate of a pick or its recording has PER_RECORDING picks (that limit is lifted only when nothing else
+    qualifies). Then, when the picks lack an action clip or a topic and a free candidate of that kind passed, it takes
+    the place of the weakest pick that isn't the only one of the other kind. Every pick gets "payoff_strength" and
+    "pick_why" (why it beat the others); every candidate left gets "not_picked_why"."""
+    for m in passed:
+        tier, label, why = payoff_strength(m)
+        cost, names = topic_repeats(m, posted, text_of(m) if text_of else "")
+        m["payoff_strength"] = {"tier": tier, "label": label, "why": why}
+        m["repeats"], m["repeat_cost"] = names, cost
+    recent = recent_posted(posted)
+    recent_types = {t for t, _ in recent if t}
+
+    def value(m, picked):
+        return m["score"] - m["repeat_cost"] - CATEGORY_COST * sum(1 for p in picked if p["category"] == m["category"])
+
+    def key(m, picked):
+        return (m["payoff_strength"]["tier"], round(value(m, picked), 3), -m["session_s"])
+
+    def held_back(m, picked, cap):
+        for p in picked:
+            why = near_duplicate(m, p)
+            if why:
+                return why
+        same = sum(1 for p in picked if p["video"] == m["video"])
+        return f"its recording already has {same} picks (at most {cap})" if same >= cap else None
+
+    def bar_met_by_other(m, picked, cap):
+        """The best other free candidate of a type not posted lately that meets the payoff bar, or None."""
+        return next((c for c in sorted(passed, key=lambda c: key(c, picked), reverse=True)
+                     if c is not m and c not in picked and moment_type(c) not in recent_types
+                     and c["payoff_strength"]["tier"] >= PAYOFF_BAR and not held_back(c, picked, cap)), None)
+
+    def blocked(m, picked, cap):
+        why = held_back(m, picked, cap)
+        kind = moment_type(m)
+        if why or kind not in recent_types:
+            return why
+        names = ", ".join(n for t, n in recent if t == kind)
+        other = bar_met_by_other(m, picked, cap)
+        if other is not None:
+            return (f"a {kind} is one of the last {RECENT_POSTED} posted Shorts ({names}), and {moment_name(other)} "
+                    "meets the payoff bar")
+        # Nothing else meets the bar: one pick of that type may come, not two (two crashes after a posted crash is
+        # still crash after crash), while any other candidate is free.
+        if any(moment_type(p) == kind for p in picked) and any(
+                c is not m and c not in picked and moment_type(c) not in recent_types and not held_back(c, picked, cap)
+                for c in passed):
+            return f"this run already has a {kind}, right after a posted one ({names})"
+        return None
+
+    def describe(m, picked):
+        ps = m["payoff_strength"]
+        out = f"payoff {ps['tier']}/3 ({ps['label']}: {ps['why']}), {value(m, picked):.2f} points"
+        if m["repeats"]:
+            out += f" after -{m['repeat_cost']:g} for repeating posted topic(s): {', '.join(m['repeats'])}"
+        return out
+
+    picked, reasons = [], {}
+    for cap in (PER_RECORDING, max(count, PER_RECORDING)):
+        while len(picked) < count:
+            free, held = [], []
+            for m in passed:
+                if m in picked:
+                    continue
+                why = blocked(m, picked, cap)
+                (held if why else free).append((m, why))
+            if not free:
+                break
+            ranked = sorted((m for m, _ in free), key=lambda m: key(m, picked), reverse=True)
+            best = ranked[0]
+            why = [describe(best, picked)]
+            if ranked[1:]:
+                r = ranked[1]
+                rt, bt = r["payoff_strength"]["tier"], best["payoff_strength"]["tier"]
+                why.append(f"beat {moment_name(r)} ({r['category']}): " + (
+                    f"a weaker payoff ({rt}/3, {r['payoff_strength']['label']})" if rt < bt else
+                    f"fewer points ({value(r, picked):.2f})"))
+            above = [(m, w) for m, w in held if key(m, picked) > key(best, picked)]
+            why += [f"{moment_name(m)} ranked higher but was left out: {w}" for m, w in above[:2]]
+            if cap > PER_RECORDING:
+                why.append(f"a third pick of its recording: nothing else qualified")
+            if moment_type(best) in recent_types:
+                why.append(f"a {moment_type(best)} like the last posted ("
+                           + ", ".join(n for t, n in recent if t == moment_type(best))
+                           + f"), picked because nothing else meets the payoff bar ({PAYOFF_BAR}/3)")
+            best["pick_why"] = "; ".join(why)
+            picked.append(best)
+            for m, w in held:
+                reasons[id(m)] = w
+        if len(picked) >= count:
+            break
+    if count >= 2:
+        for kind, other in (("action", "topic"), ("topic", "action")):
+            if any(can_be(kind, p) for p in picked):
+                continue
+            for out in sorted(picked, key=lambda p: key(p, [q for q in picked if q is not p])):
+                rest = [p for p in picked if p is not out]
+                if can_be(other, out) and not any(can_be(other, p) for p in rest):
+                    continue
+                cands = [m for m in passed if m not in picked and can_be(kind, m) and not blocked(m, rest, PER_RECORDING)]
+                if not cands:
+                    continue
+                best = max(cands, key=lambda m: key(m, rest))
+                best["pick_why"] = (describe(best, rest) + f"; picked so the run has a{'n' if kind == 'action' else ''} "
+                                    f"{kind} Short: it takes the place of {moment_name(out)}")
+                reasons[id(out)] = f"its place went to {moment_name(best)}, so the run has a{'n' if kind == 'action' else ''} {kind} Short"
+                out.pop("pick_why", None)
+                picked = rest + [best]
+                break
+    for m in passed:
+        if m not in picked:
+            m["not_picked_why"] = reasons.get(id(m)) or (f"passed, but the picks ranked higher ({describe(m, picked)})")
+    picked.sort(key=lambda m: key(m, []), reverse=True)
+    for m in picked:
+        log(f"  Picked {moment_name(m)} {m['video'][-6:]} {hms(m['start_s'])} ({m['category']}): {m['pick_why']}")
+    if len(picked) < count:
+        log(f"  Only {len(picked)} of {count} picks: the other candidates were near-duplicates or failed the checks")
+    return picked
 
 
 # --- 6. Evidence and types ---
@@ -1290,10 +1559,96 @@ def preflight(model, log=print):
     return free
 
 
+def failed_renders(shorts_dir=SHORTS_DIR):
+    """[{video, from, to, where, why}]: every Short of an earlier run whose last render FAILED on its pictures (the
+    shot check: rejected_shots), with its window. The Nov 20 re-pick's M21 was part2's Short 4 again: the jet ski over
+    an empty ocean that the shot check had refused. The picker can't see that by itself, so it is read here."""
+    out = []
+    for f in sorted(Path(shorts_dir).glob("*/" + RENDER_LOG)):
+        for e in (read_json(f) or {}).get("shorts", []):
+            rejected = (e.get("checks") or {}).get("rejected_shots") or []
+            if e.get("status") != "FAILED" or not rejected or not e.get("video") or not e.get("window"):
+                continue
+            out.append({"video": e["video"], "from": float(e["window"][0]), "to": float(e["window"][1]),
+                        "where": f"{f.parent.name} Short {e.get('short')}",
+                        "why": "; ".join(rejected[0].get("why") or [])[:200]})
+    return out
+
+
+def failed_before(m, failed):
+    """The earlier failed render this moment mostly repeats (FAILED_SHARE of its seconds or more), or None."""
+    length = max(1e-6, m["end_s"] - m["start_s"])
+    return next((f for f in failed if f["video"] == m["video"]
+                 and overlap(m["start_s"], m["end_s"], f["from"], f["to"]) >= FAILED_SHARE * length), None)
+
+
+def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_run, topics=True, log=print,
+              hud6=None, failed=()):
+    """prepare's step 5, shared with repick: mine every recording's moments and the topic candidates (leaving out
+    used footage), check a pool of them (safety, labels against the frames, the quality gate) and pick `count`
+    (pick_varied), then give each pick its type and the GTA 6 HUD's close look. Returns (moments, picks, rejected,
+    pool). safety: a callable (m, rec, folder) -> (passes, why), or None to skip it. hud6: the GTA 6 HUD reader
+    (proof.hud6 by default; tests pass a stand-in). failed: failed_renders(); a moment that mostly repeats one is left
+    out before the pool, with why."""
+    moments = [m for rec in recs.values() for m in mine(rec, used)]
+    moments += topic_candidates(recs, used, hud6=hud6, log=log) if topics else []
+    moments.sort(key=lambda m: -m["score"])
+    for k, m in enumerate(moments, 1):
+        m["id"] = f"M{k}"
+    left_out, kept = [], []
+    for m in moments:
+        bad = failed_before(m, failed)
+        if bad:
+            why = f"failed the shot check when it was rendered before ({bad['where']}: {bad['why']})"
+            left_out.append({"id": m["id"], "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
+                             "score": m["score"], "category": m.get("category"), "why": [why]})
+            log(f"  Left out {m['id']} {m['video']} {hms(m['start_s'])}-{hms(m['end_s'])}: {why}")
+        else:
+            kept.append(m)
+    moments = kept
+    log(f"Moments: {len(moments)} found; the best: "
+        + "; ".join(f"{m['id']} {m['video']} {hms(m['start_s'])} {m['category']} {m['score']:.1f}" for m in moments[:5]))
+    safe = (lambda m: safety(m, recs[m["video"]], folder)) if safety else (lambda m: (True, []))
+    firsts = session_firsts(recs, recordings)
+    found = {}
+
+    def find_compare(topic, labels, words):
+        if topic[0] not in found:
+            main = None
+            if game == "gta6" and not dry_run:
+                try:
+                    main = library.load_library(index.LIBRARY)
+                except library.LibraryError:
+                    main = None
+            found[topic[0]] = compare_side(topic, labels, words, game, dry_run, main, used=used)
+        return found[topic[0]]
+
+    def ok(m):
+        """The safety checks, the labels checked against what the frames show (launch-fixes), then the owner's
+        quality gate (PR 26): a moment with no clear point is skipped."""
+        passes, why = safe(m)
+        if not passes:
+            return passes, why
+        verify_terms(recs[m["video"]], m)
+        return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
+    log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)"
+        + (f", {len(posted)} posted topic(s) counted" if posted else "") + "...")
+    picks, rejected, pool = pick_pool(moments, ok, count=count, log=log, posted=posted,
+                                      text_of=lambda m: moment_text(recs[m["video"]], m))
+    rejected = left_out + rejected
+    picks = settle_story_types(choose_types(picks, recs))
+    for m in picks:
+        try:
+            m["evidence"] = m["evidence"] + hud6_evidence(recs[m["video"]], m, hud6)
+        except Exception as e:                       # a close look that fails must not stop the night
+            log(f"  Note: the GTA 6 HUD look at {m['video']} failed ({e}); its pick keeps the index's evidence")
+    return moments, picks, rejected, pool
+
+
 def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run=False, input_dir=INPUT, count=3,
             topics=True,
             shorts_dir=SHORTS_DIR, library_dir=index.LIBRARY, day=None, slots=None, safety="auto", log=print,
-            index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True):
+            index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True, posted_file=POSTED_FILE):
     """The prepare stage; returns the run folder (with candidates.json). safety "auto" asks the safety question
     through Ollama (safety.Checker), None skips it. index_video, guided_run, clip_runner and safety are swapped for
     stand-ins by the tests; check=False skips the Ollama/memory pre-flight."""
@@ -1405,52 +1760,17 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     log(heavy.ram_line() + " (before the safety checks)")
     t = time.perf_counter()
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
+    posted = load_posted(posted_file, log=log)
     recs, offset = {}, 0.0
     for v in recordings:
         idx = indexes[v.stem]
         act = action_series(clip_runs.get(v.stem), math.ceil(idx["video"]["duration_s"] / STEP))
         recs[v.stem] = recording_data(v.stem, idx, act, modes[v.stem], offset)
         offset += idx["video"]["duration_s"]
-    moments = [m for rec in recs.values() for m in mine(rec, used)]
-    moments += topic_candidates(recs, used, log=log) if topics else []
-    moments.sort(key=lambda m: -m["score"])
-    for k, m in enumerate(moments, 1):
-        m["id"] = f"M{k}"
-    log(f"Moments: {len(moments)} found; the best: "
-        + "; ".join(f"{m['id']} {m['video']} {hms(m['start_s'])} {m['category']} {m['score']:.1f}" for m in moments[:5]))
     if safety == "auto":
         safety = safety_checks.Checker(GAMES[game]["name"], Path(library_dir) / "_cache", log=log)
-    safe = (lambda m: safety(m, recs[m["video"]], folder)) if safety else (lambda m: (True, []))
-    firsts = session_firsts(recs, recordings)
-    found = {}
-
-    def find_compare(topic, labels, words):
-        if topic[0] not in found:
-            main = None
-            if game == "gta6" and not dry_run:
-                try:
-                    main = library.load_library(index.LIBRARY)
-                except library.LibraryError:
-                    main = None
-            found[topic[0]] = compare_side(topic, labels, words, game, dry_run, main, used=used)
-        return found[topic[0]]
-
-    def ok(m):
-        """The safety checks, the labels checked against what the frames show (launch-fixes), then the owner's
-        quality gate (PR 26): a moment with no clear point is skipped."""
-        passes, why = safe(m)
-        if not passes:
-            return passes, why
-        verify_terms(recs[m["video"]], m)
-        return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
-    log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)...")
-    picks, rejected, pool = pick_pool(moments, ok, count=count, log=log)
-    picks = settle_story_types(choose_types(picks, recs))
-    for m in picks:
-        try:
-            m["evidence"] = m["evidence"] + hud6_evidence(recs[m["video"]], m)
-        except Exception as e:                       # a close look that fails must not stop the night
-            log(f"  Note: the GTA 6 HUD look at {m['video']} failed ({e}); its pick keeps the index's evidence")
+    moments, picks, rejected, pool = pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_run,
+                                               topics, log, failed=[] if dry_run else failed_renders(shorts_dir))
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
     if isinstance(safety, safety_checks.Checker):
         timing["safety_model"] = round(safety.seconds, 1)
@@ -1490,7 +1810,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             "count": count,
             "pool": [{"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
                       "score": m["score"], "category": m.get("category"), "terms": m.get("terms"),
-                      "dropped_labels": m.get("dropped_labels", []), "checked": m.get("checked")} for m in pool],
+                      "dropped_labels": m.get("dropped_labels", []), "checked": m.get("checked"),
+                      "payoff_strength": m.get("payoff_strength"), "repeats": m.get("repeats", [])} for m in pool],
             "picks": [{k: v for k, v in m.items() if k not in ("options",)} | {
                 "other_type": {k: {"window": o["window"], "fits": o["fits"], "fit": o["fit"]}
                                for k, o in m["options"].items() if k != m["type"]}} for m in picks],
@@ -1502,6 +1823,99 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                                               for m in picks))
     log(f"Wrote {folder / 'candidates.json'} in {timing['total'] / 60:.1f} min")
     return folder
+
+
+# --- repick (PR 29): the picking step again on an old run's cached data ---
+
+def used_as_of(shorts_dir, run_name):
+    """The used-footage spans as they were when the run `run_name` was prepared: the entries before the first Short
+    made by that run (or its -partN re-runs), and none after it."""
+    base = re.sub(r"-part\d+$", "", run_name)
+    out = []
+    for s in footage_short.load_used(shorts_dir)["shorts"]:
+        if f"@{base}" in str(s.get("name", "")):
+            break
+        out += [tuple(span) for span in s.get("spans", [])]
+    return out
+
+
+def pick_line(m):
+    ps = m.get("payoff_strength") or payoff_strength(m)
+    return (f"{moment_name(m)} {m['video'][-6:]} {hms(m['start_s'])}-{hms(m['end_s'])} {m.get('category')} "
+            f"(score {m['score']:.2f}, payoff {ps['tier'] if isinstance(ps, dict) else ps[0]}/3)")
+
+
+def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="auto", out=None, log=print, hud6=None):
+    """The picking step of `run` again, with today's rules, on its cached data: each recording's index.json from the
+    library and its clip.py run (nothing is indexed again), the used footage and the posted topics as they were when
+    the run was prepared (posted_now: today's topics). The safety answers come from the model's cache where it has
+    them. Writes repick.json and repick.txt (old picks against new ones) in `out` (default <run>-repick next to it);
+    the run folder, _used_footage.json and _launch_runs.json are left alone. Returns the data."""
+    run = Path(run)
+    cand = read_json(run / "candidates.json")
+    if not cand:
+        raise LaunchError(f"{run} has no candidates.json")
+    count = count or cand.get("count", 3)
+    game = cand.get("game", "gta6")
+    lib = Path(cand["settings"]["library"])
+    out = Path(out) if out else run.with_name(run.name + "-repick")
+    out.mkdir(parents=True, exist_ok=True)
+    recs, recordings = {}, []
+    for r in cand["recordings"]:
+        idx = read_json(lib / r["stem"] / "index.json")
+        if not idx:
+            raise LaunchError(f"no cached index for {r['stem']} in {lib}: repick doesn't index anything")
+        idx["_dir"] = str(lib / r["stem"])
+        act = action_series(r.get("clip_run"), math.ceil(idx["video"]["duration_s"] / STEP))
+        recs[r["stem"]] = recording_data(r["stem"], idx, act, r["mode"], r["session_offset_s"])
+        recordings.append(Path(r["path"]))
+    used = used_as_of(shorts_dir, run.name)
+    posted = load_posted(POSTED_FILE, None if posted_now else cand["created"], log)
+    log(f"Re-picking {run.name} ({len(recs)} recordings, {count} picks): {len(used)} used span(s) and "
+        f"{len(posted)} posted topic(s) " + ("as of today" if posted_now else f"as of {cand['created']}"))
+    if safety == "auto":
+        safety = safety_checks.Checker(GAMES[game]["name"], lib / "_cache", log=log)
+    failed = failed_renders(shorts_dir)
+    _, picks, rejected, pool = pick_step(recs, recordings, used, posted, safety, out, game, count,
+                                         cand.get("dry_run", False), True, log, hud6, failed)
+    calls = {}
+    if isinstance(safety, safety_checks.Checker):
+        calls = {"model_calls": safety.calls, "cached": safety.cached, "seconds": round(safety.seconds, 1)}
+        safety_checks.vlm.unload(safety.model)
+    old = cand.get("picks", [])
+    data = {"run": str(run), "created": datetime.now().isoformat(timespec="seconds"), "count": count,
+            "posted_as_of": None if posted_now else cand["created"], "posted": [t["name"] for t in posted],
+            "used_spans": len(used), "safety": calls,
+            "old_picks": [{k: m.get(k) for k in ("id", "video", "start_s", "end_s", "score", "category", "type")}
+                          for m in old],
+            "new_picks": [{k: m.get(k) for k in ("id", "video", "start_s", "end_s", "score", "category", "type",
+                                                 "payoff_strength", "repeats", "pick_why", "window")} for m in picks],
+            "pool": [{"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "score": m["score"],
+                      "category": m.get("category"), "payoff_strength": m.get("payoff_strength"),
+                      "repeats": m.get("repeats", []), "checked": m.get("checked")} for m in pool],
+            "rejected": rejected}
+    write_json(out / "repick.json", data)
+    lines = [f"Re-pick of {run.name}: {count} picks, posted topics as of "
+             f"{'today' if posted_now else cand['created']}, safety answers {calls or 'not asked'}", "",
+             "OLD PICKS (as made that night):"]
+    lines += [f"  {k}. {pick_line(m)}" for k, m in enumerate(old, 1)]
+    lines += ["", "NEW PICKS (payoff first, no near-duplicates, both types, posted topics cost):"]
+    for k, m in enumerate(picks, 1):
+        lines += [f"  {k}. {pick_line(m)} -> {m.get('type', '').upper()}", f"     why: {m.get('pick_why')}"]
+    early = [r for r in rejected if any("rendered before" in w for w in r.get("why", []))]
+    if early:
+        lines += ["", "LEFT OUT BEFORE THE POOL (failed the shot check at an earlier render):"]
+        lines += [f"  {r['id']} {r['video'][-6:]} {hms(r['start_s'])}-{hms(r['end_s'])}: {r['why'][0]}" for r in early]
+    lines += ["", "THE REST OF THE POOL:"]
+    for m in pool:
+        c = m.get("checked") or {}
+        if m in picks:
+            continue
+        lines.append(f"  {pick_line(m)}: " + (c.get("not_picked") or "; ".join(c.get("why", [])) or "not checked"))
+    (out / "repick.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    for line in lines:
+        log(line)
+    return data
 
 
 # ======================================================================================================================
@@ -2670,7 +3084,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     clear = clear or (lambda v, a, latest, focus: steady().clear_start(v, a, latest, focus=focus))
     make_shot = make_shot or (lambda v, s, out, grade, log: steady().make_shot(v, s["from"], s["frames"], out,
                                                                                 focus=s["focus"], grade=grade, log=log,
-                                                                                splits=s.get("splits", ())))
+                                                                                splits=s.get("splits", ()),
+                                                                                speed=s.get("speed", 1.0)))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
@@ -2708,7 +3123,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     spoken = (synth or v4_voice)(lines, speed)
     cams = sorted({c for s in plan["shots"] for c in cuts(m["path"], s["from"], s["to"])})
     plan, problems, more = cutplan.plan(short, m, [sp["seconds"] for sp in spoken], loud, cams, hud_words)
-    flags += more
+    flags = list(dict.fromkeys(flags + more))
     spans = cutplan.line_spans(plan["placed"], len(lines))
     more, tflags, claims = truth.check_short(short, m, facts, today, spans, engine="v4")
     problems += more
@@ -2752,8 +3167,15 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     more, rejected, bflags = beat_checks(cplan, times, out_dir, checker, log, what="shot", max_s=0)
     flags += bflags
     pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
+    replay = plan.get("replay")
+    quiet = (pay_at[0], replay["end"]) if replay else pay_at     # no voice over the payoff and its replay: the game's
+    if replay:                                                    # own sound comes up for both
+        flags.append(f"REPLAY: the impact {hms(replay['from'])}-{hms(replay['to'])} again at {replay['speed']:g}x, "
+                     f"{replay['start']:.1f}-{replay['end']:.1f} s into the Short, right after the payoff. No highlight "
+                     "ring: nothing tracks the object, so a ring can't be placed reliably")
     checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": 1.0,
               "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "steady": report,
+              "replay": replay,
               "lines": plan["placed"], "camera_cuts": cams,
               "cuts": cutplan.cut_reasons(plan["shots"], plan["placed"], cutplan.events_of(m, pay, cams))}
     if more:
@@ -2764,7 +3186,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
     card = short.get("open_card") or (open_card_text(hook) if hook else None)
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
-                                        pay_at if kind == "action" else None, "auto",
+                                        quiet if kind == "action" else None, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,
                                         "am_puck", log)
     checks["caption_checks"] = caption_checks(run_log, cplan, lines, checker, v3_hud(cplan, m, prof, hud6), out_dir, log)
@@ -2778,8 +3200,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
         flags.append(f"FIRST FRAME: {first_note}")
     return {"length_s": round((run_log.get("durations") or {}).get("video_s", plan["total_s"]), 2), "flags": flags,
             "line_spans": spans, "music": Path((run_log.get("music") or {}).get("file") or "").name or None,
-            "shown": [[m["video"], s["from"], s["to"]] for s in plan["shots"]], "engine": "v4", "game_sound": True,
-            "checks": checks, "payoff": checks["payoff"]}
+            "shown": [[m["video"], s["from"], s["to"]] for s in plan["shots"] if not s.get("replay")], "engine": "v4",
+            "game_sound": True, "checks": checks, "payoff": checks["payoff"], "replay": replay}
 
 
 def explainer_error():
@@ -3090,6 +3512,8 @@ def write_review(folder, cand, written, data):
                 + (f'{entry["length_s"]:.1f} s &middot; true peak {tp.get("after", 0):+.1f} dBTP &middot; ' if ok else "")
                 + f'{"NO-HUD MODE" if m.get("mode") == "nohud" else "HUD rules on"} &middot; why this type: '
                 f'{esc(m.get("type_why"))}')
+        if m.get("pick_why"):
+            meta += f'<br>why this moment: {esc(m["pick_why"])}'
         if short.get("format"):
             story = (f'<b>{esc(short["format"])}</b> ({esc({**truth.FORMATS, **truth.V3_FORMATS}.get(short["format"], ""))}): '
                      f'{esc(short.get("format_why"))}')
@@ -3252,6 +3676,13 @@ def main():
     r.add_argument("--short", type=int, help="only this Short (its number on the review page)")
     r.add_argument("--hook", type=int, choices=(1, 2, 3), help="with --short: use this hook instead of the starred one")
     r.add_argument("--no-cold-open", action="store_true", help="with --short: no cold open and no zoom")
+    q = sub.add_parser("repick", help="the picking step again on an old run's cached data (nothing indexed again): "
+                                      "old picks against new ones, in a new folder")
+    q.add_argument("--run", type=Path, required=True, help="the run folder to re-pick (it is not changed)")
+    q.add_argument("--count", type=int, help="how many picks (default: the run's own count)")
+    q.add_argument("--posted-now", action="store_true",
+                   help="count today's posted topics (default: the list as it was when the run was prepared)")
+    q.add_argument("--out", type=Path, help="where to write repick.json and repick.txt (default: <run>-repick)")
     f = sub.add_parser("frame", help="a gridded frame of a pick's recording, to read a circle's box from")
     f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
     f.add_argument("--short", type=int, required=True, help="the pick's number")
@@ -3273,6 +3704,9 @@ def main():
             for at in args.at:
                 out = Path(folder) / "moments" / f"{m['id']}_grid_{at:.1f}.jpg"
                 print(out if grid_frame(m["path"], at, out) else f"ERROR: no frame at {at} s")
+        elif args.stage == "repick":
+            with heavy.job("launch.py repick", log=lambda m: print(m, flush=True)):
+                repick(args.run, args.count, args.posted_now, out=args.out, log=lambda m: print(m, flush=True))
         elif args.stage == "prepare":
             with heavy.job("launch.py prepare", log=lambda m: print(m, flush=True)):
                 prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input,

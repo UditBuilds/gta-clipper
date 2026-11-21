@@ -932,5 +932,53 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 24 checks, about 40 s
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 29 checks, about 1 min
+```
+
+## Picker variety and one replay (PR 29, Nov 20)
+
+The Nov 20 run picked three near-identical "stars appear" moments of one recording (M1, M5 and M8 of _135610); only
+one was usable. The night's best moment, the motorbike crash (M25, Short 6), only came in on a `--count 6` re-run.
+Short 6 itself was missing the slow-mo of the hit that made my hand-made crash Short work.
+
+- **Payoff strength first** (`launch.payoff_strength`). After the checks, every candidate gets a tier:
+  - 3: an impact (crash, explosion or stunt) that its own frames confirmed.
+  - 2: a HUD change with a visible cause (the stars rise with police or a shootout on screen).
+  - 1: a HUD change alone, or action with no single event.
+  - 0: quiet.
+
+  Picks go by tier, then points. The pool ranks the tier too, so a crash can't be left out of it.
+- **No near-duplicates.** Two picks of one recording must be a different kind of moment, or at least 10 minutes
+  apart. At most 2 picks come from one recording, unless nothing else qualifies (the pick then says so).
+- **Both types.** When the picks have no action clip (or no topic) and one passed the checks, it takes the weakest
+  pick's place.
+- **Posted topics** (`posted_topics.json`, the owner's list) cost points:
+  - -2 for a repeat.
+  - -4 for "wanted stars" / "stars appear" and "crime reported".
+
+  A topic matches by rules (category, topic id, score term, words in what the frames say), so "black SUV crash on the
+  bridge" doesn't match the motorbike crash.
+- **No same type back to back** (the owner, Nov 21). A moment of the same type as one of the last 2 posted Shorts
+  (`posted_topics.json`: `type`, `posted` day; a `planned` one doesn't count until it is posted) is held back
+  while another candidate meets the payoff bar (2/3). No crash right after a crash.
+- **A moment that already failed is not picked again.** Every run's `render.json` is read. A moment mostly inside
+  a Short that FAILED its shot check is left out before the pool, with why. The Nov 20 re-pick's M21 was part2's
+  Short 4 again: the jet ski over an empty ocean.
+- **The report.** `candidates.json` gives each pick its `payoff_strength`, `repeats` and `pick_why`: why it won and
+  what it beat. The review page shows "why this moment".
+- **`launch.py repick`** runs the picking step again on an old run's cached data: each `index.json` and `clip.py` run,
+  with nothing indexed again. Safety answers come from the model's cache where it has them. The used footage and the
+  posted topics are taken as they were when that run was prepared. It writes `repick.json` and `repick.txt` (old picks
+  against new ones) to `<run>-repick` and leaves the run alone.
+- **One slow-mo replay, action Shorts only** (`"replay": {"from", "to"}` in `shorts.json`, `cutplan.replay_of`). This
+  is the only exception to "no second twice":
+  - It names the impact itself: inside the payoff, holding the loudest moment, under 1.5 s.
+  - It plays once at 0.5x right after the payoff, at most 2 s on screen (a longer impact shows the 1 s round the hit).
+  - Its sound is slowed too, an octave down. No voice goes over it, and the crash sound stays up through it.
+  - No highlight ring is drawn: nothing tracks the object reliably, and the hand-made Short's ring was read off
+    gridded frames by hand.
+
+```powershell
+.\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
+.\.venv\Scripts\python.exe varietytest.py                                                 # 11 checks, a few seconds
 ```

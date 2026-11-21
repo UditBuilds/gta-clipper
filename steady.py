@@ -176,11 +176,11 @@ def scene_cuts(video, a, b, threshold=SCENE):
     return lone_spikes([round(a + float(t), 3) for t in re.findall(r"pts_time:([0-9.]+)", done.stderr)])
 
 
-def split_points(a, frames, cuts):
+def split_points(a, frames, cuts, speed=1.0):
     """Frame counts of the pieces a shot of `frames` frames from a splits into at the camera cuts: a piece ends on
     the last frame before a cut (floor: Nov 20, a piece that ended on the cut frame showed one frame of the next
-    camera)."""
-    edges = sorted({math.floor((c - a) * FPS) for c in cuts if 0 < (c - a) * FPS < frames})
+    camera). speed: a slowed shot (the replay, 0.5) shows each second of the recording for 1/speed seconds."""
+    edges = sorted({math.floor((c - a) / speed * FPS) for c in cuts if 0 < (c - a) / speed * FPS < frames})
     sizes, last = [], 0
     for e in edges + [frames]:
         if e - last > 0:
@@ -189,27 +189,28 @@ def split_points(a, frames, cuts):
     return sizes
 
 
-def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, stabilise=True, splits=()):
+def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, stabilise=True, splits=(), speed=1.0):
     """A shot's clip: split at the game's camera cuts (and at `splits`, such as just before the payoff), each piece
     measured raw and stabilised, the calmer one kept, joined. vidstab measures a piece from LEAD_S before it when the
-    same camera was on then. Returns the report: per piece its seconds, both measures and what was kept."""
+    same camera was on then. speed: 0.5 for the slow-mo replay (frames are the Short's; the recording's seconds are
+    frames / FPS * speed). Returns the report: per piece its seconds, both measures and what was kept."""
     import numpy as np  # noqa: F401  (fails early under .venv)
     out = Path(out)
     info = info or info_of(video)
-    cuts = scene_cuts(video, a, a + frames / FPS)
+    cuts = scene_cuts(video, a, a + frames / FPS * speed)
     work = out.parent / f"{out.stem}_pieces"
     work.mkdir(parents=True, exist_ok=True)
     pieces, report, done = [], [], 0
-    for k, n in enumerate(split_points(a, frames, list(cuts) + list(splits))):
-        src = a + done / FPS
+    for k, n in enumerate(split_points(a, frames, list(cuts) + list(splits), speed)):
+        src = a + done / FPS * speed
         camera_from = max([a] + [c for c in cuts if c <= src + 1e-6])
-        raw = make_piece(video, src, n, work / f"p{k}_raw.mp4", info, focus, False, grade=grade)
+        raw = make_piece(video, src, n, work / f"p{k}_raw.mp4", info, focus, False, speed=speed, grade=grade)
         entry = {"from_s": round(src, 3), "frames": n, "raw_px": None, "stabilised_px": None, "stabilised": False}
         if stabilise and n >= STAB_MIN_FRAMES:
             r = shake_of(gray_frames(raw))
             lead = max(camera_from, src - LEAD_S)
-            stab = make_piece(video, src, n, work / f"p{k}_stab.mp4", info, focus, True, grade=grade,
-                              detect=(lead, src + n / FPS + 0.05))
+            stab = make_piece(video, src, n, work / f"p{k}_stab.mp4", info, focus, True, speed=speed, grade=grade,
+                              detect=(lead, src + n / FPS * speed + 0.05))
             s = shake_of(gray_frames(stab))
             keep = keep_stabilised(r, s)
             entry.update(raw_px=[round(r[0], 1), round(r[1], 1)], stabilised_px=[round(s[0], 1), round(s[1], 1)],
