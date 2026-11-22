@@ -759,8 +759,9 @@ POOL_PAYOFF_BONUS = 1.0      # pool_of: a candidate's place in the pool also cou
 POSTED_FILE = HERE / "posted_topics.json"    # the topics already posted (the owner's list)
 RULE_KEYS = {"category", "topic", "term", "profile", "words", "all_words"}
 RECENT_POSTED = 2            # the owner (Nov 21): no crash while a crash is one of the last 2 posted Shorts, unless
-                             # nothing else meets the payoff bar: no other candidate passed every check (the pool's
-                             # own bar, payoff included). A 1/3 star rise still beats a crash right after a crash.
+                             # no other type is left that meets the payoff bar; then one such pick, not two.
+PAYOFF_BAR = 2               # the owner (Nov 22): no pick, of any kind, has a payoff below 2/3 (an impact, or a HUD
+                             # change with a visible cause). Fewer Shorts rather than a weak one.
 FAILED_SHARE = 0.5           # a moment this much inside a Short that failed its shot check at render is left out
 
 
@@ -901,7 +902,8 @@ def can_be(kind, m):
 
 
 def pick_varied(passed, count, posted=(), text_of=None, log=print):
-    """The picks from the candidates that passed every check, best first (PR 29). Each step takes the free candidate
+    """The picks from the candidates that passed every check, best first (PR 29). A candidate whose payoff is below
+    PAYOFF_BAR (2/3) is never picked: there may be fewer picks than `count`, or none. Each step takes the free candidate
     with the clearest payoff (payoff_strength's tier), then the most points: its score, less a posted topic it repeats
     (topic_repeats) and CATEGORY_COST for each pick already of its category. A candidate is not free when it is a
     near-duplicate of a pick or its recording has PER_RECORDING picks (that limit is lifted only when nothing else
@@ -913,6 +915,14 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         cost, names = topic_repeats(m, posted, text_of(m) if text_of else "")
         m["payoff_strength"] = {"tier": tier, "label": label, "why": why}
         m["repeats"], m["repeat_cost"] = names, cost
+    # The payoff bar (the owner, Nov 22): a candidate below PAYOFF_BAR is never picked, by any route below (the
+    # picks, the third pick of a recording, the action/topic swap), so a run may have fewer Shorts than asked.
+    weak = [m for m in passed if m["payoff_strength"]["tier"] < PAYOFF_BAR]
+    for m in weak:
+        ps = m["payoff_strength"]
+        m["not_picked_why"] = (f"payoff {ps['tier']}/3 ({ps['label']}: {ps['why']}) is below the minimum "
+                               f"{PAYOFF_BAR}/3: a weak clip is not made")
+    passed = [m for m in passed if m["payoff_strength"]["tier"] >= PAYOFF_BAR]
     recent = recent_posted(posted)
     recent_types = {t for t, _ in recent if t}
 
@@ -931,9 +941,9 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         return f"its recording already has {same} picks (at most {cap})" if same >= cap else None
 
     def bar_met_by_other(m, picked, cap):
-        """The best other free candidate of a type not posted lately, or None. Every candidate here passed every
-        check, the pool's payoff bar too, so any of them meets the bar (the owner, Nov 21: M27's crash was picked
-        right after the posted bike crash while M1 and M26 were there)."""
+        """The best other free candidate of a type not posted lately, or None. Every candidate left in `passed` met
+        PAYOFF_BAR (the weak ones were taken out above), so any of them is good enough to take the place (the owner,
+        Nov 21: M27's crash was picked right after the posted bike crash while M1 and M26 were there)."""
         return next((c for c in sorted(passed, key=lambda c: key(c, picked), reverse=True)
                      if c is not m and c not in picked and moment_type(c) not in recent_types
                      and not held_back(c, picked, cap)), None)
@@ -947,8 +957,12 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         other = bar_met_by_other(m, picked, cap)
         if other is not None:
             return (f"a {kind} is one of the last {RECENT_POSTED} posted Shorts ({names}), and {moment_name(other)} "
-                    "(another type) passed every check")
-        return None             # nothing of another type is free: better that type than a run short of picks
+                    f"(another type) meets the payoff bar ({PAYOFF_BAR}/3)")
+        # No other type meets the bar: one pick of that type may come, not two (two crashes after a posted crash is
+        # still crash after crash), even when nothing else is free: fewer Shorts rather than a repeat.
+        if any(moment_type(p) == kind for p in picked):
+            return f"this run already has a {kind}, right after a posted one ({names})"
+        return None
 
     def describe(m, picked):
         ps = m["payoff_strength"]
@@ -967,6 +981,8 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
                 why = blocked(m, picked, cap)
                 (held if why else free).append((m, why))
             if not free:
+                for m, w in held:               # nothing is left to pick: the last reasons are the final ones
+                    reasons[id(m)] = w
                 break
             ranked = sorted((m for m, _ in free), key=lambda m: key(m, picked), reverse=True)
             best = ranked[0]
@@ -984,7 +1000,7 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
             if moment_type(best) in recent_types:
                 why.append(f"a {moment_type(best)} like the last posted ("
                            + ", ".join(n for t, n in recent if t == moment_type(best))
-                           + "), picked because no other type is left that passed every check")
+                           + f"), picked because no other type is left that meets the payoff bar ({PAYOFF_BAR}/3)")
             best["pick_why"] = "; ".join(why)
             picked.append(best)
             for m, w in held:
@@ -1016,7 +1032,8 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
     for m in picked:
         log(f"  Picked {moment_name(m)} {m['video'][-6:]} {hms(m['start_s'])} ({m['category']}): {m['pick_why']}")
     if len(picked) < count:
-        log(f"  Only {len(picked)} of {count} picks: the other candidates were near-duplicates or failed the checks")
+        log(f"  Only {len(picked)} of {count} picks: the other candidates were near-duplicates, failed the checks "
+            f"or had a payoff below {PAYOFF_BAR}/3 ({len(weak)} did)")
     return picked
 
 
@@ -1782,7 +1799,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             + (f", the model unloaded {safety.reloads} time(s) for memory" if safety.reloads else ""))
         safety_checks.vlm.unload(safety.model)
     if not picks:
-        raise LaunchError("no moment passed the checks: nothing to make a Short from")
+        raise LaunchError(f"no moment passed the checks with a payoff of {PAYOFF_BAR}/3 or more: nothing to make a "
+                          "Short from (candidates.json's pool says why each was left out)")
     if sheets:
         (folder / "moments").mkdir(exist_ok=True)
         for m in picks:

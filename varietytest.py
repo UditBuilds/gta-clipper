@@ -71,22 +71,30 @@ def quiet(*_):
 
 @check
 def the_nov20_case_puts_the_bike_crash_on_top_and_no_near_duplicates():
-    """Nov 20 again: the old way (score only) picks M1, M5, M8, three star rises of one recording; now the bike crash
-    (M25) is in the top 3, at most 2 picks come from one recording, no two picks of a recording are the same kind
-    within 10 min, and the run has an action clip and a topic"""
+    """Nov 20 again, with the owner's real posted list as it was that night (types included: the black SUV crash and
+    "crime reported" were the last 2 posted) and the payoff bar (2/3). The old way (score only) picks M1, M5, M8, three
+    star rises of one recording. Now those three (1/3 each) are never picked, and neither is anything else below the
+    bar; only the two crashes reach 2/3, and as no other type does either, ONE crash comes, the bike crash M25, and
+    says why; the truck crash M27 is not a second crash after a posted one. At most 2 picks come from one recording,
+    and no two picks are the same kind within 10 min."""
     pool = nov20_pool()
     old = [m["id"] for m in sorted(pool, key=lambda m: -m["score"])[:3]]
-    # The list as it was that night, without the Nov 21 type rule (no crash after a posted crash: the black SUV was
-    # posted that day, so M25 waits now; the_crash_rule_holds_for_real_moment_labels checks that rule)
-    then = [dict(t, type=None) for t in posted(as_of="2026-11-20T15:06:03")]
-    picks = launch.pick_varied([dict(m) for m in pool], 3, then, text_of, quiet)
+    pool = [dict(m) for m in pool]
+    list_then = posted(as_of="2026-11-20T15:06:03")
+    picks = launch.pick_varied(pool, 3, list_then, text_of, quiet)
     ids = [m["id"] for m in picks]
     per = {}
     for m in picks:
         per[m["video"]] = per.get(m["video"], 0) + 1
     dup = any(launch.near_duplicate(m, p) for m in picks for p in picks if m is not p)
-    return (old == ["M1", "M5", "M8"] and "M25" in ids and max(per.values()) <= 2 and not dup
-            and any(launch.can_be("action", m) for m in picks) and any(launch.can_be("topic", m) for m in picks)), ids
+    left = {m["id"]: m.get("not_picked_why", "") for m in pool if m not in picks}
+    recent = launch.recent_posted(list_then)
+    return (old == ["M1", "M5", "M8"] and recent == [("star rise", "crime reported"), ("crash", "black SUV crash on the bridge")]
+            and ids == ["M25"] and "no other type is left" in picks[0]["pick_why"]
+            and all(m["payoff_strength"]["tier"] >= launch.PAYOFF_BAR for m in picks)
+            and max(per.values()) <= 2 and not dup and launch.can_be("action", picks[0])
+            and all("below the minimum 2/3" in left[i] for i in ("M1", "M5", "M8", "M15", "M19", "M34"))
+            and "already has a crash" in left["M27"]), (ids, recent, left)
 
 
 @check
@@ -148,11 +156,13 @@ def two_picks_of_one_recording_must_differ_and_three_only_when_nothing_else_qual
     """the same kind within 10 min of a pick is a near-duplicate, never picked; a different kind, or the same kind
     far apart, may be; a third pick of a recording comes only when no other recording has a free candidate (and says
     so)"""
-    one = [mo("s1", A, 100, 9.0, "star rise", {"star_rise": 2.5}), mo("s2", A, 400, 8.9, "star rise", {"star_rise": 2.5}),
-           mo("c1", A, 900, 3.0, "crash", {"crash": 1.5}), mo("s3", A, 1300, 8.0, "star rise", {"star_rise": 2.5})]
+    # (the star rises have police on screen: 2/3, so the payoff bar lets them be picked; this check is about near-duplicates)
+    cause = {"star_rise": 2.5, "police": 0.5}
+    one = [mo("s1", A, 100, 9.0, "star rise", cause), mo("s2", A, 400, 8.9, "star rise", cause),
+           mo("c1", A, 900, 3.0, "crash", {"crash": 1.5}), mo("s3", A, 1300, 8.0, "star rise", cause)]
     picks = launch.pick_varied([dict(m) for m in one], 3, (), None, quiet)
     ids = [m["id"] for m in picks]
-    other = one + [mo("o1", B, 50, 1.0, "action", {"action": 1.0})]
+    other = one + [mo("o1", B, 50, 1.0, "star rise", cause)]
     capped = launch.pick_varied([dict(m) for m in other], 3, (), None, quiet)
     left = {m["id"]: m for m in other}
     return (sorted(ids) == ["c1", "s1", "s3"] and "s2" not in ids
@@ -165,9 +175,11 @@ def a_run_gets_both_an_action_clip_and_a_topic():
     """when the best candidates are all crashes, the weakest one makes way for the best topic that passed (and says
     so); when they are all topics, the best impact comes in"""
     crashes = [mo(f"c{k}", f"r{k}", 0, 5.0 - k, "crash", {"crash": 1.5}) for k in range(3)]
-    topic = mo("t", "rt", 0, 2.0, "star rise", {"star_rise": 2.5, "topic": 1.5}, "wanted-system")
+    # (the topics have police on screen: 2/3, so the payoff bar lets them be picked; this check is about the type mix)
+    topic = mo("t", "rt", 0, 2.0, "star rise", {"star_rise": 2.5, "police": 0.5, "topic": 1.5}, "wanted-system")
     a = launch.pick_varied([dict(m) for m in crashes + [topic]], 3, (), None, quiet)
-    topics = [mo(f"t{k}", f"q{k}", 0, 9.0 - k, "star rise", {"star_rise": 2.5}, "wanted-system") for k in range(3)]
+    topics = [mo(f"t{k}", f"q{k}", 0, 9.0 - k, "star rise", {"star_rise": 2.5, "police": 0.5}, "wanted-system")
+              for k in range(3)]
     crash = mo("c", "rc", 0, 1.0, "crash", {"crash": 1.5})
     b = launch.pick_varied([dict(m) for m in topics + [crash]], 3, (), None, quiet)
     swapped = next(m for m in a if m["id"] == "t")
@@ -248,9 +260,9 @@ def made_up_posted(topics):
 @check
 def no_crash_right_after_a_posted_crash_unless_nothing_else_meets_the_bar():
     """the owner's rule (Nov 21): with a crash among the last 2 posted Shorts, a crash isn't picked while another
-    candidate passed every check (the pool's payoff bar), a quiet 1/3 one too; with nothing else left the crash is
-    picked and says why, but only one crash a run while anything else is free; a planned topic is not one of the
-    last 2 posted"""
+    candidate of another type meets the payoff bar (2/3); a quiet 1/3 one never does (it is below the bar and is not
+    picked at all, Nov 22), so with nothing else left the crash is picked and says why, but only one crash a run; a
+    planned topic is not one of the last 2 posted"""
     posted = made_up_posted([
         {"name": "old star", "type": "star rise", "posted": "2026-11-13", "rules": [{"words": ["zzz"]}]},
         {"name": "bike crash", "type": "crash", "posted": "2026-11-20", "rules": [{"words": ["zzz"]}]},
@@ -260,26 +272,30 @@ def no_crash_right_after_a_posted_crash_unless_nothing_else_meets_the_bar():
     cause = mo("s", B, 0, 3.0, "star rise", {"star_rise": 2.5, "police": 0.5})
     quiet_one = mo("q", B, 0, 3.0, "chase", {"activity": 2.0, "activity_label": "chase"})
     held = launch.pick_varied([dict(crash), dict(cause)], 1, posted, None, quiet)
-    quiet_wins = launch.pick_varied([dict(crash), dict(quiet_one)], 1, posted, None, quiet)
+    pool_q = [dict(crash), dict(quiet_one)]
+    bar = launch.pick_varied(pool_q, 1, posted, None, quiet)          # the quiet 1/3 one is below the bar: the crash
     allowed = launch.pick_varied([dict(crash)], 1, posted, None, quiet)
     crash2 = mo("c2", "rec_x", 0, 8.0, "crash", {"crash": 1.5})
     one = launch.pick_varied([dict(crash), dict(crash2), dict(quiet_one)], 2, posted, None, quiet)
-    if sorted(m["id"] for m in one) != ["c", "q"]:          # the fallback lets one crash through, not two
+    if [m["id"] for m in one] != ["c"]:     # one crash through, not two, and the 1/3 one is not made to fill the gap
         return False, [m["id"] for m in one]
     free = launch.pick_varied([dict(crash), dict(cause)], 1, posted[:1], None, quiet)
     recent = launch.recent_posted(posted)
-    return (held[0]["id"] == "s" and quiet_wins[0]["id"] == "q" and allowed[0]["id"] == "c"
+    return (held[0]["id"] == "s" and bar[0]["id"] == "c" and "no other type is left" in bar[0]["pick_why"]
+            and "below the minimum 2/3" in pool_q[1]["not_picked_why"] and allowed[0]["id"] == "c"
             and "no other type is left" in allowed[0]["pick_why"]
             and free[0]["id"] == "c" and recent == [("crash", "bike crash"), ("discovery", "effigy")]), (
-        [m["id"] for m in held], [m["id"] for m in quiet_wins], [m["id"] for m in allowed], recent)
+        [m["id"] for m in held], [m["id"] for m in bar], [m["id"] for m in allowed], recent)
 
 
 @check
 def the_crash_rule_holds_for_real_moment_labels():
     """the owner (Nov 21): today's re-pick put M27 (the truck on the bridge, its label "crash" with verified terms)
     first, right after the posted motorbike crash, while M1 and M26 were there. With the posted list written as the
-    owner writes it and the moments as the miner saved them (launch-2026-11-20-part2's pool), M27 is held back and
-    says why; any label naming a crash ("truck crash", "topic: car crashes", an action payoff "truck crash") is a
+    owner writes it and the moments as the miner saved them (launch-2026-11-20-part2's pool; M1 here has police on
+    screen, 2/3, which the real M1 did not, so that another type meets the payoff bar), M27 is held back while M1
+    is free and says why, and comes only when nothing of another type is left, with that said; M34 (1/3) is never
+    picked; any label naming a crash ("truck crash", "topic: car crashes", an action payoff "truck crash") is a
     crash, and so is a posted type written "Bike crash"."""
     posted = made_up_posted([
         {"name": "black SUV crash on the bridge", "type": "crash", "posted": "2026-11-20",
@@ -293,21 +309,67 @@ def the_crash_rule_holds_for_real_moment_labels():
                                              "crash": 1.5, "confidence": 0.49})
     m1 = mo("M1", A, 722.5, 9.64, "star rise", {"action": 0.77, "star_rise": 2.5, "stars": 2.0, "activity": 2.0,
                                                "activity_label": "chase", "confidence": 0.47, "topic": 1.5, "hud6": 1.0,
-                                               "dialogue": -0.6}, "wanted-system")
+                                               "dialogue": -0.6, "police": 0.5}, "wanted-system")
     m34 = mo("M34", "rec_165142", 570.5, 2.36, "action", {"action": 1.37, "activity": 0.5, "activity_label": "driving",
                                                           "confidence": 0.49})
-    picks = launch.pick_varied([dict(m27), dict(m1), dict(m34)], 2, posted, text_of, quiet)
-    left = launch.pick_varied([m for m in [dict(m27), dict(m1), dict(m34)]], 3, posted, text_of, quiet)
+    pool = [dict(m27), dict(m1), dict(m34)]
+    picks = launch.pick_varied(pool, 1, posted, text_of, quiet)      # M27 ranks first by payoff, and is held back
+    held27 = next(m for m in pool if m["id"] == "M27").get("not_picked_why", "")
+    pool3 = [dict(m27), dict(m1), dict(m34)]
+    left = launch.pick_varied(pool3, 3, posted, text_of, quiet)
     m27_left = next(m for m in left if m["id"] == "M27")
+    m34_why = next(m for m in pool3 if m["id"] == "M34").get("not_picked_why", "")
     labels = [launch.moment_type(mo("x", A, 0, 1.0, "truck crash", {})),
               launch.moment_type(mo("x", A, 0, 1.0, "topic: car crashes", {})),
               launch.moment_type(mo("x", A, 0, 1.0, "chase", {}, point={"action_payoff": ["truck crash"]}))]
     recent = launch.recent_posted(posted)
-    return (sorted(m["id"] for m in picks) == ["M1", "M34"]
-            and "motorbike crash (Short 6)" in next(m for m in [dict(m27)] + picks if m["id"] == "M1")["pick_why"]
+    return ([m["id"] for m in picks] == ["M1"]
+            and "motorbike crash (Short 6)" in picks[0]["pick_why"]
+            and "M1" in held27 and "meets the payoff bar" in held27
             and labels == ["crash", "crash", "crash"] and recent[0][0] == "crash"
-            and "M27" in [m["id"] for m in left] and "no other type is left" in m27_left["pick_why"]), (
-        [m["id"] for m in picks], labels, recent, [(m["id"], m.get("pick_why")) for m in left])
+            and sorted(m["id"] for m in left) == ["M1", "M27"] and "no other type is left" in m27_left["pick_why"]
+            and "below the minimum 2/3" in m34_why), (
+        [m["id"] for m in picks], held27, labels, recent, [(m["id"], m.get("pick_why")) for m in left], m34_why)
+
+
+@check
+def a_payoff_below_2_of_3_is_never_picked_by_any_route():
+    """the owner (Nov 22): no pick, of any kind, has a payoff below 2/3, so a run has fewer Shorts rather than a weak
+    one. A 1/3 clip (a HUD change with no cause, action with no single event) is not picked: when it is all there is
+    (no picks at all), when it scores far higher than a 2/3 one, as the action/topic swap's topic, as the third pick of
+    a recording when the cap is lifted, as the stand-in for a crash right after a posted crash, or through pick_pool;
+    each one says why it was left out"""
+    weak = lambda i, v, s, sc, topic=None: mo(i, v, s, sc, "star rise", {"star_rise": 2.5}, topic)    # 1/3
+    cause = lambda i, v, s, sc: mo(i, v, s, sc, "star rise", {"star_rise": 2.5, "police": 0.5})       # 2/3
+    crash = lambda i, v, s, sc: mo(i, v, s, sc, "crash", {"crash": 1.5})                              # 3/3
+    ok, seen = True, {}
+
+    def run(name, pool, count, posted=()):
+        pool = [dict(m) for m in pool]
+        picks = launch.pick_varied(pool, count, posted, None, quiet)
+        seen[name] = [m["id"] for m in picks]
+        return picks, {m["id"]: m.get("not_picked_why", "") for m in pool}
+
+    picks, why = run("only weak", [weak("w1", A, 0, 9.0), weak("w2", B, 0, 8.0)], 3)
+    ok &= picks == [] and all("below the minimum 2/3" in w for w in why.values())
+    picks, why = run("high score weak", [weak("w", A, 0, 9.0), cause("g", B, 0, 1.0)], 2)
+    ok &= [m["id"] for m in picks] == ["g"] and "below the minimum 2/3" in why["w"]
+    topic = weak("t", "rt", 0, 2.0, "wanted-system")
+    ok &= launch.can_be("topic", topic)                          # it would be the swap's topic, were it good enough
+    picks, why = run("swap", [crash(f"c{k}", f"r{k}", 0, 5.0 - k) for k in range(3)] + [topic], 3)
+    ok &= sorted(m["id"] for m in picks) == ["c0", "c1", "c2"] and "below the minimum 2/3" in why["t"]
+    picks, why = run("third pick", [cause("g1", A, 100, 9.0), crash("c1", A, 900, 3.0), weak("w3", A, 1300, 8.0)], 3)
+    ok &= sorted(m["id"] for m in picks) == ["c1", "g1"] and "below the minimum 2/3" in why["w3"]
+    posted = made_up_posted([{"name": "bike crash", "type": "crash", "posted": "2026-11-20", "rules": [{"words": ["zzz"]}]}])
+    picks, why = run("recent crash", [crash("c", A, 0, 5.0), weak("q", B, 0, 9.0)], 1, posted)
+    ok &= [m["id"] for m in picks] == ["c"] and "below the minimum 2/3" in why["q"] and "no other type is left" in picks[0]["pick_why"]
+    moments = [weak("w", A, 0, 9.0), cause("g", B, 0, 4.0), crash("c", "rec_x", 0, 3.0)]
+    got, _, _ = launch.pick_pool([dict(m) for m in moments], lambda m: (True, []), count=3, log=quiet)
+    ok &= sorted(m["id"] for m in got) == ["c", "g"]
+    weak_left = launch.pick_pool([dict(weak("w", A, 0, 9.0))], lambda m: (True, []), count=3, log=quiet)
+    ok &= weak_left[0] == [] and "below the minimum 2/3" in weak_left[2][0]["checked"]["not_picked"]
+    ok &= launch.PAYOFF_BAR == 2 and all(launch.payoff_strength(m)[0] >= 2 for m in got)
+    return ok, seen
 
 
 @check
