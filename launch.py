@@ -1273,7 +1273,7 @@ def choose_types(picks, recs):
                     del opts[k]
                 elif k in opts and list(m["safe_options"][k]) != list(opts[k]["window"]):
                     opts[k]["window"] = list(m["safe_options"][k])
-                    opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
+                    opts[k]["evidence"] = evidence(rec, *m["safe_options"][k], verified=m.get("verified"))
         m["options"] = {k: v for k, v in opts.items() if k in ("action", "narrated")}
         fits = [k for k in ("action", "narrated") if opts.get(k, {}).get("fits")]
         if m.get("topic") and "narrated" in fits:      # topic first (launch-fixes): a topic is taught, narrated
@@ -1493,7 +1493,7 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
                 del opts[k]
             elif list(m["safe_options"][k]) != list(opts[k]["window"]):
                 opts[k]["window"] = list(m["safe_options"][k])
-                opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
+                opts[k]["evidence"] = evidence(rec, *m["safe_options"][k], verified=m.get("verified"))
     nar = opts.get("narrated")
     formats = []
     if nar:
@@ -3237,7 +3237,7 @@ def short_folder(folder, n, title):
 
 
 def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
-               checker=None, timing=None, narrated_render=None, action_render=None, engine="v3", synth=None,
+               checker=None, timing=None, narrated_render=None, action_render=None, engine="v4", synth=None,
                v2_render=None, v3_render=None, used=None, hud6=None, v4_parts=None):
     """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems).
     v4_parts: engine v4's makers, replaced in tests (render_v4's keyword arguments)."""
@@ -3318,10 +3318,11 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
             flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is "
                          "NOT checked (no speech-to-text): listen once before uploading")
     else:
-        if heard["early"]:
-            raise RenderProblem("spoken swearing in the first 7 s (speech check): "
-                                + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
-                                + "; pick another start or footage without that line")
+        if heard["early"]:                    # FAILED with its metadata (moment, folder, hooks), not a bare stub
+            entry["problems"] = ["spoken swearing in the first 7 s (speech check): "
+                                 + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
+                                 + "; pick another start or footage without that line"]
+            return entry
         for t, w in heard["later"]:
             flags.append(f"SWEARING: {w!r} is said at {t:.1f} s (speech check); cut it or mute that part")
         if game_sound and not heard["later"]:
@@ -3368,7 +3369,7 @@ def kept_results(old, written):
 
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
            facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
-           engine="v3", synth=None, v2_render=None, v3_render=None, v4_parts=None):
+           engine="v4", synth=None, v2_render=None, v3_render=None, v4_parts=None):
     """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
     Returns the render.json data; review.html is written next to it."""
     import facts as facts_file

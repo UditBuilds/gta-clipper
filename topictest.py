@@ -563,7 +563,8 @@ def render_v3_with(tmp, short, pick, video, checker, shorts_name="shorts", used=
     launch.render_one = render_one
     try:
         data = launch.render(folder, shorts_dir=shorts, today=TODAY, log=lambda m: None, facts=FACTS, checker=checker,
-                             timing=stand_in_timing, v3_render=stand_in_render(made), indexes=[v3_index(video)])
+                             timing=stand_in_timing, v3_render=stand_in_render(made), indexes=[v3_index(video)],
+                             engine="v3")      # PR 30: render() now defaults to v4, as main() does
     finally:
         launch.render_one = old
     return data["shorts"][0], made, shorts
@@ -571,8 +572,8 @@ def render_v3_with(tmp, short, pick, video, checker, shorts_name="shorts", used=
 
 @check
 def engine_v3_makes_full_screen_shorts_and_checks_every_caption():
-    """render() with engine v3 (the default; a made-up voice, render, HUD reader and vision model): the hook card from
-    the starred hook, am_puck, music, sound effects and the end pill; every beat is a 1080x1920 full-screen clip of the
+    """render() with engine v3 (named: v4 is the default since PR 30; a made-up voice, render, HUD reader and vision
+    model): the hook card from the starred hook, am_puck, music, sound effects and the end pill; every beat is a 1080x1920 full-screen clip of the
     recording; the insets are timed to the words that name the stars and icons (and added where a line names them
     without one); explainer.py reads the script; 100 % of the Short is full-screen gameplay; every caption check
     passes and is kept in checks.json; the Short is READY and its footage is logged as used"""

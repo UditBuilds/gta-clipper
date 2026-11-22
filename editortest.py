@@ -481,6 +481,49 @@ def a_short_without_a_payoff_is_rejected_on_the_page():
         return e["status"] == "FAILED" and has(e["problems"], "No clear payoff, no Short")
 
 
+@check
+def early_swearing_fails_with_the_shorts_metadata():
+    """PR 30: the speech check's "swearing in the first 7 s" was raised outside render_one's try, so render() replaced
+    the Short's entry with a bare stub (no moment, folder, hooks or type on the review page). Now it is FAILED with
+    all of them and the reason"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
+        folder = run_folder_with(tmp, [moment(v)], [short()])
+        old = launch.speech_check
+        launch.speech_check = lambda path, log=print, check=None: {"early": [(1.2, "damn")], "later": [], "words": 9}
+        try:
+            data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                                 facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                                 v4_parts={"synth": fake_voice([]), "build": no_music_build})
+        finally:
+            launch.speech_check = old
+        e = data["shorts"][0]
+        return (e["status"] == "FAILED" and has(e["problems"], "spoken swearing in the first 7 s")
+                and e.get("moment") == "M1" and e.get("type") == "action" and e.get("folder")
+                and e.get("hooks") == short()["hooks"])
+
+
+@check
+def render_and_render_one_default_to_engine_v4_like_the_command_line():
+    """PR 30: main() renders with v4 by default, but render() and render_one() defaulted to v3, so a caller that
+    left the engine out got the old engine"""
+    import argparse
+    import inspect
+    seen = {}
+    real = argparse.ArgumentParser.parse_args
+    old_render = launch.render
+    try:
+        argparse.ArgumentParser.parse_args = lambda self, *a, **k: real(self, ["render"])
+        launch.render = lambda *a, **k: seen.update(k) or {"shorts": []}
+        launch.main()
+    finally:
+        argparse.ArgumentParser.parse_args = real
+        launch.render = old_render
+    return (seen.get("engine") == "v4"
+            and inspect.signature(launch.render).parameters["engine"].default == "v4"
+            and inspect.signature(launch.render_one).parameters["engine"].default == "v4")
+
+
 def main():
     ok = True
     for fn in CHECKS:
