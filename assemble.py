@@ -16,6 +16,27 @@ CRASH_LUFS = -15.0           # an action payoff with no voice over it: the game'
 GAME_PAUSE_S = 0.6           # the game's sound rises only in voice pauses this long (a 0.34 s breath let a sideswipe
                              # through and Whisper heard "We're" for "You're", Nov 20)
 END_PILL = "@NeonGetaway • Subscribe"
+LEAD_KEEP_S = 0.02           # PR 30: the voice's leading silence is cut to this, so a line starts on its first word
+# The open card (PR 30): smaller, and in the top of the safe area (y 390-584), above the action, above a HUD close-up
+# (proof.INSET_Y = 600) and far from the captions (y 1185+). explainer's own card (y 650, up to 220 px) covered the
+# middle of the picture for its 2 s.
+CARD_Y, CARD_SIZE = 487, 120
+CARD_ROOM = 2 * (CARD_Y - ex.SAFE_TOP - 10)
+
+
+def speech_start(audio, rate):
+    """The sample where the speech starts, less LEAD_KEEP_S: the first 10 ms over explainer's TAIL_DB (the same
+    floor its tail cut uses), so Kokoro's quiet lead-in goes and the first word starts the line."""
+    import numpy as np
+    frame = int(0.01 * rate)
+    count = len(audio) // frame
+    if not count:
+        return 0
+    rms = np.sqrt((audio[:count * frame].reshape(-1, frame) ** 2).mean(1))
+    loud = np.nonzero(rms >= rms.max() * 10 ** (ex.TAIL_DB / 20))[0]
+    if not len(loud):
+        return 0
+    return max(0, int(loud[0]) * frame - int(LEAD_KEEP_S * rate))
 
 
 def speak(kokoro, lines, voice, speed):
@@ -26,6 +47,9 @@ def speak(kokoro, lines, voice, speed):
         parts, words, t, rate = [], [], 0.0, 24000
         for k, sent in enumerate(ex.split_sentences(line["say"])):
             audio, rate, tokens, times, _ = ex.speak_sentence(kokoro, sent, voice, speed)
+            lead = speech_start(audio, rate)
+            audio, cut = audio[lead:], lead / rate
+            times = [(max(0.0, w0 - cut), max(0.0, w1 - cut)) for w0, w1 in times]
             if k:
                 parts.append(np.zeros(int(ex.GAP_S * rate), dtype=np.float32))
                 t += ex.GAP_S
@@ -106,6 +130,11 @@ def game_track(video, shots, voice, work, quiet=None):
     return out, info
 
 
+def card_events(text):
+    """The open card on layer 1 for explainer's OPEN_CARD_S from frame 0, in the band above the action."""
+    return ex.title_events(1, 0.0, ex.OPEN_CARD_S, text, CARD_Y, ex.OPEN_POP, CARD_SIZE, CARD_ROOM)
+
+
 def end_pill():
     pill = {"text": END_PILL, "style": "info", "pos": "bottom", "font": ex.PILL_SIZE, "pad": ex.PILL_PAD,
             "fill": (255, 255, 255), "ink_colour": ex.INK, "border": 0, "shadow": 6, "text_border": 0, "round": 0.5}
@@ -148,7 +177,7 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
     v = np.pad(v, ((0, max(0, n - len(v))), (0, 0)))[:n]
 
     pill = end_pill()
-    events = (ex.open_card_events(hook.upper()) if hook else []) + ex.word_events(words, total_s)
+    events = (card_events(hook.upper()) if hook else []) + ex.word_events(words, total_s)
     events += ex.end_pill_events(pill, total_frames)
     (out_dir / "captions.ass").write_text(ex.ass_document(events), encoding="utf-8")
     for font in ex.FONT_FILES:

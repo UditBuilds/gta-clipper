@@ -3136,6 +3136,11 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                       + "; ".join(tried[0]["why"]) + ")")
         log("  " + first_note)
         short = dict(short, shots=[dict(short["shots"][0], **{"from": start})] + list(short["shots"][1:]))
+        # PR 30: a line that was to start in the seconds now left out (line 1, on frame 0) starts on the new frame 0
+        old0 = s1["from"]
+        lines = [dict(ln, at=start) if cutplan.number(ln.get("at")) and old0 - 1e-6 <= ln["at"] < start else ln
+                 for ln in lines]
+        short = dict(short, lines=lines)
         plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
         if problems:
             raise RenderProblem("\n  ".join(problems))
@@ -3207,7 +3212,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     import assemble
     hooks, star = short.get("hooks") or [], short.get("star")
     hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
-    card = short.get("open_card") or (open_card_text(hook) if hook else None)
+    card = cutplan.card_words(short)              # PR 30: at most 5 words (cutplan.hook_text_problems)
+    card = open_card_text(card) if card else None
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
                                         quiet if kind == "action" else None, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,

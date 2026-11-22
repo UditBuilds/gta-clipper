@@ -45,11 +45,11 @@ def short(**over):
          "title": "This GTA 6 CRASH came out of nowhere", "description": "A car speeds down the road. Then it crashes.",
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
          "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
-         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.3},
+         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.0},           # PR 30: on frame 0 (was 14.3)
                    {"say": "Wait for it.", "claim": "hype", "at": 17.5},
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
-                   {"say": "You just keep going.", "claim": "hype", "at": 30.3}]}
+                   {"say": "You just keep going.", "claim": "hype", "at": 34.8}]}  # PR 30: ends the Short (was 30.3)
     s.update(over)
     return s
 
@@ -522,6 +522,132 @@ def render_and_render_one_default_to_engine_v4_like_the_command_line():
     return (seen.get("engine") == "v4"
             and inspect.signature(launch.render).parameters["engine"].default == "v4"
             and inspect.signature(launch.render_one).parameters["engine"].default == "v4")
+
+
+# --- 8. The first seconds (PR 30) ---
+
+@check
+def the_first_word_by_0_2_s_the_hook_by_3_5_s_line_2_by_4_s():
+    """the swipe is decided in 2-3 s: line 1 0.3 s in is refused (first word by 0.2 s), a hook still talking at 3.9 s
+    is refused, line 2 at 4.5 s is refused; the fixture (line 1 at 0.0, ends 0.56; line 2 at 3.5) passes"""
+    late = short(lines=[dict(short()["lines"][0], at=14.3)] + short()["lines"][1:])
+    long_hook = short(lines=[{"say": "Watch this car go. It is fast. It is red. Look at it now.", "claim": "hype",
+                       "at": 14.0}]
+                      + short()["lines"][1:])
+    slow_two = short(lines=short()["lines"][:1] + [dict(short()["lines"][1], at=18.5)] + short()["lines"][2:])
+    p, problems, _ = cutplan.plan(short(), moment(), secs(short()), 21.0)
+    return (has(problems_of(late), "line 1 starts 0.30 s in") and has(problems_of(long_hook), "ends 3.9 s in")
+            and has(problems_of(slow_two), "line 2 starts 4.5 s in") and not problems
+            and p["placed"][0]["start"] == 0.0 and p["placed"][1]["start"] <= cutplan.SECOND_LINE_S)
+
+
+class LeadKokoro:
+    """Kokoro's place in explainer.speak_sentence: 0.25 s of near silence, then a tone, as the model starts a line."""
+
+
+def fake_sentence(kokoro, sentence, voice, speed):
+    import numpy as np
+    rate = 24000
+    lead, body = np.full(int(0.25 * rate), 1e-5, np.float32), 0.3 * np.sin(np.arange(int(0.6 * rate)) / 10.0)
+    words = sentence.rstrip(".!?").split()
+    step = 0.6 / len(words)
+    times = [(0.25 + k * step, 0.25 + (k + 1) * step) for k in range(len(words))]
+    return np.concatenate([lead, body.astype(np.float32)]), rate, words, times, True
+
+
+@check
+def kokoros_lead_in_is_trimmed_so_the_line_starts_on_its_first_word():
+    """assemble.speak cuts each sentence's quiet lead-in (0.25 s in the stand-in) to 0.02 s and moves the word times
+    with it: the first word starts at 0.02 s, not 0.25 s, and the line is 0.23 s shorter"""
+    import assemble
+    import explainer
+    old = explainer.speak_sentence
+    explainer.speak_sentence = fake_sentence
+    try:
+        out = assemble.speak(LeadKokoro(), [{"say": "Watch this car."}], "am_puck", 1.2)
+    finally:
+        explainer.speak_sentence = old
+    w = out[0]["words"]
+    return abs(w[0]["start"] - 0.02) < 0.011 and abs(out[0]["seconds"] - 0.62) < 0.011 and w[1]["start"] > w[0]["start"]
+
+
+SPOIL = ["This GTA 6 motorbike ride ends BADLY", "He crashes at 200 mph", "The bike explodes", "He dies here",
+         "He gets busted in GTA 6", "This rider gets wiped out", "The jump fails", "He survives the fall",
+         "He doesn't make it", "This SUV blows up", "He got away clean"]
+CLEAN = ["Watch the black SUV in GTA 6", "Can you survive jumping off this bridge in GTA 6?", "Watch this crash",
+         "Does this jump end badly?", "Watch the bike on the left", "Wait for the cops"]
+
+
+@check
+def a_hook_title_or_open_card_that_tells_the_result_is_refused():
+    """the flop's hook ("ends BADLY") gave the result away and lost 59 %: result words are refused in any hook, the
+    title and the open card; a question may name one; "crash" as a thing to watch is not a result"""
+    bad = [t for t in SPOIL if not cutplan.spoilers_in(t)]
+    good = [t for t in CLEAN if cutplan.spoilers_in(t)]
+    hook = problems_of(short(hooks=["Watch this crash", "This GTA 6 motorbike ride ends BADLY", "x"]))
+    title = problems_of(short(title="The black SUV crashes in GTA 6"))
+    card = problems_of(short(open_card="He dies"))
+    return (not bad and not good and has(hook, "hook 2: \"This GTA 6 motorbike ride ends BADLY\" tells the result")
+            and has(title, "title:") and has(card, "open card:") and not problems_of(short()))
+
+
+def suv_moment(at=13.0, to=14.5, extra=()):
+    m = moment()
+    m["evidence"] = m["evidence"] + [{"id": "E3", "kind": "seen", "value": "A black SUV waits at the lights.",
+                                      "from_s": at, "to_s": to, "source": "made up"}, *extra]
+    return m
+
+
+@check
+def the_hooks_subject_is_in_the_evidence_at_frame_0():
+    """"Watch the black SUV" needs the SUV in the moment's evidence at shot 1's start (13.0-14.5 covers 14.0); seen
+    only later it is refused; "the cops" with the police not seen by the vision check is refused; a hook that names
+    no subject ("Watch this crash") needs nothing"""
+    hooks = ["Watch the black SUV in GTA 6", "Wait for the cops", "Watch this crash"]
+    ok = problems_of(short(hooks=hooks, star=0), m=suv_moment())
+    later = problems_of(short(hooks=hooks, star=0), m=suv_moment(18.0, 24.0))
+    cops = problems_of(short(hooks=hooks, star=1), m=suv_moment(extra=[{
+        "id": "E4", "kind": "seen", "value": "Police cars block the road.", "from_s": 12.0, "to_s": 18.0,
+        "not_seen": ["police"], "source": "made up"}]))
+    none = problems_of(short(hooks=hooks, star=2))
+    return (not has(ok, "no evidence shows it") and has(later, "the hook names 'suv'") and has(cops, "names 'police'")
+            and not has(none, "no evidence shows it"))
+
+
+@check
+def a_moved_first_frame_is_checked_again_for_the_hooks_subject():
+    """steady.clear_start moves shot 1 from 14.0 to 15.0 s (a blurred frame): line 1 moves with it to the new frame 0,
+    and the SUV, seen only up to 14.5 s, is no longer at frame 0, so the Short is refused before anything is made"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = Path(tmp) / "synth.mp4"
+        v.write_bytes(b"x")
+        pick = dict(suv_moment(), path=str(v))
+        hooks = ["Watch the black SUV", "Watch this car go", "Watch this crash"]
+        folder = run_folder_with(tmp, [pick], [short(hooks=hooks, star=0)])
+        moved = lambda video, a, latest, focus: (a + 1.0, [], [{"at": a, "why": ["it is blurry"]}])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "loudest": lambda *a: 21.0, "clear": moved})
+        e = data["shorts"][0]
+        return (e["status"] == "FAILED" and has(e["problems"], "no evidence shows it at shot 1's start (15.00 s)")
+                and not has(e["problems"], "in none of the shots"))
+
+
+@check
+def the_open_card_is_5_words_at_most_small_and_above_the_action():
+    """the open card: at most 5 words ("Watch the black SUV in GTA 6" makes "Watch the black SUV"; a 7-word card is
+    refused), at most 120 px, its text centred at y 487 of 1920 and fitted into y 390-584 (the top of the safe area,
+    over a HUD close-up's top at 600), for 2 s from frame 0"""
+    import re
+    import assemble
+    derived = cutplan.card_words(short(hooks=["Watch the black SUV in GTA 6", "b", "c"], star=0))
+    long_ = problems_of(short(open_card="Watch this black SUV take the bridge"))
+    ev = assemble.card_events("WATCH THE|BLACK SUV")
+    pos = [tuple(map(float, x)) for e in ev for x in re.findall(r"\\pos\((\d+),(\d+)\)", e)]
+    size = [int(x) for e in ev for x in re.findall(r"\\fs(\d+)", e)]
+    return (derived == "Watch the black SUV" and has(long_, "has 7 words; at most 5") and pos
+            and all(380 <= y <= 655 for _, y in pos) and size and max(size) <= assemble.CARD_SIZE
+            and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
 
 
 def main():

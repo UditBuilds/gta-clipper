@@ -45,6 +45,30 @@ TALK_WORDS = ("you", "your", "you're", "youre", "yours", "watch", "look", "wait"
 REPLAY_SPEED = 0.5
 REPLAY_MAX_S = 2.0                        # on screen; so at most REPLAY_MAX_S * REPLAY_SPEED = 1 s of the recording
 REPLAY_IMPACT_MAX_S = 1.5                 # a longer impact is not replayed
+# PR 30, the first seconds (YouTube Studio, Nov 22: the hits kept 71 % and 74 % of viewers, the flops 41 % and 48 %;
+# the swipe is decided in the first 2-3 s): the voice starts at once, the hook is said by 3.5 s, the next line comes
+# by 4 s, and the Short ends as the talking ends (no subscribe pill), unless it ends on the slow-mo replay.
+FIRST_WORD_S = 0.2                        # line 1 starts (its first word is spoken) by this
+HOOK_END_S = 3.5                          # line 1, the spoken hook, has ended by this
+SECOND_LINE_S = 4.0                       # line 2 starts by this
+CARD_MAX_WORDS = 5                        # the open card (the hit's had one): short, so it reads in a glance
+# Result words: a hook, title or open card that tells the result loses the viewer ("This GTA 6 motorbike ride ends
+# BADLY" lost 59 %; "Watch the black SUV in GTA 6" named what to watch and kept 71 %). A question may name one.
+SPOILERS = (r"\bend(s|ed)?\s+(badly|terribly|horribly|in\s+(a\s+)?(disaster|tears|flames))", r"\bcrash(es|ed)\b",
+            r"\bdie[sd]\b", r"\bexplode[sd]\b", r"\b(blows?|blew)\s+up\b", r"\b(get|gets|got|getting)\s+busted\b",
+            r"\bbusted\b", r"\bwipe[sd]\s+out\b", r"\bwiped\s+out\b", r"\bfail(s|ed)\b", r"\bsurvive[sd]\b",
+            r"\b(doesn'?t|does\s+not|didn'?t|did\s+not|won'?t|never)\s+make\s+it\b", r"\b(gets?|got)\s+(killed|wrecked|"
+            r"caught|away)\b", r"\bkill(s|ed)\b", r"\bwreck(s|ed)\b", r"\bescape[sd]\b", r"\b(goes|went)\s+wrong\b")
+# What a hook may name as the thing to watch, and the words the evidence uses for it (the vision model writes
+# "pickup truck", "motorcycle", "police"). The first one the hook names must be on screen at frame 0.
+SUBJECTS = {"suv": ("suv", "suvs"), "car": ("car", "cars", "sedan", "sports car", "coupe"),
+            "truck": ("truck", "trucks", "pickup"), "bike": ("bike", "bikes", "motorbike", "motorcycle", "dirt bike"),
+            "bus": ("bus",), "boat": ("boat", "boats", "jet ski", "jetski", "speedboat"),
+            "helicopter": ("helicopter", "chopper", "heli"), "plane": ("plane", "jet", "airplane"),
+            "police": ("cop", "cops", "police", "officer", "officers", "cruiser", "patrol car"),
+            "bridge": ("bridge", "overpass"), "highway": ("highway", "freeway", "interstate"),
+            "beach": ("beach",), "train": ("train",), "gator": ("gator", "alligator", "crocodile")}
+FRAME0_S = 0.05                           # "frame 0": the evidence covers shot 1's start within this
 
 
 def words_of(text):
@@ -337,6 +361,114 @@ def hook_problems(short, shots, hud_words):
     return [f"the hook names {named[0]!r}: show it from frame 0 (shot 1 starts with an inset, \"start\": 0)"]
 
 
+def first_seconds_problems(placed):
+    """The first seconds (PR 30): line 1 starts by FIRST_WORD_S and ends by HOOK_END_S; line 2 starts by
+    SECOND_LINE_S. placed: place_lines' lines (their starts are their first words: the voice's lead is trimmed)."""
+    if not placed:
+        return []
+    out, one = [], placed[0]
+    if one["line"] != 1:
+        return []
+    if one["start"] > FIRST_WORD_S + 1e-6:
+        out.append(f"line 1 starts {one['start']:.2f} s in; the first word is spoken by {FIRST_WORD_S:g} s (the swipe "
+                   "is decided in the first 2-3 s): set its \"at\" to shot 1's start")
+    if one["end"] > HOOK_END_S + 1e-6:
+        out.append(f"line 1, the spoken hook, ends {one['end']:.1f} s in; it is said by {HOOK_END_S:g} s: cut words")
+    two = next((p for p in placed if p["line"] == 2), None)
+    if two and two["start"] > SECOND_LINE_S + 1e-6:
+        out.append(f"line 2 starts {two['start']:.1f} s in; it starts by {SECOND_LINE_S:g} s (no long quiet after the "
+                   "hook)")
+    return out
+
+
+def spoilers_in(text):
+    """The result words in text, outside questions: [(word, sentence)]. "Can you survive ...?" names no result."""
+    out = []
+    for s in sentences(str(text or "").replace("|", " ")) or []:
+        if s.rstrip().endswith("?"):
+            continue
+        for pat in SPOILERS:
+            hit = re.search(pat, s, re.IGNORECASE)
+            if hit:
+                out.append((hit.group(0), s))
+                break
+    return out
+
+
+def card_words(short):
+    """The open card's words: "open_card" when given, else the starred hook without a trailing "in GTA 6" (the
+    title and the hashtags say GTA 6). None when there is no card."""
+    card = short.get("open_card")
+    if card:
+        return " ".join(str(card).replace("|", " ").split())
+    hooks, star = short.get("hooks") or [], short.get("star")
+    if not (isinstance(star, int) and 0 <= star < len(hooks)):
+        return None
+    return re.sub(r"\s*\b(in\s+)?GTA\s*(6|VI)\s*([.!]*)$", r"\3", str(hooks[star]).strip(), flags=re.IGNORECASE) or None
+
+
+def hook_text_problems(short):
+    """No hook, title or open card tells the result (questions may), and the open card has at most CARD_MAX_WORDS
+    words (PR 30)."""
+    out = []
+    texts = [(f"hook {k}", h) for k, h in enumerate(short.get("hooks") or [], 1)]
+    texts += [("title", short.get("title")), ("open card", short.get("open_card"))]
+    for where, text in texts:
+        for word, sentence in spoilers_in(text):
+            out.append(f"{where}: \"{sentence}\" tells the result ({word!r}); name what to watch, or ask (a question "
+                       "may)")
+    card = card_words(short)
+    if card and len(words_of(card)) > CARD_MAX_WORDS:
+        out.append(f"open card: \"{card}\" has {len(words_of(card))} words; at most {CARD_MAX_WORDS}: write "
+                   "\"open_card\" (what to watch, short)")
+    return out
+
+
+def subject_terms(name):
+    return SUBJECTS.get(name, ())
+
+
+def named_subjects(text):
+    """The SUBJECTS a text names, in the order it names them."""
+    low, found = " " + " ".join(words_of(str(text or "").lower())) + " ", []
+    for name, terms in SUBJECTS.items():
+        at = [low.find(f" {t} ") for t in terms if f" {t} " in low]
+        if at:
+            found.append((min(at), name))
+    return [n for _, n in sorted(found)]
+
+
+def item_names(e):
+    """The SUBJECTS an evidence item supports: its own words, less what the vision check didn't see (not_seen)."""
+    if e.get("kind") == "compare" or str(e.get("id", "")).startswith("C"):
+        return set()
+    names = set(named_subjects(e.get("value")))
+    if e.get("kind") == "police":
+        names.add("police")
+    if "police" in (e.get("not_seen") or []):
+        names.discard("police")
+    return names
+
+
+def frame0_problems(short, shots, evidence):
+    """The main thing the hook names (the first of SUBJECTS: "the black SUV", "this bike", "this bridge", "the cops")
+    is in the moment's verified evidence at shot 1's start (an item covering it within FRAME0_S). The vision model's
+    sheets are 6 s apart, so this proves it is near frame 0, from the index's own words, with no new model call."""
+    hooks, star = short.get("hooks") or [], short.get("star")
+    if not (isinstance(star, int) and 0 <= star < len(hooks)) or not shots:
+        return []
+    names = named_subjects(hooks[star])
+    if not names:
+        return []
+    t, main = shots[0]["from"], names[0]
+    for e in evidence or []:
+        if (number(e.get("from_s")) and number(e.get("to_s")) and e["from_s"] <= t + FRAME0_S
+                and e["to_s"] >= t and main in item_names(e)):
+            return []
+    return [f"the hook names {main!r} ({hooks[star]!r}) but no evidence shows it at shot 1's start "
+            f"({t:.2f} s): start shot 1 where it is seen, or name what is on screen there"]
+
+
 HUD_KINDS = ("stars", "heat", "star_look")  # HUD readings: measured twice a second, so their edges are real moments
 
 
@@ -399,6 +531,8 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
     if shots:
         problems += length_problems(shots, kind) + payoff_place_problems(payoff, shots)
         problems += hook_problems(short, shots, hud_words)
+        problems += frame0_problems(short, shots, moment.get("evidence"))
+    problems += hook_text_problems(short)
     lines = short.get("lines") or []
     more, style_flags = style_problems(lines)
     problems += more
@@ -409,6 +543,8 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
         placed, more = place_lines(lines, durations, shots, payoff, kind)
         problems += more
         problems += cut_problems(shots, placed, events_of(moment, payoff, camera_cuts))
+        if len(placed) == len(lines):
+            problems += first_seconds_problems(placed)
     play = replay_shot(shots)
     return ({"payoff": payoff, "shots": shots, "placed": placed, "total_s": shots[-1]["end"] if shots else 0.0,
              "replay": dict(replay, start=play["start"], end=play["end"]) if play else None},

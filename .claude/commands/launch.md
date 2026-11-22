@@ -98,6 +98,23 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    replay comes straight after it (Short 6's payoff ran 0.3 s into a swing, which flashed just before the replay).
 7. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
    "He's here"). The swear check transcribes the finished Short; if its words differ from yours, reword.
+8. **The first seconds decide the swipe** (PR 30; YouTube Studio: hits kept 71-74 % of viewers, flops 41-48 %).
+   Code refuses a Short that breaks these (cutplan.py):
+   - **Line 1 starts on frame 0**: its first word by 0.2 s, so its `"at"` is shot 1's `"from"` (the voice's quiet
+     lead-in is trimmed). If the first frame moves later (rule 3), line 1 moves with it.
+   - **The spoken hook (line 1) has ended by 3.5 s; line 2 starts by 4.0 s.** In an action Short both come before the
+     payoff (which starts 1.5 s in at the earliest and has no voice over it): plan the setup shot for that.
+   - **No hook, title or open card tells the result**: "ends badly", "crashes", "dies", "explodes", "gets busted",
+     "wiped out", "fails", "survives", "doesn't make it", "blows up", "gets away" ... are refused. Name what to watch,
+     or ask: a question may ("Can you survive jumping off this bridge in GTA 6?"). "Watch this crash" names a thing
+     to watch and is fine. This holds for all 3 hooks, since `--hook N` can use any of them.
+   - **What the starred hook names is on screen at frame 0**: its main subject (the first of: SUV, car, truck, bike,
+     bus, boat, helicopter, plane, cops/police, bridge/overpass, highway, beach, train, gator) must be in the pick's
+     evidence at shot 1's start (an evidence line or label whose span covers it). Start shot 1 where it is seen, or
+     name what is there.
+   - **The open card has at most 5 words.** Without `"open_card"` it is the starred hook less a trailing "in GTA 6"
+     ("Watch the black SUV in GTA 6" makes "WATCH THE BLACK SUV"). It sits in the top of the safe area, above the
+     action, for 2 s.
 
 ```json
 {"shorts": [
@@ -111,7 +128,7 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
              {"from": 288.0, "to": 291.6}],
    "lines": [
      {"say": "Watch this, you're flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
-      "teaches": "the setup: a fast weave through traffic", "at": 265.25},
+      "teaches": "the setup: a fast weave through traffic", "at": 265.0},
      {"say": "Wait for it.", "claim": "hype", "at": 267.45},
      {"say": "And the truck didn't even notice.", "claim": "on_screen", "evidence": ["E3"],
       "teaches": "the truck keeps driving after the hit", "at": 270.15},
