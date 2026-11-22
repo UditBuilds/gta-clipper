@@ -1,10 +1,11 @@
 ---
-description: Launch night - turn the owner's new gameplay recordings into at least 3 finished Shorts (topic explainers and action clips, every one voiced, captioned and edited like the owner's posted sample), with a review page, no questions asked
+description: Launch night - turn the owner's new gameplay recordings into finished Shorts, 3 when 3 moments meet the payoff bar and fewer when not (topic explainers and action clips, every one voiced, captioned and edited like the owner's posted sample), with a review page, no questions asked
 argument-hint: "[--count N] or --dry-run --game gta5 --videos <files>"
 ---
 
-Make **at least 3** Shorts (or `--count N`) from the owner's **new gameplay recordings**, start to finish, and **ask
-the owner nothing**. The owner reviews and uploads them on `review.html`; you never upload anything. Extra arguments:
+Make **3** Shorts (or `--count N`) from the owner's **new gameplay recordings**, start to finish, and **ask
+the owner nothing**. **Fewer is right when fewer moments have a clear payoff** (the payoff bar below, the owner, Nov 22):
+never fill a night with a weak clip. If not one moment qualifies, `prepare` stops with an `ERROR:` saying so. The owner reviews and uploads them on `review.html`; you never upload anything. Extra arguments:
 **$ARGUMENTS** (empty on a normal night; `--count 5` for more; a trial uses `--dry-run --game gta5 --videos ...`).
 
 **The bar (the owner's rule, Nov 19):** every Short is at least as good as the posted Step 0 sample, "How to make GTA 6
@@ -36,13 +37,16 @@ swearing in the subtitles, and **never a child near guns, shooting, a body or bl
 in it (the Nov 20 dock shootout); and its **labels are checked against what the vision model sees in its own frames** (a
 "crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. Then the picks
 (PR 29): **the clearest payoff first** (`payoff_strength`: 3 an impact the frames confirmed, 2 a HUD change with a
-visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **no near-duplicates** (two
-picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2 picks a recording** unless
-nothing else qualifies; **both an action clip and a topic** when the pool has them; a moment that repeats a topic
-already posted (`posted_topics.json`: the owner's list) costs points, "wanted stars" / "stars appear" and "crime
-reported" the most; **no Short of the same type as one of the last 2 posted** (no crash right after a crash, whatever the
-label says: "truck crash" is a crash) while any candidate of another type passed every check; a moment that **already failed the shot check** at an earlier render
-is left out before the pool. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
+visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **a payoff below 2/3 is never
+picked, by any route** (the owner, Nov 22: a star rise with no cause shown, or plain driving, is not a Short; there are
+fewer picks, or none, rather than a weak one, and each moment left out says so in `candidates.json`); **no
+near-duplicates** (two picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2
+picks a recording** unless nothing else qualifies; **both an action clip and a topic** when the pool has a moment at
+2/3 or more of each; a moment that repeats a topic already posted (`posted_topics.json`: the owner's list) costs
+points, "wanted stars" / "stars appear" and "crime reported" the most; **no Short of the same type as one of the last
+2 posted** (no crash right after a crash, whatever the label says: "truck crash" is a crash) while a candidate of
+another type meets the 2/3 bar; when none does, one such Short may come, not two, and its `pick_why` says so; a moment
+that **already failed the shot check** at an earlier render is left out before the pool. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
 
 ## 2. Look at each pick
 

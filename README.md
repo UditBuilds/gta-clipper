@@ -364,7 +364,7 @@ by hand, in Windows PowerShell:
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --allow-stale              # render even with a fact checked over 3 days ago
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --folder-date 2026-11-11   # render that day's folder again
-.\.venv\Scripts\python.exe shorttest.py                                  # 41 checks, about 20 s, no Ollama needed
+.\.venv\Scripts\python.exe shorttest.py                                  # 42 checks, about 20 s, no Ollama needed
 ```
 
 Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
@@ -893,7 +893,7 @@ its share), are all checked before picking; every one that fails is listed in `c
 .\.venv\Scripts\python.exe launch.py prepare --count 3          # the default; --count 5 for more
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
 .\.venv\Scripts\python.exe facts.py own                        # facts from my own footage, waiting for my yes
-.\.venv-tts\Scripts\python.exe topictest.py                     # 15 checks, about 15 s
+.\.venv-tts\Scripts\python.exe topictest.py                     # 24 checks, about 15 s
 ```
 
 **Known limits:**
@@ -952,10 +952,17 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
   - 0: quiet.
 
   Picks go by tier, then points. The pool ranks the tier too, so a crash can't be left out of it.
+- **A minimum payoff bar of 2/3** (`launch.PAYOFF_BAR`, the owner, Nov 22). No pick, of any kind, has a tier below 2.
+  The bar takes weak candidates out before any pick is made, so no route can bring one back: the plain pick, a third
+  pick of a recording, the action/topic swap, or a stand-in for a crash right after a posted crash. A night has
+  **fewer Shorts rather than a weak one**, and `prepare` stops with an error when not one moment reaches the bar.
+  Each candidate left out says so in `candidates.json` ("payoff 1/3 ... is below the minimum 2/3"). On the Nov 20
+  recordings this leaves one pick: the motorbike crash (see the re-pick below); a star rise with no cause shown (M1, M5,
+  M8) and plain driving or flying are not Shorts.
 - **No near-duplicates.** Two picks of one recording must be a different kind of moment, or at least 10 minutes
   apart. At most 2 picks come from one recording, unless nothing else qualifies (the pick then says so).
-- **Both types.** When the picks have no action clip (or no topic) and one passed the checks, it takes the weakest
-  pick's place.
+- **Both types.** When the picks have no action clip (or no topic) and one that meets the bar passed the checks, it
+  takes the weakest pick's place. A topic below the bar is not swapped in.
 - **Posted topics** (`posted_topics.json`, the owner's list) cost points:
   - -2 for a repeat.
   - -4 for "wanted stars" / "stars appear" and "crime reported".
@@ -964,9 +971,10 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
   bridge" doesn't match the motorbike crash.
 - **No same type back to back** (the owner, Nov 21). A moment of the same type as one of the last 2 posted Shorts
   (`posted_topics.json`: `type`, `posted` day; a `planned` one doesn't count until it is posted) is held back
-  while any candidate of another type passed every check (the pool's own payoff bar), even a quiet 1/3 one. No
-  crash right after a crash. A label that names an impact is that impact ("truck crash", "topic: car crashes", a
-  posted type "Bike crash" are all crashes).
+  while a candidate of another type meets the payoff bar (2/3). A quiet 1/3 one does not: it is below the bar and is
+  not picked at all. When no other type meets the bar, one such Short may come (its `pick_why` says so), never two
+  in a run. No crash right after a crash if anything else qualifies. A label that names an impact is that impact
+  ("truck crash", "topic: car crashes", a posted type "Bike crash" are all crashes).
 - **A moment that already failed is not picked again.** Every run's `render.json` is read. A moment mostly inside
   a Short that FAILED its shot check is left out before the pool, with why. The Nov 20 re-pick's M21 was part2's
   Short 4 again: the jet ski over an empty ocean.
@@ -984,7 +992,14 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
   - No highlight ring is drawn: nothing tracks the object reliably, and the hand-made Short's ring was read off
     gridded frames by hand.
 
+Re-pick of the Nov 20 recordings with the bar (cached, 0 model calls; the list as of that night, then `--posted-now`):
+each view has **one pick**. As of that night: M25, the motorbike crash (3/3), the one crash allowed after the posted
+SUV crash because no other type reaches 2/3. Today: M24, the truck crash on the bridge (3/3), the same way, after
+the posted motorbike crash. M1, M5 and M8 (1/3), the jet ski (failed render) and the dock shootout (never shown) are out.
+Note that a crash after a crash still comes when it is the only moment at 2/3 or more; to make a night with fewer
+Shorts instead, take that exception out of `pick_varied`'s `blocked()`.
+
 ```powershell
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
-.\.venv\Scripts\python.exe varietytest.py                                                 # 12 checks, a few seconds
+.\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, a few seconds
 ```
