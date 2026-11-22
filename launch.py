@@ -3147,7 +3147,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
 
     speed = short.get("speed", cutplan.SPEED)
     if not cutplan.number(speed) or not 0.8 <= speed <= 1.4:
-        raise RenderProblem("speed is the voice's speed, 0.8-1.4 (the owner's is 1.2)")
+        raise RenderProblem(f"speed is the voice's speed, 0.8-1.4 (the default is {cutplan.SPEED:g})")
     spoken = (synth or v4_voice)(lines, speed)
     cams = sorted({c for s in plan["shots"] for c in cuts(m["path"], s["from"], s["to"])})
     plan, problems, more = cutplan.plan(short, m, [sp["seconds"] for sp in spoken], loud, cams, hud_words)

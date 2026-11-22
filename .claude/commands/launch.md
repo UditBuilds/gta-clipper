@@ -89,7 +89,7 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    then the payoff. No play-by-play ("Then the SUV pulls up ..."). `"claim"` is `on_screen` (cite `evidence` on
    screen while it is said, and `teaches`), `fact` (`facts` from facts.json), `ask` (a question with `answered_by`)
    or **`hype`**: at most 5 words that claim nothing ("Watch this.", "Wait for it."). Anything a line names (a truck,
-   the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (`"speed"` changes it).
+   the police, stars) needs evidence that shows it. Voice: am_puck at **1.25** (PR 30; `"speed"` changes it).
 6. **One slow-mo replay, action Shorts only** (the only second shown twice): `"replay": {"from": s, "to": s}` names
    the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
    plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
@@ -163,7 +163,7 @@ beat format, with its loop ending, for comparison only.)
 
 It checks shorts.json (the payoff, the shots, truth and timing rules), finds a clear first frame, makes every shot
 (one fixed window, steadied where that measures calmer, HUD close-ups), places the voice, renders every Short (engine
-v4: the hook card, am_puck at 1.2, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
+v4: the hook card, am_puck at 1.25, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
 payoff; no subscribe pill, no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
 the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short
 and render it alone with `--short N`. At most 3 tries per Short; after that leave it FAILED and go on.

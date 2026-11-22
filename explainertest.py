@@ -382,10 +382,10 @@ def dollar_amounts_warn():
 
 @check
 def speed_and_length_warn():
-    """a voice faster than 1.1 warns (1.1 itself doesn't); the target is 34-39 s since PR 18 (it was 40-50 s, and only over it warned): a Short over 39 s warns, one under 34 s warns, and 34-39 s doesn't"""
-    fast = ex.script_warnings({"speed": 1.18, "lines": []})
-    edge = ex.script_warnings({"speed": 1.1, "lines": []})
-    return (len(fast) == 1 and "faster than 1.1" in fast[0] and not edge and ex.runtime_warnings(39.5)
+    """a voice faster than 1.4 warns (1.4 itself doesn't; PR 30, it was 1.1); the target is 34-39 s since PR 18 (it was 40-50 s, and only over it warned): a Short over 39 s warns, one under 34 s warns, and 34-39 s doesn't"""
+    fast = ex.script_warnings({"speed": 1.45, "lines": []})
+    edge = ex.script_warnings({"speed": 1.4, "lines": []})
+    return (len(fast) == 1 and "faster than 1.4" in fast[0] and not edge and ex.runtime_warnings(39.5)
             and "over" in ex.runtime_warnings(39.5)[0] and ex.runtime_warnings(33.5) and "under" in ex.runtime_warnings(33.5)[0]
             and not ex.runtime_warnings(34) and not ex.runtime_warnings(37.6) and not ex.runtime_warnings(39)
             and "under" in ex.runtime_note(33.5) and "inside" in ex.runtime_note(37.6) and "over" in ex.runtime_note(39.5)
@@ -1125,12 +1125,13 @@ def captions_follow_the_real_speech():
 
 @check
 def log_says_what_happened():
-    """the log has the durations and target, the shot count, a visual for every second, each image's move, and the speed-over-1.1 warning; the console prints the runtime and the shots"""
+    """the log has the durations and target, the shot count, a visual for every second, each image's move, and its warnings (the runtime under 34 s; no speed warning at 1.18, under PR 30's 1.4); the console prints the runtime and the shots"""
     folder, log, stdout = main_run()
     images = [v for v in log["visuals"] if v["kind"] == "image"]
     return (len(log["per_second"]) == math.ceil(log["durations"]["frames"] / FPS) and log["per_second"][0]["visual"] == "a.mp4@0:03"
             and all(v["motion"] for v in images) and log["voice"] == "am_puck" and log["speed"] == 1.18
-            and any("faster than 1.1" in w for w in log["warnings"]) and "WARNING" in stdout
+            and any("under the 34-39 s target" in w for w in log["warnings"])
+            and not any("faster than" in w for w in log["warnings"]) and "WARNING" in stdout
             and log["durations"]["target_s"] == [34, 39] and log["shots"]["count"] == len(log["visuals"])
             and re.search(r"Runtime \d+\.\d s \(target 34-39 s", stdout)
             and re.search(rf"Shots: {len(log['visuals'])} \({len(log['visuals']) - 1} plus the 1.5 s loop ending\), average", stdout)

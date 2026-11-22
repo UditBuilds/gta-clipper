@@ -152,7 +152,7 @@ def visuals(shots, placed, total_s):
 
 
 def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, music="auto", seed="short",
-          speed=1.2, voice="am_puck", log=print):
+          speed=1.25, voice="am_puck", log=print):
     """The finished Short: out_dir/short.mp4, voice.wav, captions.ass, log.json. shots: cutplan shots with "clip"
     (their made clips); placed: cutplan.place_lines. Returns the log."""
     import numpy as np
