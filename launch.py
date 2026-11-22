@@ -2445,13 +2445,14 @@ SEEN_WORDS = {"police": "police", "cop": "police", "cops": "police", "officer": 
               "buildings": "buildings"}
 
 
-def open_card_text(hook):
-    """The hook as explainer's open card: upper case, 2-3 lines of at most OPEN_CARD_CHARS, or None if it can't fit."""
+def open_card_text(hook, chars=OPEN_CARD_CHARS):
+    """The hook as explainer's open card: upper case, 2-3 lines of at most `chars`, or None if it can't fit. Engine v4's
+    smaller card takes longer lines (assemble.CARD_CHARS), so it needs fewer of them in its band."""
     words, lines = str(hook).upper().split(), [""]
     for w in words:
-        if len(w) > OPEN_CARD_CHARS:
+        if len(w) > chars:
             return None
-        if lines[-1] and len(lines[-1]) + 1 + len(w) > OPEN_CARD_CHARS:
+        if lines[-1] and len(lines[-1]) + 1 + len(w) > chars:
             lines.append(w)
         else:
             lines[-1] = (lines[-1] + " " + w).strip()
@@ -3213,7 +3214,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     hooks, star = short.get("hooks") or [], short.get("star")
     hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
     card = cutplan.card_words(short)              # PR 30: at most 5 words (cutplan.hook_text_problems)
-    card = open_card_text(card) if card else None
+    card = open_card_text(card, assemble.CARD_CHARS) if card else None
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
                                         quiet if kind == "action" else None, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,

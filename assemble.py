@@ -22,6 +22,7 @@ LEAD_KEEP_S = 0.02           # PR 30: the voice's leading silence is cut to this
 # middle of the picture for its 2 s.
 CARD_Y, CARD_SIZE = 487, 120
 CARD_ROOM = 2 * (CARD_Y - ex.SAFE_TOP - 10)
+CARD_CHARS = 20              # characters a line (explainer's card: 13): 2 lines fit the band at ~85 px, not 3 at ~55
 
 
 def speech_start(audio, rate):

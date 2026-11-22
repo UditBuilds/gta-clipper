@@ -638,7 +638,8 @@ def a_moved_first_frame_is_checked_again_for_the_hooks_subject():
 def the_open_card_is_5_words_at_most_small_and_above_the_action():
     """the open card: at most 5 words ("Watch the black SUV in GTA 6" makes "Watch the black SUV"; a 7-word card is
     refused), at most 120 px, its text centred at y 487 of 1920 and fitted into y 390-584 (the top of the safe area,
-    over a HUD close-up's top at 600), for 2 s from frame 0"""
+    over a HUD close-up's top at 600), for 2 s from frame 0, in lines of up to 20 characters ("Watch the overpass
+    railing" takes 2 lines, where explainer's 13 made 3 and a smaller font)"""
     import re
     import assemble
     derived = cutplan.card_words(short(hooks=["Watch the black SUV in GTA 6", "b", "c"], star=0))
@@ -646,7 +647,9 @@ def the_open_card_is_5_words_at_most_small_and_above_the_action():
     ev = assemble.card_events("WATCH THE|BLACK SUV")
     pos = [tuple(map(float, x)) for e in ev for x in re.findall(r"\\pos\((\d+),(\d+)\)", e)]
     size = [int(x) for e in ev for x in re.findall(r"\\fs(\d+)", e)]
+    lines = launch.open_card_text("Watch the overpass railing", assemble.CARD_CHARS)
     return (derived == "Watch the black SUV" and has(long_, "has 7 words; at most 5") and pos
+            and lines == "WATCH THE OVERPASS|RAILING"
             and all(380 <= y <= 655 for _, y in pos) and size and max(size) <= assemble.CARD_SIZE
             and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
 
