@@ -1,7 +1,8 @@
 """Engine v4 (editor-v3): puts a payoff-first Short together once its shots are made (steady.py) and its lines are
 placed (cutplan.py). The picture decides the timing; the voice goes into it. Reuses explainer.py's pieces that work:
-the Kokoro voice, the yellow word captions, the open card (the hook from frame 0), the subscribe pill, the music bed,
-the whooshes, the loudness and the true-peak limit. No loop ending: it replayed the first shot.
+the Kokoro voice, the yellow word captions, the open card (the hook from frame 0), the music bed, the whooshes, the
+loudness and the true-peak limit. No loop ending: it replayed the first shot. No subscribe pill (PR 30): the Short ends
+as the talking ends (cutplan.ending_problems), so the pill's last 2 s were dead air over the ending.
 
 Needs numpy and Kokoro: .venv-tts only.
 """
@@ -15,7 +16,6 @@ import explainer as ex
 CRASH_LUFS = -15.0           # an action payoff with no voice over it: the game's own sound comes up to about this
 GAME_PAUSE_S = 0.6           # the game's sound rises only in voice pauses this long (a 0.34 s breath let a sideswipe
                              # through and Whisper heard "We're" for "You're", Nov 20)
-END_PILL = "@NeonGetaway • Subscribe"
 LEAD_KEEP_S = 0.02           # PR 30: the voice's leading silence is cut to this, so a line starts on its first word
 # The open card (PR 30): smaller, and in the top of the safe area (y 390-584), above the action, above a HUD close-up
 # (proof.INSET_Y = 600) and far from the captions (y 1185+). explainer's own card (y 650, up to 220 px) covered the
@@ -135,14 +135,6 @@ def card_events(text):
     return ex.title_events(1, 0.0, ex.OPEN_CARD_S, text, CARD_Y, ex.OPEN_POP, CARD_SIZE, CARD_ROOM)
 
 
-def end_pill():
-    pill = {"text": END_PILL, "style": "info", "pos": "bottom", "font": ex.PILL_SIZE, "pad": ex.PILL_PAD,
-            "fill": (255, 255, 255), "ink_colour": ex.INK, "border": 0, "shadow": 6, "text_border": 0, "round": 0.5}
-    ex.measure_labels([pill])
-    pill["y"] = ex.PILL_Y["bottom"]
-    return pill
-
-
 def visuals(shots, placed, total_s):
     """explainer-style visuals (what launch.caption_checks and full_screen_share read): one per shot and line, each
     with the line being said (or the one before), its clip and the clip's second where it starts."""
@@ -176,9 +168,7 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
     n = round(total_s * ex.RATE)
     v = np.pad(v, ((0, max(0, n - len(v))), (0, 0)))[:n]
 
-    pill = end_pill()
     events = (card_events(hook.upper()) if hook else []) + ex.word_events(words, total_s)
-    events += ex.end_pill_events(pill, total_frames)
     (out_dir / "captions.ass").write_text(ex.ass_document(events), encoding="utf-8")
     for font in ex.FONT_FILES:
         shutil.copy(font, work)
@@ -193,9 +183,7 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
     if game is not None:
         mix += game
     cuts = [s["start"] for s in shots[1:]]
-    pill_click = ex.pill_frames(total_frames)[1] / ex.FPS
     sfx = [{"kind": "whoosh", "at_s": round(c, 3), "why": "a cut"} for c in cuts]
-    sfx.append({"kind": "click", "at_s": round(pill_click, 3), "why": "the cursor clicks the subscribe pill"})
     mix += ex.sfx_track(sfx, n)[:, None]
     mixed = work / "mix.f32"
     mix.astype(np.float32).tofile(mixed)

@@ -650,6 +650,41 @@ def the_open_card_is_5_words_at_most_small_and_above_the_action():
             and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
 
 
+@check
+def the_short_ends_as_the_talking_ends_or_on_the_replay():
+    """no dead air at the end: the last word 4.6 s before the end is refused; the fixture's last word ends 0.08 s
+    before; an ending on the slow-mo replay is allowed however long after the last word"""
+    early = short(lines=short()["lines"][:3] + [dict(short()["lines"][3], at=30.3)])
+    shots = [{"n": 1, "from": 0.0, "to": 6.0, "start": 0.0, "end": 6.0},
+             {"n": 2, "from": 5.0, "to": 5.8, "start": 6.0, "end": 7.6, "speed": 0.5, "replay": True}]
+    placed = [{"line": 1, "start": 0.0, "end": 1.0}]
+    return (has(problems_of(early), "goes on 4.6 s after the last word") and not problems_of(short())
+            and not cutplan.ending_problems(shots, placed)
+            and cutplan.ending_problems(shots[:1], placed))
+
+
+@check
+def no_subscribe_pill_and_no_click_in_a_v4_short():
+    """the v4 Short has no "@NeonGetaway • Subscribe" pill in its captions and no click in its sound effects (only the
+    cuts' whooshes), and its first word is at 0.0 s"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
+        folder = run_folder_with(tmp, [moment(v)], [short()])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "build": no_music_build})
+        e = data["shorts"][0]
+        if e["status"] != "READY":
+            raise AssertionError("; ".join(e["problems"]))
+        out = Path(e["folder"])
+        ass = (out / "captions.ass").read_text(encoding="utf-8")
+        log = json.loads((out / "log.json").read_text(encoding="utf-8"))
+        last = max(w["end_s"] for w in log["word_times"])
+        return ("Subscribe" not in ass and "NeonGetaway" not in ass
+                and all(x["kind"] == "whoosh" for x in log["sfx"]) and log["word_times"][0]["start_s"] <= 0.2
+                and log["durations"]["video_s"] - last <= cutplan.END_AFTER_WORDS_S + 0.05)
+
+
 def main():
     ok = True
     for fn in CHECKS:

@@ -51,6 +51,7 @@ REPLAY_IMPACT_MAX_S = 1.5                 # a longer impact is not replayed
 FIRST_WORD_S = 0.2                        # line 1 starts (its first word is spoken) by this
 HOOK_END_S = 3.5                          # line 1, the spoken hook, has ended by this
 SECOND_LINE_S = 4.0                       # line 2 starts by this
+END_AFTER_WORDS_S = 0.5                   # the Short ends at most this long after its last word
 CARD_MAX_WORDS = 5                        # the open card (the hit's had one): short, so it reads in a glance
 # Result words: a hook, title or open card that tells the result loses the viewer ("This GTA 6 motorbike ride ends
 # BADLY" lost 59 %; "Watch the black SUV in GTA 6" named what to watch and kept 71 %). A question may name one.
@@ -381,6 +382,18 @@ def first_seconds_problems(placed):
     return out
 
 
+def ending_problems(shots, placed):
+    """The Short ends at most END_AFTER_WORDS_S after its last word (PR 30: no subscribe pill, no dead air), unless
+    its last shot is the slow-mo replay (PR 29), which is the ending."""
+    if not shots or not placed or shots[-1].get("replay"):
+        return []
+    total, last = shots[-1]["end"], max(p["end"] for p in placed)
+    if total - last <= END_AFTER_WORDS_S + 1e-6:
+        return []
+    return [f"the Short goes on {total - last:.1f} s after the last word ({last:.1f} s of {total:.1f} s); it ends at "
+            f"most {END_AFTER_WORDS_S:g} s after it: end the last shot there, or say the last line later"]
+
+
 def spoilers_in(text):
     """The result words in text, outside questions: [(word, sentence)]. "Can you survive ...?" names no result."""
     out = []
@@ -544,7 +557,7 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
         problems += more
         problems += cut_problems(shots, placed, events_of(moment, payoff, camera_cuts))
         if len(placed) == len(lines):
-            problems += first_seconds_problems(placed)
+            problems += first_seconds_problems(placed) + ending_problems(shots, placed)
     play = replay_shot(shots)
     return ({"payoff": payoff, "shots": shots, "placed": placed, "total_s": shots[-1]["end"] if shots else 0.0,
              "replay": dict(replay, start=play["start"], end=play["end"]) if play else None},
