@@ -1027,8 +1027,8 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
   top at 600), for 2 s. It was explainer's card: up to 220 px, centred at y 650, so it could cover y 390-910.
 - **No subscribe pill** (and no click). The Short ends at most 0.5 s after the last word, unless its last shot is the
   slow-mo replay.
-- **The voice at 1.25.** am_puck at 1.20, 1.25, 1.30 and 1.35, heard by faster-whisper: 256, 264, 273 and 314 words a
-  minute; 1.20 and 1.25 were heard word for word, 1.30 misheard "that", 1.35 four phrases. explainer.py's speed
+- **The voice at 1.25.** am_puck at 1.20, 1.25, 1.30 and 1.35, heard by faster-whisper: 262, 269, 276 and 318 words a
+  minute (from the first heard word to the last); 1.20 and 1.25 were heard word for word, 1.30 misheard "that", 1.35 four phrases. explainer.py's speed
   warning moved from 1.1 to 1.4.
 - Three bugs: an early swear word found by the speech check now fails the Short with its moment, folder and hooks
   (it was a bare stub on the review page); `render()` and `render_one()` default to engine v4, as the command line
