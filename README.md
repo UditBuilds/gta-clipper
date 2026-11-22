@@ -680,7 +680,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 47 checks, about 4 minutes, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 48 checks, about 4 minutes, no Ollama
 ```
 
 **What prepare does.**
@@ -930,13 +930,13 @@ puts the voice into it:
   - Each line starts at its own second (`"at"`) and ends before its shot's cut.
   - Every cut lands on a sentence end or a footage event.
   - No line talks over an action payoff; the game's sound plays it, brought up to about -15 LUFS.
-  - am_puck speaks at 1.2. Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
+  - am_puck speaks at 1.25 (1.2 until PR 30). Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
     like "Wait for it." claim nothing.
 
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 29 checks, about 1 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 39 checks, about 10 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1003,3 +1003,37 @@ Shorts instead, take that exception out of `pick_varied`'s `blocked()`.
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
 .\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, a few seconds
 ```
+
+## The first seconds (PR 30, Nov 22)
+
+YouTube Studio: my hits kept 71 % and 74 % of viewers ("stayed to watch"), my flops 41 % and 48 %. The swipe is
+decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADLY" gave the result away; the hit's
+"Watch the black SUV in GTA 6" named what to watch. Engine v4 now refuses, before anything is made (`cutplan.py`):
+
+- **The voice starts at once.** Line 1 starts by 0.2 s (its `"at"` is shot 1's start), the spoken hook has ended by
+  3.5 s, and line 2 starts by 4.0 s. Kokoro's quiet lead-in is cut to 0.02 s (`assemble.speech_start`; it measured
+  only 0.02-0.04 s, so the line's `"at"` is what really matters). When the first frame moves later, a line that was to
+  start in the dropped seconds starts on the new frame 0.
+- **No hook, title or open card tells the result** (`cutplan.SPOILERS`): "ends badly", "crashes", "dies", "explodes",
+  "gets busted", "wiped out", "fails", "survives", "doesn't make it", "blows up", "gets away" and more. A question may
+  name one ("Can you survive jumping off this bridge in GTA 6?"); "Watch this crash" names a thing to watch. All 3
+  hooks are checked, since `--hook N` can use any of them.
+- **What the hook names is there at frame 0.** The starred hook's main subject (SUV, car, truck, bike, boat, cops,
+  bridge/overpass ... `cutplan.SUBJECTS`) must be in the pick's evidence at shot 1's start, also after the first frame
+  moved. It reads the evidence already saved (no new model call); the vision model's sheets are 6 s apart, so this
+  proves "near frame 0", not the exact frame.
+- **A smaller open card above the action.** At most 5 words (the starred hook less a trailing "in GTA 6" unless
+  `"open_card"` is given), at most 120 px, lines of up to 20 characters, in y 390-584 of 1920 (above a HUD close-up's
+  top at 600), for 2 s. It was explainer's card: up to 220 px, centred at y 650, so it could cover y 390-910.
+- **No subscribe pill** (and no click). The Short ends at most 0.5 s after the last word, unless its last shot is the
+  slow-mo replay.
+- **The voice at 1.25.** am_puck at 1.20, 1.25, 1.30 and 1.35, heard by faster-whisper: 256, 264, 273 and 314 words a
+  minute; 1.20 and 1.25 were heard word for word, 1.30 misheard "that", 1.35 four phrases. explainer.py's speed
+  warning moved from 1.1 to 1.4.
+- Three bugs: an early swear word found by the speech check now fails the Short with its moment, folder and hooks
+  (it was a bare stub on the review page); `render()` and `render_one()` default to engine v4, as the command line
+  does; a window the safety checks moved keeps the vision check's verdict (`verified`), so a crash or police the
+  frames didn't show can't come back.
+
+All 16 test suites, one at a time on Nov 22: 516 checks, all pass (editortest 39 and launchtest 48 are the ones that
+grew; calibtest and hooktest name no interpreter and were run with `.venv`).
