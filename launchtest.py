@@ -537,6 +537,54 @@ def blood_in_the_first_7_s_moves_the_start_once_or_drops_the_type():
 
 
 @check
+def a_child_near_guns_or_a_body_with_blood_is_never_shown():
+    """the owner (Nov 21): the Nov 20 dock shootout (gators shot at, a body on the dock, a child nearby, blood later
+    in it) was picked twice, because blood after 7 s is only a flag. A child in the same footage as guns, shooting, a
+    body or blood, or a body together with blood, now drops that type wherever it is in the footage, from the index's
+    own lines (the real Nov 20 ones here) and the safety answers; a child with no harm near, "a body of water", or a
+    lone blood flag later on still pass"""
+    rec = made_up_rec()
+    m = shoot_moment(rec)
+    a0, a1 = launch.type_options(rec, m)["action"]["window"]
+    dock = ["Player aims gun at gators near dock with American flag.",
+            "Player approaches body on dock, collects pistol ammo.",
+            "Player stands on dock with fallen character, pistol ammo nearby",
+            "Player on dock with child, holding pistol, near water and debris"]
+
+    def with_lines(lines):
+        """The made-up recording with the moment's own lines (it shoots at gang members) replaced: a quiet line on
+        every sheet round both windows, then `lines` from the action window's start."""
+        r = json.loads(json.dumps(rec, default=str))
+        r["path"], r["idx"] = rec["path"], rec["idx"]
+        near = [sh for sh in r["sheets"] if a0 - 30.0 <= sh["t"] < a1 + 6.0]
+        for sh in near:
+            sh["notable"] = "Player walks on a wooden platform near water and a hut."
+        for sh, line in zip([sh for sh in near if sh["t"] + r["every"] > a0], lines):
+            sh["notable"] = line
+        return r
+
+    out = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, lines, rules in (
+                ("dock", dock, []),
+                ("child_only", ["A child walks past a hut near the water."], []),
+                ("water", ["Kids swim in a body of water near the dock."], []),
+                ("child_shooting", ["A child stands by the road."], [(a1 - 6.0, a1, "shooting")]),
+                ("body_blood", ["Player approaches body on dock."], [(a1 - 3.0, a1, "blood_or_gore")]),
+                ("blood_later", ["Player walks on a wooden platform."], [(a1 - 3.0, a1, "blood_or_gore")])):
+            checker, _ = stand_in_checker(tmp, rules)
+            mm = dict(m)
+            out[name] = (safety.check_moment(mm, with_lines(lines), tmp, checker), mm)
+    gone = lambda n: "action" not in out[n][1].get("safe_options", {}) and "never shown" in " ".join(out[n][0][1])
+    kept = lambda n: "action" in out[n][1].get("safe_options", {})
+    ok = (gone("dock") and "child" in " ".join(out["dock"][0][1]) and gone("child_shooting") and gone("body_blood")
+          and kept("child_only") and kept("water") and kept("blood_later"))
+    if not ok:
+        print({k: (v[0][1], sorted(v[1].get("safe_options", {}))) for k, v in out.items()})
+    return ok
+
+
+@check
 def swear_words_are_found_and_mild_words_are_not():
     """PROFANITY finds strong and moderate swearing, stretched and censored spellings and slurs, and leaves mild words
     (damn, hell) and innocent words that hold one (class, assist, cockpit, Dickens) alone; the model's reading of a

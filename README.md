@@ -680,7 +680,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 37 checks, about 2 minutes, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 47 checks, about 4 minutes, no Ollama
 ```
 
 **What prepare does.**
@@ -727,6 +727,10 @@ the game works without a fact ("you can", "the game", "cops will"), any name but
   On the dry run's river chase it read every subtitle line word for word, "Fuck! Fuck!" at 4:12, "Watch your ass" at
   4:37 and "Shhiitttt!!" at 4:41 included (17 calls, 61 s for 68 s of footage). Spoken swearing in the game's sound
   is not checked: there is no speech-to-text, and every Short's SOUND flag says so.
+- Never shown, anywhere in the footage (the owner, Nov 21): a child together with guns, shooting, a body or blood,
+  or a body together with blood (`safety.never_shown`, from the index's own lines and the safety answers). The Nov 20
+  dock shootout (gators shot at, a body on the dock, a child nearby, blood after 7 s) passed as a BLOOD flag and was
+  picked twice; it drops now. Blood alone after the first 7 s is still a flag.
 - Footage an earlier Short showed, pinned footage included (footage_short.py now logs it too), is never used again.
 - Every render, here and in /new-short and /footage-short (explainer.py), is measured with ffmpeg's true-peak meter;
   over -1.0 dBTP, the sound alone goes through a limiter run at 192 kHz and is measured again, or the render fails.
@@ -960,7 +964,9 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
   bridge" doesn't match the motorbike crash.
 - **No same type back to back** (the owner, Nov 21). A moment of the same type as one of the last 2 posted Shorts
   (`posted_topics.json`: `type`, `posted` day; a `planned` one doesn't count until it is posted) is held back
-  while another candidate meets the payoff bar (2/3). No crash right after a crash.
+  while any candidate of another type passed every check (the pool's own payoff bar), even a quiet 1/3 one. No
+  crash right after a crash. A label that names an impact is that impact ("truck crash", "topic: car crashes", a
+  posted type "Bike crash" are all crashes).
 - **A moment that already failed is not picked again.** Every run's `render.json` is read. A moment mostly inside
   a Short that FAILED its shot check is left out before the pool, with why. The Nov 20 re-pick's M21 was part2's
   Short 4 again: the jet ski over an empty ocean.
@@ -968,7 +974,7 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
   what it beat. The review page shows "why this moment".
 - **`launch.py repick`** runs the picking step again on an old run's cached data: each `index.json` and `clip.py` run,
   with nothing indexed again. Safety answers come from the model's cache where it has them. The used footage and the
-  posted topics are taken as they were when that run was prepared. It writes `repick.json` and `repick.txt` (old picks
+  posted topics are taken as they were when that run was prepared; `--posted-now` takes both as they are today. It writes `repick.json` and `repick.txt` (old picks
   against new ones) to `<run>-repick` and leaves the run alone.
 - **One slow-mo replay, action Shorts only** (`"replay": {"from", "to"}` in `shorts.json`, `cutplan.replay_of`). This
   is the only exception to "no second twice":
@@ -980,5 +986,5 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
 
 ```powershell
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
-.\.venv\Scripts\python.exe varietytest.py                                                 # 11 checks, a few seconds
+.\.venv\Scripts\python.exe varietytest.py                                                 # 12 checks, a few seconds
 ```

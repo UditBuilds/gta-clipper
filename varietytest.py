@@ -76,7 +76,10 @@ def the_nov20_case_puts_the_bike_crash_on_top_and_no_near_duplicates():
     within 10 min, and the run has an action clip and a topic"""
     pool = nov20_pool()
     old = [m["id"] for m in sorted(pool, key=lambda m: -m["score"])[:3]]
-    picks = launch.pick_varied([dict(m) for m in pool], 3, posted(as_of="2026-11-20T15:06:03"), text_of, quiet)
+    # The list as it was that night, without the Nov 21 type rule (no crash after a posted crash: the black SUV was
+    # posted that day, so M25 waits now; the_crash_rule_holds_for_real_moment_labels checks that rule)
+    then = [dict(t, type=None) for t in posted(as_of="2026-11-20T15:06:03")]
+    picks = launch.pick_varied([dict(m) for m in pool], 3, then, text_of, quiet)
     ids = [m["id"] for m in picks]
     per = {}
     for m in picks:
@@ -245,9 +248,9 @@ def made_up_posted(topics):
 @check
 def no_crash_right_after_a_posted_crash_unless_nothing_else_meets_the_bar():
     """the owner's rule (Nov 21): with a crash among the last 2 posted Shorts, a crash isn't picked while another
-    candidate meets the payoff bar (a star rise with police on screen, 2/3); with only quieter candidates (1/3) the
-    crash is picked and says why, but only one crash a run while anything else is free; a planned topic is not
-    one of the last 2 posted"""
+    candidate passed every check (the pool's payoff bar), a quiet 1/3 one too; with nothing else left the crash is
+    picked and says why, but only one crash a run while anything else is free; a planned topic is not one of the
+    last 2 posted"""
     posted = made_up_posted([
         {"name": "old star", "type": "star rise", "posted": "2026-11-13", "rules": [{"words": ["zzz"]}]},
         {"name": "bike crash", "type": "crash", "posted": "2026-11-20", "rules": [{"words": ["zzz"]}]},
@@ -257,16 +260,54 @@ def no_crash_right_after_a_posted_crash_unless_nothing_else_meets_the_bar():
     cause = mo("s", B, 0, 3.0, "star rise", {"star_rise": 2.5, "police": 0.5})
     quiet_one = mo("q", B, 0, 3.0, "chase", {"activity": 2.0, "activity_label": "chase"})
     held = launch.pick_varied([dict(crash), dict(cause)], 1, posted, None, quiet)
-    allowed = launch.pick_varied([dict(crash), dict(quiet_one)], 1, posted, None, quiet)
+    quiet_wins = launch.pick_varied([dict(crash), dict(quiet_one)], 1, posted, None, quiet)
+    allowed = launch.pick_varied([dict(crash)], 1, posted, None, quiet)
     crash2 = mo("c2", "rec_x", 0, 8.0, "crash", {"crash": 1.5})
     one = launch.pick_varied([dict(crash), dict(crash2), dict(quiet_one)], 2, posted, None, quiet)
     if sorted(m["id"] for m in one) != ["c", "q"]:          # the fallback lets one crash through, not two
         return False, [m["id"] for m in one]
     free = launch.pick_varied([dict(crash), dict(cause)], 1, posted[:1], None, quiet)
     recent = launch.recent_posted(posted)
-    return (held[0]["id"] == "s" and allowed[0]["id"] == "c" and "nothing else meets the payoff bar" in allowed[0]["pick_why"]
+    return (held[0]["id"] == "s" and quiet_wins[0]["id"] == "q" and allowed[0]["id"] == "c"
+            and "no other type is left" in allowed[0]["pick_why"]
             and free[0]["id"] == "c" and recent == [("crash", "bike crash"), ("discovery", "effigy")]), (
-        [m["id"] for m in held], [m["id"] for m in allowed], recent)
+        [m["id"] for m in held], [m["id"] for m in quiet_wins], [m["id"] for m in allowed], recent)
+
+
+@check
+def the_crash_rule_holds_for_real_moment_labels():
+    """the owner (Nov 21): today's re-pick put M27 (the truck on the bridge, its label "crash" with verified terms)
+    first, right after the posted motorbike crash, while M1 and M26 were there. With the posted list written as the
+    owner writes it and the moments as the miner saved them (launch-2026-11-20-part2's pool), M27 is held back and
+    says why; any label naming a crash ("truck crash", "topic: car crashes", an action payoff "truck crash") is a
+    crash, and so is a posted type written "Bike crash"."""
+    posted = made_up_posted([
+        {"name": "black SUV crash on the bridge", "type": "crash", "posted": "2026-11-20",
+         "rules": [{"category": ["crash"]}]},
+        {"name": "motorbike crash (Short 6)", "type": "Bike crash", "posted": "2026-11-20",
+         "added": "2026-11-20T23:03:42", "rules": [{"words": ["motorbike", "motorcycle"]}]},
+        {"name": "tree effigy / passing out", "type": "discovery", "posted": "2026-11-21", "rules": [{"words": ["effigy"]}]},
+        {"name": "crime needs a witness", "type": "star rise", "planned": "2026-11-21",
+         "rules": [{"words": ["witness"]}]}])
+    m27 = mo("M27", A, 461.5, 3.36, "crash", {"action": 0.87, "activity": 0.5, "activity_label": "driving",
+                                             "crash": 1.5, "confidence": 0.49})
+    m1 = mo("M1", A, 722.5, 9.64, "star rise", {"action": 0.77, "star_rise": 2.5, "stars": 2.0, "activity": 2.0,
+                                               "activity_label": "chase", "confidence": 0.47, "topic": 1.5, "hud6": 1.0,
+                                               "dialogue": -0.6}, "wanted-system")
+    m34 = mo("M34", "rec_165142", 570.5, 2.36, "action", {"action": 1.37, "activity": 0.5, "activity_label": "driving",
+                                                          "confidence": 0.49})
+    picks = launch.pick_varied([dict(m27), dict(m1), dict(m34)], 2, posted, text_of, quiet)
+    left = launch.pick_varied([m for m in [dict(m27), dict(m1), dict(m34)]], 3, posted, text_of, quiet)
+    m27_left = next(m for m in left if m["id"] == "M27")
+    labels = [launch.moment_type(mo("x", A, 0, 1.0, "truck crash", {})),
+              launch.moment_type(mo("x", A, 0, 1.0, "topic: car crashes", {})),
+              launch.moment_type(mo("x", A, 0, 1.0, "chase", {}, point={"action_payoff": ["truck crash"]}))]
+    recent = launch.recent_posted(posted)
+    return (sorted(m["id"] for m in picks) == ["M1", "M34"]
+            and "motorbike crash (Short 6)" in next(m for m in [dict(m27)] + picks if m["id"] == "M1")["pick_why"]
+            and labels == ["crash", "crash", "crash"] and recent[0][0] == "crash"
+            and "M27" in [m["id"] for m in left] and "no other type is left" in m27_left["pick_why"]), (
+        [m["id"] for m in picks], labels, recent, [(m["id"], m.get("pick_why")) for m in left])
 
 
 @check

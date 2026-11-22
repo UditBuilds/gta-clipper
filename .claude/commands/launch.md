@@ -32,15 +32,16 @@ those not indexed yet), reads the HUD with `profiles/gta6.json` (every HUD step 
 indexes them, then builds a **pool of 15-25 candidates** spread over all recordings: **topic candidates first** (the
 shot-list topics the footage matches, and GTA 6 HUD changes such as the heat icons or the stars' look), then the best
 action moments. Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood in the first 7 s or
-swearing in the subtitles; and its **labels are checked against what the vision model sees in its own frames** (a
+swearing in the subtitles, and **never a child near guns, shooting, a body or blood, or a body with blood**, anywhere
+in it (the Nov 20 dock shootout); and its **labels are checked against what the vision model sees in its own frames** (a
 "crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. Then the picks
 (PR 29): **the clearest payoff first** (`payoff_strength`: 3 an impact the frames confirmed, 2 a HUD change with a
 visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **no near-duplicates** (two
 picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2 picks a recording** unless
 nothing else qualifies; **both an action clip and a topic** when the pool has them; a moment that repeats a topic
 already posted (`posted_topics.json`: the owner's list) costs points, "wanted stars" / "stars appear" and "crime
-reported" the most; **no Short of the same type as one of the last 2 posted** (no crash right after a crash) while
-another candidate meets the payoff bar (2/3); a moment that **already failed the shot check** at an earlier render
+reported" the most; **no Short of the same type as one of the last 2 posted** (no crash right after a crash, whatever the
+label says: "truck crash" is a crash) while any candidate of another type passed every check; a moment that **already failed the shot check** at an earlier render
 is left out before the pool. Each pick's `pick_why` says why it beat the others. Everything is in `<run folder>\candidates.json`.
 
 ## 2. Look at each pick

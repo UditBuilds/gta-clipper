@@ -758,8 +758,9 @@ REPEAT_COST, STRONG_REPEAT_COST = 2.0, 4.0   # a moment repeating a posted topic
 POOL_PAYOFF_BONUS = 1.0      # pool_of: a candidate's place in the pool also counts its payoff tier this much a step
 POSTED_FILE = HERE / "posted_topics.json"    # the topics already posted (the owner's list)
 RULE_KEYS = {"category", "topic", "term", "profile", "words", "all_words"}
-RECENT_POSTED = 2            # the owner (Nov 21): no crash while a crash is one of the last 2 posted Shorts...
-PAYOFF_BAR = 2               # ...unless nothing else meets the payoff bar (payoff tier 2 or more)
+RECENT_POSTED = 2            # the owner (Nov 21): no crash while a crash is one of the last 2 posted Shorts, unless
+                             # nothing else meets the payoff bar: no other candidate passed every check (the pool's
+                             # own bar, payoff included). A 1/3 star rise still beats a crash right after a crash.
 FAILED_SHARE = 0.5           # a moment this much inside a Short that failed its shot check at render is left out
 
 
@@ -816,15 +817,22 @@ def recent_posted(posted, n=RECENT_POSTED):
     """[(type, name)] of the last n POSTED topics (by their posted day, then their place in the list); a planned topic
     is not one of them until it has a posted day."""
     dated = [(t["posted"], k, t) for k, t in enumerate(posted) if t.get("posted")]
-    return [(t.get("type"), t["name"]) for _, _, t in sorted(dated, key=lambda x: x[:2])[-n:]]
+    return [(plain_type(t.get("type")), t["name"]) for _, _, t in sorted(dated, key=lambda x: x[:2])[-n:]]
+
+
+def plain_type(label):
+    """A type in the posted list's words: an impact named anywhere in the label ("truck crash", "car crashes",
+    "big explosion", "topic: crash") is that impact, so labels written by hand and by the miner compare alike."""
+    low = str(label or "").lower().replace("topic: ", "").strip()
+    return next((k for k in IMPACT_TERMS if re.search(rf"(?<![a-z]){k}", low)), low) or None
 
 
 def moment_type(m):
-    """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt) or else its
-    category (star rise, chase, heat-icons ...)."""
+    """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt), from its
+    verified terms, its action payoff or its own label, or else its category (star rise, chase, heat-icons ...)."""
     terms, point = m.get("terms") or {}, (m.get("point") or {}).get("action_payoff") or []
-    hits = [k for k in IMPACT_TERMS if terms.get(k) or k in point]
-    return hits[0] if hits else str(m.get("category", "")).replace("topic: ", "")
+    hits = [k for k in IMPACT_TERMS if terms.get(k) or any(plain_type(x) == k for x in point)]
+    return hits[0] if hits else plain_type(m.get("category", ""))
 
 
 def moment_text(rec, m):
@@ -923,10 +931,12 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         return f"its recording already has {same} picks (at most {cap})" if same >= cap else None
 
     def bar_met_by_other(m, picked, cap):
-        """The best other free candidate of a type not posted lately that meets the payoff bar, or None."""
+        """The best other free candidate of a type not posted lately, or None. Every candidate here passed every
+        check, the pool's payoff bar too, so any of them meets the bar (the owner, Nov 21: M27's crash was picked
+        right after the posted bike crash while M1 and M26 were there)."""
         return next((c for c in sorted(passed, key=lambda c: key(c, picked), reverse=True)
                      if c is not m and c not in picked and moment_type(c) not in recent_types
-                     and c["payoff_strength"]["tier"] >= PAYOFF_BAR and not held_back(c, picked, cap)), None)
+                     and not held_back(c, picked, cap)), None)
 
     def blocked(m, picked, cap):
         why = held_back(m, picked, cap)
@@ -937,14 +947,8 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         other = bar_met_by_other(m, picked, cap)
         if other is not None:
             return (f"a {kind} is one of the last {RECENT_POSTED} posted Shorts ({names}), and {moment_name(other)} "
-                    "meets the payoff bar")
-        # Nothing else meets the bar: one pick of that type may come, not two (two crashes after a posted crash is
-        # still crash after crash), while any other candidate is free.
-        if any(moment_type(p) == kind for p in picked) and any(
-                c is not m and c not in picked and moment_type(c) not in recent_types and not held_back(c, picked, cap)
-                for c in passed):
-            return f"this run already has a {kind}, right after a posted one ({names})"
-        return None
+                    "(another type) passed every check")
+        return None             # nothing of another type is free: better that type than a run short of picks
 
     def describe(m, picked):
         ps = m["payoff_strength"]
@@ -980,7 +984,7 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
             if moment_type(best) in recent_types:
                 why.append(f"a {moment_type(best)} like the last posted ("
                            + ", ".join(n for t, n in recent if t == moment_type(best))
-                           + f"), picked because nothing else meets the payoff bar ({PAYOFF_BAR}/3)")
+                           + "), picked because no other type is left that passed every check")
             best["pick_why"] = "; ".join(why)
             picked.append(best)
             for m, w in held:
@@ -1848,7 +1852,7 @@ def pick_line(m):
 def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="auto", out=None, log=print, hud6=None):
     """The picking step of `run` again, with today's rules, on its cached data: each recording's index.json from the
     library and its clip.py run (nothing is indexed again), the used footage and the posted topics as they were when
-    the run was prepared (posted_now: today's topics). The safety answers come from the model's cache where it has
+    the run was prepared (posted_now: today's topics and all the footage used since). The safety answers come from the model's cache where it has
     them. Writes repick.json and repick.txt (old picks against new ones) in `out` (default <run>-repick next to it);
     the run folder, _used_footage.json and _launch_runs.json are left alone. Returns the data."""
     run = Path(run)
@@ -1869,7 +1873,8 @@ def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="aut
         act = action_series(r.get("clip_run"), math.ceil(idx["video"]["duration_s"] / STEP))
         recs[r["stem"]] = recording_data(r["stem"], idx, act, r["mode"], r["session_offset_s"])
         recordings.append(Path(r["path"]))
-    used = used_as_of(shorts_dir, run.name)
+    # posted_now: today's view, so the footage used since (the Shorts made from this run too) is used as well
+    used = [tuple(sp) for sp in all_used_spans(shorts_dir)] if posted_now else used_as_of(shorts_dir, run.name)
     posted = load_posted(POSTED_FILE, None if posted_now else cand["created"], log)
     log(f"Re-picking {run.name} ({len(recs)} recordings, {count} picks): {len(used)} used span(s) and "
         f"{len(posted)} posted topic(s) " + ("as of today" if posted_now else f"as of {cand['created']}"))
@@ -3681,7 +3686,8 @@ def main():
     q.add_argument("--run", type=Path, required=True, help="the run folder to re-pick (it is not changed)")
     q.add_argument("--count", type=int, help="how many picks (default: the run's own count)")
     q.add_argument("--posted-now", action="store_true",
-                   help="count today's posted topics (default: the list as it was when the run was prepared)")
+                   help="today's view: today's posted topics and all the footage used since (default: both as they "
+                        "were when the run was prepared)")
     q.add_argument("--out", type=Path, help="where to write repick.json and repick.txt (default: <run>-repick)")
     f = sub.add_parser("frame", help="a gridded frame of a pick's recording, to read a circle's box from")
     f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")

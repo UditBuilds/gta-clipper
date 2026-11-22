@@ -11,6 +11,8 @@
    the start 7 s later (once), or drops that type. Swearing later in the Short is a PROFANITY flag. The cold open (the
    auto peak) and a later start (start_s) are checked again at render time. Swearing that is only spoken in the game's
    sound is NOT checked: there is no speech-to-text here, and every Short says so.
+   Anywhere in the footage (the owner, Nov 21): a child together with guns, shooting, a body or blood, or a body
+   together with blood, drops that type (never_shown).
 3. Footage an earlier Short showed (_used_footage.json, pinned footage too) is never used: launch.mine() leaves it
    out and check_moment() checks again.
 4. Audio true peak below -1.0 dBTP on every render: guard_true_peak() measures with ffmpeg's EBU R128 meter
@@ -64,6 +66,15 @@ EVERY_NOHUD_S = 0.5       # ...every half second when the HUD rules are off
 FIRST_S = 7.0             # no blood or gore in a Short's first seconds
 FIRST_EVERY_S = 0.5
 GORE_WORDS = ("blood", "bleeding", "dead body", "body on the ground", "body on ground", "corpse", "gore", "wound")
+# Footage a Short may never show anywhere, not only in its first 7 s (the owner, Nov 21: the Nov 20 dock shootout, with
+# gators shot at, a body on the dock, a child nearby and blood, was picked twice). Read from the index's own lines and
+# the safety answers, so a re-pick on cached data catches it too.
+CHILD = re.compile(r"(?<![a-z])(child|children|kid|kids|toddler|baby|babies)(?![a-z])")
+HARM = re.compile(r"(?<![a-z])(gun|guns|pistol|rifle|shotgun|weapon\w*|shoot\w*|shot|aim\w*|corpse\w*|dead|"
+                  r"blood\w*|bleed\w*|gore|kill\w*|wound\w*|fallen character)(?![a-z])")
+BODY = re.compile(r"(?<![a-z])((dead|lifeless|fallen)\s+(body|bodies|character|person|man|woman|npc)|corpse\w*|"
+                  r"(approach\w*|near|over|beside|loot\w*|search\w*)\s+(a\s+|the\s+)?bod(y|ies)|bod(y|ies)\s+(on|lying|near))"
+                  r"(?![a-z])")
 # Swear words, matched in the subtitles the model reads. Strong and moderate words and slurs; mild ones (damn, hell,
 # crap) are left out. A word with a * in it ("f**k", "sh*t") is a censored swear and counts too.
 PROFANITY = re.compile(
@@ -322,6 +333,27 @@ def index_gore(rec, a, b):
     return out
 
 
+def never_shown(rec, sheets, a, b):
+    """Why the footage a..b may not be in a Short at all, or []: a child seen in it together with guns, shooting, a
+    body or blood, or a body together with blood. The index's lines (what it denies left out) and the safety
+    answers over a..b both count."""
+    lines = [(s["t"], library.positive_text(s.get("notable") or "")) for s in rec["sheets"]
+             if s["t"] < b and a < s["t"] + rec["every"]]
+    seen = [x for x in sheets if x["from_s"] < b and a < x["to_s"] and x.get("answer")]
+    child = [t for t, line in lines if CHILD.search(line)]
+    body = [t for t, line in lines if BODY.search(line)]          # "a body of water" is not a body
+    harm = sorted({w.group(0) for _, line in lines for w in HARM.finditer(line)} | ({"a body"} if body else set())
+                  | {WHAT.get(k, k) for x in seen for k in ("blood_or_gore", "shooting") if x["answer"].get(k)})
+    blood = ([t for t, line in lines if any(w in line for w in ("blood", "bleeding", "gore"))]
+             + [x["from_s"] for x in seen if x["answer"].get("blood_or_gore")])
+    out = []
+    if child and harm:
+        out.append(f"a child is seen at {library.hms(child[0])} in footage with {', '.join(harm[:4])}")
+    if body and blood:
+        out.append(f"a body at {library.hms(body[0])} and blood at {library.hms(min(blood))}")
+    return out
+
+
 def first_seconds(start, peak=None, cold=(0.15, 0.65)):
     """The stretches of the recording on screen in a Short's first FIRST_S seconds: the cold open round the peak
     (hooks.COLD_BEFORE_S before to hooks.COLD_AFTER_S after it), then the footage from its start."""
@@ -394,6 +426,11 @@ def check_moment(m, rec, folder, checker):
         if here:
             report["types"][k] = {"dropped": fmt(here)}
             reasons.append(f"{k}: " + "; ".join(fmt(here)))
+            continue
+        never = never_shown(rec, sheets, a - lead[k], b)
+        if never:
+            report["types"][k] = {"dropped": never, "why": "never shown"}
+            reasons.append(f"{k}: never shown: " + "; ".join(never))
             continue
         need = launch.ACTION_LEN[0] if k == "action" else launch.NARRATED_MIN_S
         start, end, moved = a, b, False
