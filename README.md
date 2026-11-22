@@ -364,7 +364,7 @@ by hand, in Windows PowerShell:
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --allow-stale              # render even with a fact checked over 3 days ago
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --folder-date 2026-11-11   # render that day's folder again
-.\.venv\Scripts\python.exe shorttest.py                                  # 41 checks, about 20 s, no Ollama needed
+.\.venv\Scripts\python.exe shorttest.py                                  # 42 checks, about 20 s, no Ollama needed
 ```
 
 Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
@@ -680,7 +680,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 37 checks, about 2 minutes, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 47 checks, about 4 minutes, no Ollama
 ```
 
 **What prepare does.**
@@ -727,6 +727,10 @@ the game works without a fact ("you can", "the game", "cops will"), any name but
   On the dry run's river chase it read every subtitle line word for word, "Fuck! Fuck!" at 4:12, "Watch your ass" at
   4:37 and "Shhiitttt!!" at 4:41 included (17 calls, 61 s for 68 s of footage). Spoken swearing in the game's sound
   is not checked: there is no speech-to-text, and every Short's SOUND flag says so.
+- Never shown, anywhere in the footage (the owner, Nov 21): a child together with guns, shooting, a body or blood,
+  or a body together with blood (`safety.never_shown`, from the index's own lines and the safety answers). The Nov 20
+  dock shootout (gators shot at, a body on the dock, a child nearby, blood after 7 s) passed as a BLOOD flag and was
+  picked twice; it drops now. Blood alone after the first 7 s is still a flag.
 - Footage an earlier Short showed, pinned footage included (footage_short.py now logs it too), is never used again.
 - Every render, here and in /new-short and /footage-short (explainer.py), is measured with ffmpeg's true-peak meter;
   over -1.0 dBTP, the sound alone goes through a limiter run at 192 kHz and is measured again, or the render fails.
@@ -889,7 +893,7 @@ its share), are all checked before picking; every one that fails is listed in `c
 .\.venv\Scripts\python.exe launch.py prepare --count 3          # the default; --count 5 for more
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
 .\.venv\Scripts\python.exe facts.py own                        # facts from my own footage, waiting for my yes
-.\.venv-tts\Scripts\python.exe topictest.py                     # 15 checks, about 15 s
+.\.venv-tts\Scripts\python.exe topictest.py                     # 24 checks, about 15 s
 ```
 
 **Known limits:**
@@ -932,5 +936,70 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 24 checks, about 40 s
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 29 checks, about 1 min
+```
+
+## Picker variety and one replay (PR 29, Nov 20)
+
+The Nov 20 run picked three near-identical "stars appear" moments of one recording (M1, M5 and M8 of _135610); only
+one was usable. The night's best moment, the motorbike crash (M25, Short 6), only came in on a `--count 6` re-run.
+Short 6 itself was missing the slow-mo of the hit that made my hand-made crash Short work.
+
+- **Payoff strength first** (`launch.payoff_strength`). After the checks, every candidate gets a tier:
+  - 3: an impact (crash, explosion or stunt) that its own frames confirmed.
+  - 2: a HUD change with a visible cause (the stars rise with police or a shootout on screen).
+  - 1: a HUD change alone, or action with no single event.
+  - 0: quiet.
+
+  Picks go by tier, then points. The pool ranks the tier too, so a crash can't be left out of it.
+- **A minimum payoff bar of 2/3** (`launch.PAYOFF_BAR`, the owner, Nov 22). No pick, of any kind, has a tier below 2.
+  The bar takes weak candidates out before any pick is made, so no route can bring one back: the plain pick, a third
+  pick of a recording, the action/topic swap, or a stand-in for a crash right after a posted crash. A night has
+  **fewer Shorts rather than a weak one**, and `prepare` stops with an error when not one moment reaches the bar.
+  Each candidate left out says so in `candidates.json` ("payoff 1/3 ... is below the minimum 2/3"). On the Nov 20
+  recordings this leaves one pick: the motorbike crash (see the re-pick below); a star rise with no cause shown (M1, M5,
+  M8) and plain driving or flying are not Shorts.
+- **No near-duplicates.** Two picks of one recording must be a different kind of moment, or at least 10 minutes
+  apart. At most 2 picks come from one recording, unless nothing else qualifies (the pick then says so).
+- **Both types.** When the picks have no action clip (or no topic) and one that meets the bar passed the checks, it
+  takes the weakest pick's place. A topic below the bar is not swapped in.
+- **Posted topics** (`posted_topics.json`, the owner's list) cost points:
+  - -2 for a repeat.
+  - -4 for "wanted stars" / "stars appear" and "crime reported".
+
+  A topic matches by rules (category, topic id, score term, words in what the frames say), so "black SUV crash on the
+  bridge" doesn't match the motorbike crash.
+- **No same type back to back** (the owner, Nov 21). A moment of the same type as one of the last 2 posted Shorts
+  (`posted_topics.json`: `type`, `posted` day; a `planned` one doesn't count until it is posted) is held back
+  while a candidate of another type meets the payoff bar (2/3). A quiet 1/3 one does not: it is below the bar and is
+  not picked at all. When no other type meets the bar, one such Short may come (its `pick_why` says so), never two
+  in a run. No crash right after a crash if anything else qualifies. A label that names an impact is that impact
+  ("truck crash", "topic: car crashes", a posted type "Bike crash" are all crashes).
+- **A moment that already failed is not picked again.** Every run's `render.json` is read. A moment mostly inside
+  a Short that FAILED its shot check is left out before the pool, with why. The Nov 20 re-pick's M21 was part2's
+  Short 4 again: the jet ski over an empty ocean.
+- **The report.** `candidates.json` gives each pick its `payoff_strength`, `repeats` and `pick_why`: why it won and
+  what it beat. The review page shows "why this moment".
+- **`launch.py repick`** runs the picking step again on an old run's cached data: each `index.json` and `clip.py` run,
+  with nothing indexed again. Safety answers come from the model's cache where it has them. The used footage and the
+  posted topics are taken as they were when that run was prepared; `--posted-now` takes both as they are today. It writes `repick.json` and `repick.txt` (old picks
+  against new ones) to `<run>-repick` and leaves the run alone.
+- **One slow-mo replay, action Shorts only** (`"replay": {"from", "to"}` in `shorts.json`, `cutplan.replay_of`). This
+  is the only exception to "no second twice":
+  - It names the impact itself: inside the payoff, holding the loudest moment, under 1.5 s.
+  - It plays once at 0.5x right after the payoff, at most 2 s on screen (a longer impact shows the 1 s round the hit).
+  - Its sound is slowed too, an octave down. No voice goes over it, and the crash sound stays up through it.
+  - No highlight ring is drawn: nothing tracks the object reliably, and the hand-made Short's ring was read off
+    gridded frames by hand.
+
+Re-pick of the Nov 20 recordings with the bar (cached, 0 model calls; the list as of that night, then `--posted-now`):
+each view has **one pick**. As of that night: M25, the motorbike crash (3/3), the one crash allowed after the posted
+SUV crash because no other type reaches 2/3. Today: M24, the truck crash on the bridge (3/3), the same way, after
+the posted motorbike crash. M1, M5 and M8 (1/3), the jet ski (failed render) and the dock shootout (never shown) are out.
+Note that a crash after a crash still comes when it is the only moment at 2/3 or more; to make a night with fewer
+Shorts instead, take that exception out of `pick_varied`'s `blocked()`.
+
+```powershell
+.\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
+.\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, a few seconds
 ```

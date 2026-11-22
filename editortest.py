@@ -299,6 +299,62 @@ def no_voice_over_an_action_payoff():
     return has(problems_of(s), "talks over the payoff")
 
 
+# --- 5b. The one replay (PR 29) ---
+
+REPLAY = {"from": 20.6, "to": 21.4}
+
+
+@check
+def an_action_short_may_replay_its_impact_once_right_after_the_payoff():
+    """an action Short's "replay" (the impact, inside the payoff, holding the hit) is put in right after the payoff
+    at half speed: shot 1 ends at the payoff's end, the 0.8 s impact plays for 1.6 s, then the rest of shot 1; the
+    payoff still maps to its first showing; the written shots still never share a second"""
+    p, problems, _ = cutplan.plan(short(replay=dict(REPLAY)), moment(), secs(short()), 21.0)
+    shots = [(s["from"], s["to"], s.get("speed", 1.0)) for s in p["shots"]]
+    r = p["replay"]
+    return (not problems and shots == [(14.0, 22.5, 1.0), (20.6, 21.4, 0.5), (22.5, 25.0, 1.0), (30.0, 36.0, 1.0)]
+            and abs(p["total_s"] - 18.6) < 1e-6 and (r["start"], r["end"]) == (8.5, 10.1)
+            and cutplan.to_short(20.0, p["shots"]) == 6.0 and cutplan.to_short(21.0, p["shots"]) == 7.0
+            and has(problems_of(short(replay=dict(REPLAY), shots=[{"from": 14.0, "to": 25.0},
+                                                                 {"from": 24.0, "to": 31.0}])), "both show"))
+
+
+@check
+def a_replay_is_refused_when_it_breaks_the_owners_terms():
+    """refused: in a narrated Short; an impact of 1.5 s or more; outside the payoff; missing the hit (the loudest
+    moment); not a {"from", "to"} (a list of replays). An impact over 1 s shows the 1 s round the hit (2 s on screen)"""
+    narrated = dict(moment(), type="narrated")
+    long_ = problems_of(short(replay={"from": 20.0, "to": 21.8}))
+    outside = problems_of(short(replay={"from": 22.0, "to": 23.0}))
+    miss = problems_of(short(replay={"from": 21.6, "to": 22.4}), loudest=21.0)
+    many = problems_of(short(replay=[REPLAY, REPLAY]))
+    nar = cutplan.replay_of(short(replay=dict(REPLAY)), {"from": 20.0, "to": 22.5, "what": "x"}, "narrated")[1]
+    trimmed, _ = cutplan.replay_of(short(replay={"from": 20.2, "to": 21.6}), {"from": 20.0, "to": 22.5, "what": "x"},
+                                   "action", 21.3)
+    return (has(nar, "only an action Short") and has(long_, "only an impact under 1.5 s") and has(outside, "inside the payoff")
+            and has(miss, "misses the loudest moment") and has(many, '{"from": s, "to": s}') and narrated
+            and (trimmed["from"], trimmed["to"]) == (20.6, 21.6))
+
+
+@check
+def no_voice_over_the_replay_and_its_cuts_need_no_line():
+    """a line can't start inside the replay (lines start at their own recording second, which maps to its first
+    showing) and one before it ends before the payoff; the cuts into and out of the replay pass as the replay's own"""
+    p, problems, _ = cutplan.plan(short(replay=dict(REPLAY)), moment(), secs(short()), 21.0)
+    r = p["replay"]
+    over = [x for x in p["placed"] if x["start"] < r["end"] and x["end"] > r["start"]]
+    reasons = dict(cutplan.cut_reasons(p["shots"], p["placed"], cutplan.events_of(moment(), p["payoff"])))
+    return (not problems and not over and reasons.get(8.5) == "the slow-mo replay starts"
+            and reasons.get(10.1) == "the slow-mo replay ends")
+
+
+@check
+def a_slowed_shot_splits_at_camera_cuts_on_its_own_timeline():
+    """steady.split_points at half speed: a camera cut 0.4 s into the recording falls 0.8 s (24 frames) into the
+    replay"""
+    return steady.split_points(10.0, 60, [10.4], 0.5) == [24, 36] and steady.split_points(10.0, 60, [10.4]) == [12, 48]
+
+
 # --- 6. The voice at 1.2 and the punchy style ---
 
 @check
@@ -380,6 +436,34 @@ def end_to_end_a_v4_short_names_its_payoff():
                 and "slams into the wall" in page and speeds == [1.2] and words_ok and quiet
                 and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 36.0]]
                 and (log["game_audio"].get("quiet_lift_db") is not None))
+
+
+@check
+def end_to_end_a_v4_short_with_its_replay():
+    """launch.render engine v4 with "replay": READY, 18.6 s, the replay shot made at half speed (48 frames for 0.8 s
+    of the recording) right after the payoff, its sound slowed, the crash sound up over the payoff and the replay, no
+    word over either, the replay in render.json and as a flag that says no ring was drawn, and the used footage
+    counted once"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
+        idx = made_up_idx("synth", v)
+        folder = run_folder_with(tmp, [moment(v)], [short(replay=dict(REPLAY))])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[idx], facts=FACTS, today=TODAY,
+                             shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "build": no_music_build})
+        e = data["shorts"][0]
+        if e["status"] != "READY":
+            raise AssertionError("; ".join(e["problems"]))
+        log = json.loads((Path(e["folder"]) / "log.json").read_text(encoding="utf-8"))
+        play = next(s for s in log["shots"] if s.get("replay"))
+        made = steady.count_frames(play["clip"]) if Path(play["clip"]).is_file() else None
+        r = e["replay"]
+        silent = all(not (w["start_s"] < r["end"] and w["end_s"] > e["payoff"]["at_s"]) for w in log["word_times"])
+        return (abs(e["length_s"] - 18.6) < 0.1 and play["frames"] == 48 and play["speed"] == 0.5
+                and (made in (None, 48)) and (r["start"], r["end"]) == (8.5, 10.1) and silent
+                and any("No highlight ring" in f for f in e["flags"])
+                and e["shown"] == [["synth", 14.0, 22.5], ["synth", 22.5, 25.0], ["synth", 30.0, 36.0]]
+                and log["game_audio"].get("quiet_lift_db") is not None)
 
 
 @check

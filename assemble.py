@@ -57,14 +57,17 @@ def voice_track(spoken, placed, total_s):
 def game_track(video, shots, voice, work, quiet=None):
     """The footage's own sound: each shot's stretch of the recording where the shot is, short fades at the cuts,
     set GAME_LUFS under the voice and up GAME_LIFT_DB in pauses of GAME_PAUSE_S or more; quiet: (a, b) of the Short
-    with no voice (an action payoff), brought up to about CRASH_LUFS. Returns (samples, info)."""
+    with no voice (an action payoff, and its replay), brought up to about CRASH_LUFS. A slowed shot (the replay)
+    plays its sound slowed the same way, an octave down at 0.5. Returns (samples, info)."""
     import numpy as np
     n = len(voice)
     track = np.zeros((n, 2), dtype=np.float32)
     for s in shots:
         raw = Path(work) / f"game_{s['n']}.f32"
+        speed = s.get("speed", 1.0)
+        slow = f",asetrate={ex.RATE * speed:g},aresample={ex.RATE}" if speed != 1.0 else ""
         ex.ffmpeg(["-ss", f"{s['from']:.4f}", "-t", f"{s['to'] - s['from']:.4f}", "-i", video, "-vn", "-af",
-                   f"aresample={ex.RATE}", *ex.F32, raw])
+                   f"aresample={ex.RATE}{slow}", *ex.F32, raw])
         piece = np.fromfile(raw, np.float32)
         piece = piece[:len(piece) // 2 * 2].reshape(-1, 2)
         i = round(s["start"] * ex.RATE)
@@ -123,7 +126,7 @@ def visuals(shots, placed, total_s):
         line = max([p["line"] for p in placed if p["start"] <= a + 1e-6] or [1])
         out.append({"line": line, "source": str(shot["clip"]), "start_s": round(a, 3), "seconds": round(b - a, 3),
                     "source_start_s": round(a - shot["start"], 3), "kind": "video", "layout": "full",
-                    "shot": shot["n"], "rec_s": round(shot["from"] + a - shot["start"], 3)})
+                    "shot": shot["n"], "rec_s": round(shot["from"] + (a - shot["start"]) * shot.get("speed", 1.0), 3)})
     return out
 
 
@@ -186,7 +189,8 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
                               for w in words],
                "visuals": visuals(shots, placed, total_s),
                "shots": [{k: (str(s[k]) if k == "clip" else s[k]) for k in ("n", "from", "to", "start", "end", "frames",
-                                                                         "clip") if k in s} for s in shots],
+                                                                         "clip", "speed", "replay") if k in s}
+                         for s in shots],
                "cuts_s": [round(c, 3) for c in cuts], "sfx": sfx,
                "music": {"file": str(track) if track else None, "chosen": note, **music_info},
                "game_audio": game_info,

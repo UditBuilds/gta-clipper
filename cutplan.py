@@ -4,7 +4,8 @@ The owner's rules after the part3 Shorts (none postable; Short 3's crash was ski
 1. Payoff first. Every Short names its one payoff: {"from": s, "to": s, "what": "..."} in the recording. It plays whole,
    at real speed, inside one shot: never cut, never skipped. No clear payoff = no Short (the interest gate).
 2. No padding: no second of the recording is shown twice. Not enough unique footage makes a shorter Short (15 s
-   minimum), never a repeat. So there is no loop ending either: it replayed the first shot.
+   minimum), never a repeat. So there is no loop ending either: it replayed the first shot. The one exception (PR 29):
+   an action Short's "replay" of its impact, once, at half speed, right after the payoff (replay_of).
 3. Shots are spans of the recording ({"from", "to"}), not points whose length the voice decides. The voice is placed
    into the picture: each line starts at its own second ("at") and must end before its shot's cut.
 4. Cuts land on sentence ends or on footage events, never on a timer.
@@ -38,6 +39,12 @@ EVENT_SLACK_S = 0.4                       # ...or "on an event" when a shot edge
 LOUDEST_SLACK_S = 0.3                     # an action payoff contains the window's loudest moment, give or take this
 MAX_WORDS = 9                             # in one sentence: short punchy lines (the owner's 5-9 words)
 TALK_WORDS = ("you", "your", "you're", "youre", "yours", "watch", "look", "wait", "check")
+# PR 29, the one exception to rule 2 (the owner, Nov 20: his hand-made crash Short worked better partly for its slow-mo
+# of the hit): an action Short may replay its impact ONCE, right after the payoff, at half speed, at most 2 s on
+# screen, and only when the impact itself lasts under about 1.5 s.
+REPLAY_SPEED = 0.5
+REPLAY_MAX_S = 2.0                        # on screen; so at most REPLAY_MAX_S * REPLAY_SPEED = 1 s of the recording
+REPLAY_IMPACT_MAX_S = 1.5                 # a longer impact is not replayed
 
 
 def words_of(text):
@@ -126,6 +133,67 @@ def shots_of(short, window, payoff):
     return shots, problems
 
 
+def replay_of(short, payoff, kind, loudest_s=None):
+    """(replay, problems). The Short's slow-mo replay of its impact, or None: "replay": {"from": s, "to": s} names the
+    impact itself in the recording. Only in an action Short, only one, inside the payoff, at most
+    REPLAY_IMPACT_MAX_S long (a longer impact is not replayed), holding the loudest moment (the hit) give or take
+    LOUDEST_SLACK_S. It plays at REPLAY_SPEED for at most REPLAY_MAX_S: an impact over 1 s of the recording shows the
+    1 s round the hit."""
+    r = short.get("replay")
+    if r is None or r is False:
+        return None, []
+    if kind != "action":
+        return None, ["replay: only an action Short replays its impact (a narrated Short never shows a second twice)"]
+    if not isinstance(r, dict) or not (number(r.get("from")) and number(r.get("to"))) or r["to"] <= r["from"]:
+        return None, ['replay: {"from": s, "to": s}, the impact itself (one, inside the payoff) in the recording']
+    if payoff is None:
+        return None, []
+    a, b = float(r["from"]), float(r["to"])
+    problems = []
+    if not (payoff["from"] - 1e-6 <= a and b <= payoff["to"] + 1e-6):
+        problems.append(f"replay: {a:.2f}-{b:.2f} s must lie inside the payoff ({payoff['from']:.1f}-"
+                        f"{payoff['to']:.1f} s): it replays the impact itself")
+    if b - a > REPLAY_IMPACT_MAX_S + 1e-6:
+        problems.append(f"replay: the impact lasts {b - a:.1f} s; only an impact under {REPLAY_IMPACT_MAX_S:g} s is "
+                        "replayed (a long one plays once, at real speed)")
+    if loudest_s is not None and not (a - LOUDEST_SLACK_S <= loudest_s <= b + LOUDEST_SLACK_S):
+        problems.append(f"replay: {a:.2f}-{b:.2f} s misses the loudest moment at {loudest_s:.2f} s (the hit itself?)")
+    if problems:
+        return None, problems
+    keep = REPLAY_MAX_S * REPLAY_SPEED
+    if b - a > keep + 1e-6:
+        centre = loudest_s if loudest_s is not None and a <= loudest_s <= b else (a + b) / 2
+        a = min(max(a, centre - keep / 2), b - keep)
+        b = a + keep
+    return {"from": round(a, 4), "to": round(b, 4), "speed": REPLAY_SPEED}, []
+
+
+def retime(shots):
+    """Number the shots and put them end to end on the Short's timeline (a slowed shot lasts longer than its span)."""
+    t = 0.0
+    for k, s in enumerate(shots, 1):
+        frames = round((s["to"] - s["from"]) / s.get("speed", 1.0) * FPS)
+        s.update(n=k, start=round(t, 4), end=round(t + frames / FPS, 4), frames=frames)
+        t += frames / FPS
+    return shots
+
+
+def with_replay(shots, payoff, replay):
+    """(shots, notes): the replay put in right after the payoff. The payoff's shot is split at the payoff's end; the
+    replay follows; then the rest of that shot, if it lasts MIN_SHOT_S or more (else it is left out, and said)."""
+    i = next(k for k, s in enumerate(shots) if s["from"] - 1e-6 <= payoff["from"] and payoff["to"] <= s["to"] + 1e-6)
+    h, cut, notes = shots[i], payoff["to"], []
+    first = dict(h, to=cut)
+    rest = dict(h, **{"from": cut, "inset": None})
+    play = {"from": replay["from"], "to": replay["to"], "speed": replay["speed"], "replay": True, "focus": h["focus"],
+            "inset": None}
+    keep = [first, play] + ([rest] if h["to"] - cut >= MIN_SHOT_S - 1e-6 else [])
+    if h["to"] - cut > 1e-6 and len(keep) == 2:
+        notes.append(f"the {h['to'] - cut:.2f} s of shot {h['n']} after the payoff are left out: the replay plays there "
+                     f"and a shot is at least {MIN_SHOT_S:g} s")
+    return retime([dict(s) for s in shots[:i]] + keep + [dict(s) for s in shots[i + 1:]]), notes
+
+
 def overlaps(shots):
     """[(k, j, from, to)] where shot k and a later shot j show the same seconds (unique_problems words it)."""
     out = []
@@ -143,9 +211,9 @@ def unique_problems(shots):
 
 
 def to_short(src, shots):
-    """The Short's second where the recording's second src shows, or None."""
+    """The Short's second where the recording's second src shows (its first showing: never the replay), or None."""
     for s in shots:
-        if s["from"] - 1e-6 <= src <= s["to"] + 1e-6:
+        if not s.get("replay") and s["from"] - 1e-6 <= src <= s["to"] + 1e-6:
             return s["start"] + (src - s["from"])
     return None
 
@@ -154,8 +222,12 @@ def to_source(t, shots):
     """(shot, recording second) on screen at the Short's second t, or (None, None)."""
     for s in shots:
         if s["start"] - 1e-6 <= t < s["end"] + 1e-6:
-            return s, s["from"] + (t - s["start"])
+            return s, s["from"] + (t - s["start"]) * s.get("speed", 1.0)
     return None, None
+
+
+def replay_shot(shots):
+    return next((s for s in shots if s.get("replay")), None)
 
 
 def length_problems(shots, kind):
@@ -227,6 +299,8 @@ def cut_problems(shots, placed, events=()):
         ends = [p["end"] for p in placed if p["end"] <= cut + 1e-6]
         on_sentence = bool(ends) and cut - max(ends) <= SENTENCE_CUT_S
         on_event = any(abs(e - a["to"]) <= EVENT_SLACK_S or abs(e - b["from"]) <= EVENT_SLACK_S for e in events)
+        if a.get("replay") or b.get("replay"):     # the replay's own edges: it is the event
+            continue
         if not (on_sentence or on_event):
             out.append(f"the cut at {cut:.1f} s (shot {a['n']} to {b['n']}) lands on neither a sentence end nor an "
                        f"event: end shot {a['n']} where something happens or right after a line")
@@ -290,6 +364,9 @@ def cut_reasons(shots, placed, events=()):
     for a, b in zip(shots, shots[1:]):
         cut = a["end"]
         ends = [p["end"] for p in placed if p["end"] <= cut + 1e-6]
+        if a.get("replay") or b.get("replay"):
+            out.append((round(cut, 2), "the slow-mo replay" + (" starts" if b.get("replay") else " ends")))
+            continue
         if ends and cut - max(ends) <= SENTENCE_CUT_S:
             out.append((round(cut, 2), f"sentence end {cut - max(ends):.2f} s before"))
             continue
@@ -306,23 +383,33 @@ def line_spans(placed, count):
 
 def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_words=()):
     """The whole check before anything is rendered: (plan, problems, flags). plan: {"payoff", "shots", "placed",
-    "total_s"}. durations: each line's spoken seconds (without them the lines aren't placed yet)."""
+    "total_s", "replay"}. durations: each line's spoken seconds (without them the lines aren't placed yet). The
+    written shots must never share a second; an action Short's replay (replay_of) is then put in after the payoff."""
     kind = moment.get("type")
     payoff, problems = payoff_of(short, moment["window"])
     problems += loudest_problems(payoff, loudest_s) if kind == "action" else []
     shots, more = shots_of(short, moment["window"], payoff)
     problems += more + unique_problems(shots)
+    replay, more = replay_of(short, payoff, kind, loudest_s)
+    problems += more
+    flags = []
+    if replay and shots and not problems:
+        shots, notes = with_replay(shots, payoff, replay)
+        flags += [f"REPLAY: {n}" for n in notes]
     if shots:
         problems += length_problems(shots, kind) + payoff_place_problems(payoff, shots)
         problems += hook_problems(short, shots, hud_words)
     lines = short.get("lines") or []
-    more, flags = style_problems(lines)
+    more, style_flags = style_problems(lines)
     problems += more
+    flags += style_flags
     placed = []
     if durations is not None and shots and not [p for p in problems
                                                  if p.startswith(("shot", "shots:")) or "must play whole" in p]:
         placed, more = place_lines(lines, durations, shots, payoff, kind)
         problems += more
         problems += cut_problems(shots, placed, events_of(moment, payoff, camera_cuts))
-    return ({"payoff": payoff, "shots": shots, "placed": placed, "total_s": shots[-1]["end"] if shots else 0.0},
+    play = replay_shot(shots)
+    return ({"payoff": payoff, "shots": shots, "placed": placed, "total_s": shots[-1]["end"] if shots else 0.0,
+             "replay": dict(replay, start=play["start"], end=play["end"]) if play else None},
             list(dict.fromkeys(problems)), flags)
