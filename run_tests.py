@@ -66,11 +66,11 @@ SUITES = [
     suite("launchtest", ".venv-tts", 48),
     suite("topictest", ".venv-tts", 24),
     suite("storytest", ".venv-tts", 16),
-    suite("editortest", ".venv-tts", 51),
+    suite("editortest", ".venv-tts", 52),
     suite("explainertest", ".venv-tts", 88),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
-MINIMUM = {"quick": 459, "ci": 445}      # fewer checks than this in all, and the run fails
+MINIMUM = {"quick": 460, "ci": 446}      # fewer checks than this in all, and the run fails
 
 
 def start_seconds(exe):

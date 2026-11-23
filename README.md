@@ -937,7 +937,7 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 51 checks, 1.6 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 52 checks, 1.6 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1064,21 +1064,21 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 | | checks | time |
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
-| `--full` | 535 | 8.4 min |
-| `--quick` | 459 | 1.7 min |
-| `--ci`, on GitHub's Windows machine | 445 | 2.6 min |
+| `--full` | 536 | 8.2 min |
+| `--quick` | 460 | 1.7 min |
+| `--ci`, on GitHub's Windows machine | 446 | 1.6 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
-| explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 167 s |
-| hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 72 s |
-| editortest | `.venv-tts` | 51 | 44 | 44 | 715 s | 97 s |
+| explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 164 s |
+| hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 71 s |
+| editortest | `.venv-tts` | 52 | 45 | 45 | 715 s | 94 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
-| topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 40 s |
+| topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
 | launchtest | `.venv-tts` | 48 | 47 | 47 | 196 s | 28 s |
-| footagetest | `.venv-tts` | 31 | 26 | 26 | 152 s | 19 s |
-| calibtest | `.venv` | 38 | 35 | 35 | 147 s | 27 s |
-| storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 23 s |
+| footagetest | `.venv-tts` | 31 | 26 | 26 | 152 s | 18 s |
+| calibtest | `.venv` | 38 | 35 | 35 | 147 s | 24 s |
+| storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 22 s |
 | selftest | `.venv` | 3 | - | - | 33 s | 15 s |
 | hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
 | indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |

@@ -793,6 +793,23 @@ def the_caption_check_sees_every_caption_of_a_v4_short():
 
 
 @check
+def a_caption_on_the_seam_of_two_shots_is_over_a_shot():
+    """the log rounds its times to 1 ms, so two visuals can leave a gap of 1 ms between them: a caption that starts in it
+    is not "over none of the Short's shots"; one 0.1 s past the end is"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "captions.ass").write_text("Dialogue: 2,0:00:01.00,0:00:02.00,Caption,,0,0,0,,{}HELLO", encoding="utf-8")
+        plan = [[{"clip": str(tmp / "a.mp4")}], [{"clip": str(tmp / "b.mp4")}]]
+        visuals = [{"line": 1, "source": str(tmp / "a.mp4"), "start_s": 0.0, "seconds": 0.999},
+                   {"line": 1, "source": str(tmp / "b.mp4"), "start_s": 1.0, "seconds": 1.0}]
+
+        def bad(t):
+            log = {"word_times": [{"text": "HELLO", "start_s": t, "end_s": t + 0.2}], "visuals": visuals}
+            return launch.caption_coverage(log, plan, [{"say": "Hello."}], tmp / "captions.ass", [])[1]
+        return bad(0.9995) == [] and bad(1.5) == [] and len(bad(2.1)) == 1
+
+
+@check
 def a_bad_caption_in_a_v4_short_is_caught():
     """deliberately bad captions: "CRASH" over a frame with no crash fails; a burnt-in word the voice doesn't say, a
     word with no caption, no captions at all and a caption past the last shot each fail, naming the word"""

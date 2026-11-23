@@ -2942,8 +2942,8 @@ def caption_coverage(run_log, plan, script_lines, ass_file, checks):
     clips = {str(Path(e["clip"])) for lp in plan for e in lp}
     visuals = run_log.get("visuals") or []
 
-    def shot(t):
-        return next((v for v in visuals if v["start_s"] <= t < v["start_s"] + v["seconds"]
+    def shot(t):                                         # (0.01 s: the log rounds its times)
+        return next((v for v in visuals if v["start_s"] - 0.01 <= t < v["start_s"] + v["seconds"] + 0.01
                      and str(Path(str(v["source"]))) in clips), None)
 
     def row(k, rule, why):
