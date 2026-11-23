@@ -22,9 +22,10 @@ import footage_short
 import launch
 import proof
 import safety
+import testkit
 import truth
 from footagetest import made_up_index, made_up_timeline, seg
-from launchtest import made_up_rec
+from launchtest import made_up_rec, nothing_heard
 
 CHECKS = []
 TODAY = "2026-11-19"
@@ -185,6 +186,7 @@ def heat_icons_and_star_looks_are_read_on_made_up_huds():
 
 
 @check
+@testkit.full
 def hud6_reads_a_made_up_recording_and_finds_the_changes():
     """proof.hud6 on a real made-up video (the HUD drawn into its frames, lossless): every half second the lit stars,
     their look and the icons; hud6_events() finds the one change of icons (3 to 2) and of look (red to red outline),
@@ -571,6 +573,8 @@ def render_v3_with(tmp, short, pick, video, checker, shorts_name="shorts", used=
 
 
 @check
+@testkit.full
+@nothing_heard
 def engine_v3_makes_full_screen_shorts_and_checks_every_caption():
     """render() with engine v3 (named: v4 is the default since PR 30; a made-up voice, render, HUD reader and vision
     model): the hook card from the starred hook, am_puck, music, sound effects and the end pill; every beat is a 1080x1920 full-screen clip of the
@@ -611,6 +615,7 @@ def engine_v3_makes_full_screen_shorts_and_checks_every_caption():
 
 
 @check
+@testkit.full
 def engine_v3_refuses_cards_plain_clips_late_payoffs_and_used_footage():
     """engine v3 refuses what the owner's rules don't allow, before anything is made: a card or a compare (gameplay
     as a small box over a blurred background), an action Short with no lines (no raw gameplay: every Short has a
@@ -651,6 +656,7 @@ def engine_v3_refuses_cards_plain_clips_late_payoffs_and_used_footage():
 
 
 @check
+@testkit.full
 def a_dark_blank_or_back_only_shot_or_one_with_text_at_the_bottom_is_rejected():
     """beat_checks (rules 3 and 4) on real made-up clips: a near-black shot is rejected as too dark by the numbers;
     a bright one passes; when the vision model says the shot is only the character's back, or has game text at the
@@ -882,7 +888,7 @@ def the_hook_card_and_beats_for_lines_that_name_none():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             got = fn()
             extra = ""

@@ -13,8 +13,9 @@ from pathlib import Path
 import edit2
 import explainer as ex
 import launch
+import testkit
 import truth
-from launchtest import FACTS, TODAY, chase_pick, made_up_idx, made_up_rec, run_folder_with
+from launchtest import FACTS, TODAY, chase_pick, made_up_idx, made_up_rec, nothing_heard, run_folder_with
 
 CHECKS = []
 
@@ -209,6 +210,7 @@ def a_circle_follows_its_target_and_stops_when_lost():
 
 
 @check
+@testkit.full
 def a_real_story_short_renders():
     """render_plan() on a made-up video with the made-up voice: 1080x1920 at its planned length, with a followed
     circle, a hud card, a stat pill, a freeze that shows its detail and the subscribe pill; true peak under -1.0
@@ -364,6 +366,7 @@ def the_quality_gate_skips_a_moment_with_no_point():
 
 
 @check
+@testkit.needs("gta")
 def a_dry_run_stand_in_is_flagged_and_never_used_for_real():
     """F1's dry-run side is Rockstar's picture with a DRYRUN STAND-IN note (evidence R1); render refuses a stand-in
     outside a dry run"""
@@ -381,6 +384,7 @@ def a_dry_run_stand_in_is_flagged_and_never_used_for_real():
 
 
 @check
+@testkit.needs("gta")
 def only_an_f1_short_uses_the_other_side():
     """a pick that offers F1 but is made as F3 shows none of the other side: no pip or split gets its file, render
     doesn't refuse it outside a dry run, and no stand-in flag (the dry run's F3 Short 1 had one)"""
@@ -404,6 +408,7 @@ def only_an_f1_short_uses_the_other_side():
 
 
 @check
+@nothing_heard
 def the_v2_render_checks_timing_and_logs_the_story():
     """render() with engine v2 (a made-up voice and render): every named thing is placed on screen with its word,
     the payoff lands at 45-75 %, the Short is READY with its format on the review page; a payoff too late or a Short
@@ -464,7 +469,7 @@ def the_launch_night_experiments_cover_every_format():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             got = fn()
             good, err = bool(got), ""

@@ -12,6 +12,7 @@ import sys
 
 import clip
 import make_rating_page as page
+import testkit
 
 CHECKS = []
 STEPS_PER_S = round(1 / clip.BUCKET)
@@ -185,7 +186,7 @@ def page_shows_nothing_about_the_pick():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run

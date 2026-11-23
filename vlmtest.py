@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 import clip
+import testkit
 import vlm
 
 CHECKS = []
@@ -640,7 +641,7 @@ def veto_step_hint_lines():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run

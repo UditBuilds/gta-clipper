@@ -31,6 +31,7 @@ from types import SimpleNamespace
 
 import calibrate as cal
 import clip
+import testkit
 
 CHECKS = []
 
@@ -341,6 +342,7 @@ def made_up_hud(seed, w=160, h=40, shown=14, hidden=5):
 
 
 @check
+@testkit.full
 def bars_found_on_made_up_huds():
     """on 25 invented HUD layouts, mixed with frames without the HUD, find_strips finds every bar, inside the bar,
     on rows inside the bars (at most an edge row lost each side)"""
@@ -642,6 +644,7 @@ def star_fit_matches(fit, true, x0, y0):
 
 
 @check
+@testkit.full
 def stars_found_in_made_up_star_rows():
     """8 made-up star rows (2-6 slots, 6.5-12 px, some unlit, loose box, text on some 'no' pictures): the tool
     finds the number of slots, every star's middle within 1 px, the size to the outline's outer edge, and the
@@ -712,6 +715,7 @@ def png_rgba(path, w, h, px):
 
 
 @check
+@testkit.full
 def end_to_end_stars_found_in_a_made_up_video():
     """made-up video with a row of 5 stars (2 lit) shown with the HUD: one box round the row, the tool finds 5
     slots on the stars from the labelled pictures, you confirm, Measure gets the stars right on every picture and
@@ -942,7 +946,7 @@ def gta6_drawing_makes_an_arrow_profile():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run

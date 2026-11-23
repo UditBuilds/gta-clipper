@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 import launch
+import testkit
 from launchtest import made_up_idx
 
 CHECKS = []
@@ -397,7 +398,7 @@ def a_moment_that_failed_its_shot_check_at_render_is_not_picked_again():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             got = fn()
             good, err = (bool(got[0]), f"  (got {got[1]})") if isinstance(got, tuple) else (bool(got), "")
@@ -406,7 +407,7 @@ def main():
             good, err = False, f"  ({type(e).__name__}: {e})"
         ok &= good
         print(f"  {'PASS' if good else 'FAIL'} {fn.__name__}: {' '.join((fn.__doc__ or '').split())}{err}", flush=True)
-    print(f"RESULT: {'PASS' if ok else 'FAIL'} ({len(CHECKS)} checks)")
+    print(f"RESULT: {'PASS' if ok else 'FAIL'} ({len(testkit.selected(CHECKS))} checks)")
     sys.exit(0 if ok else 1)
 
 

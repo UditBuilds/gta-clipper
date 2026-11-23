@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 import hooks
+import testkit
 
 HERE = Path(__file__).resolve().parent
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
@@ -497,6 +498,7 @@ def mark_left(path, n):
 
 
 @check
+@testkit.full
 def cold_open_plays_the_moment_first_then_the_whole_clip():
     """0.8 s added; the flash (source frames 90-95) shows from frame 4 and again from frame 24 + 90; frame 24 is frame 0"""
     run_dir, r = peaked()
@@ -508,6 +510,7 @@ def cold_open_plays_the_moment_first_then_the_whole_clip():
 
 
 @check
+@testkit.full
 def cold_open_sound_stays_with_its_picture():
     """the loud tone sounds with the flash in the cold open and again in the clip, and is quiet between them"""
     run_dir, _ = peaked()
@@ -517,6 +520,7 @@ def cold_open_sound_stays_with_its_picture():
 
 
 @check
+@testkit.full
 def banner_is_there_from_frame_0_of_the_cold_open():
     """frame 0 is source frame 86 plus only the banner, inside the box"""
     run_dir, _ = peaked()
@@ -524,6 +528,7 @@ def banner_is_there_from_frame_0_of_the_cold_open():
 
 
 @check
+@testkit.full
 def zoom_happens_once_around_the_peak():
     """the square sits at its place, moves out by the zoom of 1.15 at the hold, and is back after; no more than one zoom"""
     run_dir, _ = peaked()
@@ -536,6 +541,7 @@ def zoom_happens_once_around_the_peak():
 
 
 @check
+@testkit.full
 def no_game_audio_still_gets_cold_open_and_zoom():
     """a clip with no audio stream keeps having none, with the picture joined and zoomed"""
     run_dir, _ = peaked()
@@ -545,6 +551,7 @@ def no_game_audio_still_gets_cold_open_and_zoom():
 
 
 @check
+@testkit.full
 def no_cold_open_keeps_the_length_and_still_zooms():
     """--no-cold-open: 6 s, the zoom at the clip's own peak, and the audio stream copied"""
     run_dir, r = peaked("--no-cold-open")
@@ -554,6 +561,7 @@ def no_cold_open_keeps_the_length_and_still_zooms():
 
 
 @check
+@testkit.full
 def no_zoom_keeps_the_cold_open_and_does_not_zoom():
     """--no-zoom: 0.8 s added and the square never moves"""
     run_dir, r = peaked("--no-zoom")
@@ -562,6 +570,7 @@ def no_zoom_keeps_the_cold_open_and_does_not_zoom():
 
 
 @check
+@testkit.full
 def both_off_is_the_pr12_path():
     """--no-cold-open --no-zoom with a typed peak: no hook is a byte-exact copy, a hook copies the audio"""
     run_dir, r = peaked("--no-cold-open", "--no-zoom")
@@ -570,6 +579,7 @@ def both_off_is_the_pr12_path():
 
 
 @check
+@testkit.full
 def banner_stays_still_during_the_zoom():
     """--hook-duration full over a zoom: the banner's rows are the same before the zoom and at the hold"""
     run_dir, r = peaked("--hook-duration", "full")
@@ -579,6 +589,7 @@ def banner_stays_still_during_the_zoom():
 
 
 @check
+@testkit.full
 def full_banner_reaches_the_last_frame_of_a_cold_open_clip():
     """--hook-duration full with a cold open: the banner is still there on the very last frame"""
     run_dir, _ = peaked("--hook-duration", "full")
@@ -596,6 +607,7 @@ def voice_run():
 
 
 @check
+@testkit.full
 def voice_starts_at_frame_0_of_the_final_clip():
     """with a cold open the voice still sounds at its own times, and the game ducks then and comes back"""
     run_dir, r = voice_run()
@@ -609,6 +621,7 @@ def voice_starts_at_frame_0_of_the_final_clip():
 
 
 @check
+@testkit.full
 def sound_dips_briefly_at_the_cut():
     """the steady tone drops at the cold open's cut for a few milliseconds and is full just before and after it"""
     run_dir, _ = voice_run()
@@ -629,6 +642,7 @@ def styled(style):
 
 
 @check
+@testkit.full
 def box_style_is_a_white_rounded_box_with_black_text():
     """white inside the margin, black text inside it, the corner still shows the picture behind, all inside the safe box"""
     _, r, src, out = styled("box")
@@ -645,6 +659,7 @@ def share_of(frame, box, test):
 
 
 @check
+@testkit.full
 def shadow_style_has_no_box():
     """white text with dark around it and no white box: far fewer white pixels than the box style"""
     _, r, src, out = styled("shadow")
@@ -654,6 +669,7 @@ def shadow_style_has_no_box():
 
 
 @check
+@testkit.full
 def outline_style_still_draws():
     """white Impact with a black outline, inside the safe box"""
     _, r, src, out = styled("outline")
@@ -662,6 +678,7 @@ def outline_style_still_draws():
 
 
 @check
+@testkit.full
 def hook_duration_sets_how_long_the_banner_stays():
     """1 s: there at 0.5 s and gone at 1.3 s. full: there on the last frame"""
     run_dir = make_run("durations", [True])
@@ -688,6 +705,7 @@ def bad_flags_stop():
 
 
 @check
+@testkit.full
 def bad_peak_stops_before_any_encode():
     """a peak past the clip's end or written as a clock time stops with an error naming the clip, and nothing is written"""
     run_dir = make_run("bad peak", [True, True])
@@ -700,6 +718,7 @@ def bad_peak_stops_before_any_encode():
 
 
 @check
+@testkit.full
 def early_peak_warns_and_still_burns():
     """a peak in the first 2 s is the owner's choice: a warning, and the cold open is still made"""
     run_dir = make_run("early peak", [True])
@@ -718,7 +737,7 @@ def a_folder_with_no_scores_stops():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run

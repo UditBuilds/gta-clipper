@@ -5,6 +5,7 @@ ffmpeg is used where a check needs a real file (a frame sheet, a true-peak measu
   .venv\\Scripts\\python.exe launchtest.py
 """
 
+import functools
 import json
 import shutil
 import sys
@@ -18,6 +19,7 @@ import footage_short
 import index
 import launch
 import safety
+import testkit
 import truth
 import truth
 from footagetest import made_up_index, made_up_timeline, seg
@@ -954,7 +956,22 @@ def stand_in_explainer(resolved, out):
     return made.returncode == 0
 
 
+def nothing_heard(fn):
+    """A check whose Shorts are a test tone: launch.render's speech check hears nothing, at once. The real one
+    (faster-whisper, seconds a Short) has its own checks and runs in editortest's whole render."""
+    @functools.wraps(fn)
+    def run():
+        real = launch.speech_check
+        launch.speech_check = lambda path, log=print, check=None: {"early": [], "later": [], "words": 0}
+        try:
+            return fn()
+        finally:
+            launch.speech_check = real
+    return run
+
+
 @check
+@nothing_heard
 def a_narrated_short_plays_its_moment_on_and_is_logged():
     """render() with a stand-in voice and explainer: the footage plays on from beat to beat (each starts where the
     one before ended) with its game sound, the timed check passes, claims.txt lists every line with its evidence,
@@ -986,6 +1003,7 @@ def a_narrated_short_plays_its_moment_on_and_is_logged():
 
 
 @check
+@nothing_heard
 def a_short_that_breaks_a_rule_is_not_rendered_and_says_why():
     """a narrated Short whose line names a crash it can't show is FAILED with the reason on the review page and in
     render.json, nothing is logged as used, and the other Short still renders; a dry run logs nothing either"""
@@ -1023,11 +1041,13 @@ def made_up_footage(path, seconds=60):
     return launch.subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=s=1280x720:r=30:d={seconds}", "-f", "lavfi",
          "-i", f"sine=f=330:d={seconds}", "-af", "volume='if(lt(mod(t,10),1),8,1)':eval=frame",
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(path)],
-        capture_output=True).returncode == 0
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest",
+         str(path)], capture_output=True).returncode == 0
 
 
 @check
+@testkit.full
+@nothing_heard
 def an_action_clip_gets_its_hook_cold_open_music_and_a_safe_peak():
     """render() of an ACTION CLIP on a real made-up video: the clip is cut to 1080x1920, the starred hook is burned
     in, the auto peak gives a cold open (the Short is longer than its window by the cold open) and is flagged AUTO
@@ -1416,7 +1436,7 @@ def a_safety_shifted_window_keeps_the_vision_checks_verdict():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             got = fn()
             good, err = bool(got), ""

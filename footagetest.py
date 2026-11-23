@@ -29,6 +29,7 @@ import footage_short
 import index
 import library
 import shorttest
+import testkit
 
 HERE = Path(__file__).resolve().parent
 CHECKS = []
@@ -150,6 +151,7 @@ def scan_times_cover_the_recording():
 
 
 @check
+@testkit.full
 def bars_are_found_with_no_hint_and_the_hud_on_under_half_the_time():
     """made-up HUD at a place no profile has, on screen in 45 % of the frames: the scan finds the row of 3 bars
     (each strip inside its bar, give or take the 4 px it samples at), and says which frames show the HUD; a big
@@ -179,6 +181,7 @@ def no_bars_means_no_guesses():
 
 
 @check
+@testkit.full
 def the_star_row_is_found_and_text_is_not():
     """the scan finds the made-up star row without being told where it is: 5 slots (the number given), every star's
     middle within 2 px, the frames it calls 'stars' all truly show stars and the ones it calls 'no stars' never do;
@@ -198,6 +201,7 @@ def the_star_row_is_found_and_text_is_not():
 
 
 @check
+@testkit.full
 def the_outline_is_sized_so_the_stars_can_be_counted():
     """index.py's star count, read through the outline the scan hands to the page, counts stars on every picture
     that has them (an outline on the white middle's edge would count none) and none on a picture without. (How
@@ -227,6 +231,7 @@ def no_stars_in_a_recording_is_said_plainly():
 
 
 @check
+@testkit.full
 def about_a_dozen_pictures_go_on_the_page():
     """the page gets at most 13 pictures: up to 4 with stars, 6 with the HUD and no stars, 3 with the HUD hidden;
     each guess is true for the made-up recording; and the 3-minute check window holds frames with stars"""
@@ -282,6 +287,7 @@ def stand_in_owner(session, port, browser, guided=False):
 
 
 @check
+@testkit.full
 def guided_run_on_a_recording_without_stars_and_the_rules_about_overwriting():
     """the whole guided command on a made-up video (bars and a phone, no stars) with a stand-in for the owner:
     it saves a profile clip.py loads, with both of the video's bars found by the scan (on this 12 s clip of pure
@@ -985,7 +991,7 @@ def game_sound_sits_under_the_voice_only_where_its_shot_is():
 
 def main():
     ok, skipped = True, 0
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             got = fn()
             good, err = bool(got), ""

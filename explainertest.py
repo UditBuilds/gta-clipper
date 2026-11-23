@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 
 import explainer as ex
+import testkit
 
 HERE = Path(__file__).resolve().parent
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
@@ -103,6 +104,12 @@ def assets():
     # A picture narrower than the screen, which can't pan.
     run_ffmpeg("-f", "lavfi", "-i", f"color=c={hexcolour(AMBER)}:s=800x1600:d=0.04", "-frames:v", "1", ROOT / "tall.png")
     return True
+
+
+@functools.cache
+def piece_encoder():
+    """explainer's encoder settings for the pieces. Each ex.pick_encoder() is a real test encode, so it is asked once."""
+    return ex.pick_encoder()[1]
 
 
 def copy_fonts(folder):
@@ -279,6 +286,7 @@ def sound_settings_are_read():
 
 
 @check
+@testkit.needs("kokoro")
 def bad_sound_settings_stop():
     """an unknown voice (the error lists only the English voices), a missing music file, a music_volume too big or not a number, music that isn't text and sfx that isn't true or false: all listed, exit 2, nothing written"""
     music_folder()
@@ -632,11 +640,12 @@ def render_motion(motion, frames=60, source="shot.png"):
     assets()
     out = ROOT / f"motion_{motion['kind']}.mp4"
     slot = {"visual": ex.parse_visual(source, ROOT), "frames": frames, "motion": motion}
-    ex.render_segment(slot, out, ex.pick_encoder()[1])
+    ex.render_segment(slot, out, piece_encoder())
     return out
 
 
 @check
+@testkit.full
 def ken_burns_moves_the_way_it_says():
     """on real frames: zoom in grows the marker, zoom out shrinks it, pan left moves it right, pan right moves it left"""
     results = {}
@@ -649,6 +658,7 @@ def ken_burns_moves_the_way_it_says():
 
 
 @check
+@testkit.full
 def image_loop_ending_lands_on_the_first_frame():
     """the loop ending on an image finishes exactly where the opening started, whichever way the opening moved"""
     worst = 0.0
@@ -676,7 +686,7 @@ def still_of(visual, zoom=1.0):
     subject, middle = ex.crop_box(visual)[4:]
     motion = {"kind": "zoom_in", "speed": 1.0, "zoom": (zoom, zoom), "centre": (subject, subject), "middle": middle}
     out = ROOT / "still.mp4"
-    ex.render_segment({"visual": visual, "frames": 2, "motion": motion}, out, ex.pick_encoder()[1])
+    ex.render_segment({"visual": visual, "frames": 2, "motion": motion}, out, piece_encoder())
     return frame_number(out, 0)
 
 
@@ -708,7 +718,7 @@ def video_focus_moves_the_crop():
     def first_frame(focus):
         v = ex.parse_visual({"file": "a.mp4", "focus": focus}, ROOT)
         out = ROOT / f"vfocus_{focus}.mp4"
-        ex.render_segment({"visual": v, "frames": 3, "start_s": 0.0, "fill": "play"}, out, ex.pick_encoder()[1])
+        ex.render_segment({"visual": v, "frames": 3, "start_s": 0.0, "fill": "play"}, out, piece_encoder())
         return frame_number(out, 0)
     magenta = lambda pic: (count_near(pic[:, :W // 2], (255, 0, 255), 40), count_near(pic[:, W // 2:], (255, 0, 255), 40))
     l, c, r = magenta(first_frame(0)), magenta(first_frame(0.5)), magenta(first_frame(1))
@@ -720,7 +730,7 @@ def pan_positions(motion, frames):
     """Where the window's left edge is in the ramp picture on each frame, in its pixels, from the mean brightness."""
     v = ex.parse_visual({"file": "ramp.png", "pan": "right"}, ROOT)
     out = ROOT / f"pan_{motion['kind']}_{frames}.mp4"
-    ex.render_segment({"visual": v, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])
+    ex.render_segment({"visual": v, "frames": frames, "motion": motion}, out, piece_encoder())
     raw = subprocess.run([FFMPEG, "-v", "error", "-i", str(out), "-vf", "scale=270:480:flags=area", "-f", "rawvideo",
                           "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
     rgb = np.frombuffer(raw, np.uint8).reshape(-1, 480, 270, 3).astype(float)
@@ -729,6 +739,7 @@ def pan_positions(motion, frames):
 
 
 @check
+@testkit.full
 def pan_slides_evenly_edge_to_edge():
     """a pan right on a real render starts at the left edge, ends at the right edge, and moves the same distance every frame (no stall, no jump); a pan left does the reverse"""
     assets()
@@ -746,6 +757,7 @@ def pan_slides_evenly_edge_to_edge():
 
 
 @check
+@testkit.full
 def pan_opening_loops_back():
     """when the first shot is a pan, the loop ending slides back and its last frame is the Short's first"""
     assets()
@@ -760,6 +772,7 @@ def pan_opening_loops_back():
 
 
 @check
+@testkit.full
 def video_opening_loops_back():
     """when the first shot is a video with no footage before its start (a clip used from 0), the loop ending plays the clip backwards into its first frame, so the Short's last frame is its first and the picture never stands still (before PR 18 it held that first frame for 1.5 s): a 1 s clip full screen, which turns round to fill the 1.5 s, and a long clip framed; an opening later in a file plays the 1.5 s just before it, as since PR 15"""
     assets()
@@ -775,7 +788,7 @@ def video_opening_loops_back():
         ex.assign_backgrounds(slots)
         outs = [ROOT / f"vloop_{name}_{k}.mp4" for k in range(2)]
         for slot, out in zip(slots, outs):
-            ex.render_segment(slot, out, ex.pick_encoder()[1])
+            ex.render_segment(slot, out, piece_encoder())
         diff = float(np.abs(frame_number(outs[0], 0) - frame_number(outs[1], 44)).mean())
         tail = [frame_number(outs[1], k) for k in (0, 11, 22, 33, 44)]
         still = min(moved(a, b) for a, b in zip(tail, tail[1:]))      # the least any quarter of the ending moves
@@ -793,7 +806,7 @@ def video_opening_loops_back():
 
 def still_frame(visual, motion, frames, n):
     out = ROOT / f"seg_{motion['kind']}_{frames}.mp4"
-    ex.render_segment({"visual": visual, "frames": frames, "motion": motion}, out, ex.pick_encoder()[1])
+    ex.render_segment({"visual": visual, "frames": frames, "motion": motion}, out, piece_encoder())
     return frame_number(out, n)
 
 
@@ -856,7 +869,7 @@ def render_clip(name, frames, label):
     v = ex.parse_visual(name, ROOT)
     slot = {"visual": v, "frames": frames, "start_s": 0.0, "fill": ex.fill_mode(v, 0.0, frames)}
     out = ROOT / f"clip_{label}.mp4"
-    ex.render_segment(slot, out, ex.pick_encoder()[1])
+    ex.render_segment(slot, out, piece_encoder())
     return slot["fill"], out
 
 
@@ -919,6 +932,7 @@ def caption_starts(folder, needle=None):
 
 
 @check
+@testkit.full
 def run_folder_is_as_asked():
     """<slug>/<YYYYMMDD-HHMMSS>/ with short.mp4, voice.wav, captions.ass, log.json and no leftovers"""
     folder = main_run()[0]
@@ -928,6 +942,7 @@ def run_folder_is_as_asked():
 
 
 @check
+@testkit.full
 def short_is_1080x1920_at_30_fps():
     """H.264 1080x1920 at 30 fps in yuv420p, and one AAC stereo audio stream, nothing else"""
     info = probe(main_run()[0] / "short.mp4")
@@ -940,6 +955,7 @@ def short_is_1080x1920_at_30_fps():
 
 
 @check
+@testkit.full
 def video_length_matches_the_voice():
     """the video is within 0.3 s of the voice, and its frame count is exact"""
     folder, log, _ = main_run()
@@ -952,6 +968,7 @@ def video_length_matches_the_voice():
 
 
 @check
+@testkit.full
 def captions_hold_the_tag_colours():
     """the .ass has 212 GIGABYTES in cyan (a green tag since PR 17) and DANGER in red, and untagged words have no colour of their own"""
     text = (main_run()[0] / "captions.ass").read_text(encoding="utf-8")
@@ -962,6 +979,7 @@ def captions_hold_the_tag_colours():
 
 
 @check
+@testkit.full
 def colours_really_show_on_screen():
     """while a tagged chunk shows, the caption band has that exact cyan or red; while an untagged one shows, neither"""
     folder = main_run()[0]
@@ -976,6 +994,7 @@ def colours_really_show_on_screen():
 
 
 @check
+@testkit.full
 def opening_card_shows_then_goes():
     """the open card is on screen for the first 2 s, above the captions, and gone after"""
     folder = main_run()[0]
@@ -988,6 +1007,7 @@ def opening_card_shows_then_goes():
 
 
 @check
+@testkit.full
 def video_fills_the_frame_with_no_blur_or_bars():
     """the first visual reaches every edge in its own colour, and its side bars are cropped away, not squeezed in"""
     picture = frame_at(main_run()[0] / "short.mp4", 0.1)
@@ -996,6 +1016,7 @@ def video_fills_the_frame_with_no_blur_or_bars():
 
 
 @check
+@testkit.full
 def last_frames_show_the_first_visual():
     """over the last second the picture is the first visual again, not the card before the loop ending"""
     folder, log, _ = main_run()
@@ -1011,6 +1032,7 @@ def last_frames_show_the_first_visual():
 
 
 @check
+@testkit.full
 def no_game_audio_gets_through():
     """the test videos' tone is loud in the source, and the Short's band level is just the voice's own (renders differ by about 1 dB); game audio mixed in at -20 dB would clearly fail this"""
     folder = main_run()[0]
@@ -1028,6 +1050,7 @@ def no_game_audio_gets_through():
 
 
 @check
+@testkit.full
 def voice_is_about_minus_14_lufs():
     """voice.wav and the finished Short both measure -14 LUFS within 1 LU, peaks under -1 dB"""
     folder = main_run()[0]
@@ -1037,6 +1060,7 @@ def voice_is_about_minus_14_lufs():
 
 
 @check
+@testkit.full
 def voice_has_no_slow_drift():
     """Kokoro's slow swell under 20 Hz (straight from the model it held about a third of the voice's energy) is gone from voice.wav, so it can't use up the limiter's room"""
     samples, rate = voice_samples(main_run()[0])
@@ -1076,6 +1100,7 @@ def quiet_runs(samples, rate, db, least):
 
 
 @check
+@testkit.full
 def dead_air_is_gone():
     """no silence in voice.wav lasts over 0.35 s, even with a tick inside it; straight from the model the gap after a sentence was about 0.6 s"""
     samples, rate = voice_samples(main_run()[0])
@@ -1110,6 +1135,7 @@ def sentence_tail_cut_is_careful():
 
 
 @check
+@testkit.full
 def captions_follow_the_real_speech():
     """the first caption comes within 0.15 s of the first sound, and after every real pause a caption starts within 0.15 s of the speech returning (from the audio, not the model's numbers)"""
     folder, log, _ = main_run()
@@ -1124,6 +1150,7 @@ def captions_follow_the_real_speech():
 
 
 @check
+@testkit.full
 def log_says_what_happened():
     """the log has the durations and target, the shot count, a visual for every second, each image's move, and its warnings (the runtime under 34 s; no speed warning at 1.18, under PR 30's 1.4); the console prints the runtime and the shots"""
     folder, log, stdout = main_run()
@@ -1155,6 +1182,7 @@ def pacing_run():
 
 
 @check
+@testkit.full
 def pacing_render_joins_and_loops():
     """a real render with a pan, a crossed-out card, a focused clip and weights: exact frame count, the pan's speed and focus in the log, the bar on screen, the clip's left edge shown, and the last frame back on the first"""
     folder, log, stdout = pacing_run()
@@ -1191,6 +1219,7 @@ def music_run():
 
 
 @check
+@testkit.full
 def music_stays_well_under_the_voice():
     """named music plays low from start to end (a 2 s file loops), the mix stays near -14 LUFS, and no music named means none"""
     folder, log = music_run()
@@ -1212,6 +1241,7 @@ def ass_seconds(text):
 
 
 @check
+@testkit.full
 def spoken_word_is_highlighted():
     """in the .ass every untagged word turns yellow at its own start (from the log's word times, to the ms) and back when the next starts, tagged words keep their colour; the three words said while the last line's card is up (since PR 19 that card is shown, not dropped for the loop ending) come back the moment the card leaves, already lit; on screen the yellow moves from word to word inside one chunk"""
     folder, log, _ = main_run()
@@ -1268,6 +1298,7 @@ def sound_run():
 
 
 @check
+@testkit.full
 def music_and_sound_effects_render():
     """"auto" picks the long track, the music fades in, a hit lands on the card and whooshes on line 2 and its pan (as in the log and the console), the hit really is in the sound, and the mix is -14 LUFS with peaks under -1 dB"""
     folder, log, stdout = sound_run()
@@ -1291,6 +1322,7 @@ def music_and_sound_effects_render():
 
 
 @check
+@testkit.full
 def auto_with_no_music_folder_still_renders():
     """"auto" with no music folder renders without music and says so; sfx false means no sound effects; the voice is the mix's level"""
     assets()
@@ -1571,7 +1603,7 @@ def grade_adds_contrast_and_a_vignette():
     frames = {}
     for grade in (False, True):
         out = ROOT / f"grade_{grade}.mp4"
-        ex.render_segment({"visual": visual, "frames": 2, "motion": motion, "grade": grade}, out, ex.pick_encoder()[1])
+        ex.render_segment({"visual": visual, "frames": 2, "motion": motion, "grade": grade}, out, piece_encoder())
         frames[grade] = frame_number(out, 0)
     plain, graded = frames[False], frames[True]
     corner = lambda f: f[:200, :200].mean()
@@ -1608,6 +1640,7 @@ def shot_of(log, start):
 
 
 @check
+@testkit.full
 def look_render_has_no_black_screen():
     """a real render in the new look: every quarter second has a picture (never black or flat), the number card shows the next shot's picture blurred behind it, a portrait picture fills the screen, and the log and console say which layout each shot took"""
     folder, log, stdout = look_run()
@@ -1631,6 +1664,7 @@ def look_render_has_no_black_screen():
 
 
 @check
+@testkit.full
 def look_render_frames_labels_and_marks():
     """in the same render: the photo shows whole inside its square card (the white square where the crop puts it), with a white border, its cyan label on the card's top edge and its red X on its spot; the video's card grows from 96 % to full size; the first and last frames match"""
     folder, log, _ = look_run()
@@ -1664,6 +1698,7 @@ def look_render_frames_labels_and_marks():
 
 
 @check
+@testkit.full
 def look_render_hides_captions_over_cards():
     """in the same render: one yellow word at a time sits on WORD_Y while a picture shows; while a text card is up no caption event is on in the .ass, and the caption band has no yellow, nor cyan over the 212 card while its cyan words are said (the NOV card's own *NOV 10* is cyan); the .ass counts 212 up and draws every caption in Lilita One"""
     folder, log, _ = look_run()
@@ -1696,6 +1731,7 @@ def look_render_hides_captions_over_cards():
 
 
 @check
+@testkit.needs("gta")
 def old_example_scripts_still_read():
     """the PR 14-16 example scripts still read with no changes and keep their shots, focus, pans and weights (checked when the Rockstar files are on this PC)"""
     root = Path(r"C:\AI\gta")
@@ -1894,6 +1930,7 @@ YELLOW_MARK = (255, 230, 0)
 
 
 @check
+@testkit.full
 def snippet_text_fits_its_card():
     """a snippet's words sit inside its white card with room on every side, as large as fits (3 words at the largest size, a full 18-word sentence smaller), the card is 900 px wide inside the safe area and ends above the captions; on real pixels the yellow marker isn't there at first, grows from its left end, and ends behind the highlighted words inside the card; the text is as typed, never in capitals"""
     texts = [("Unlocks at midnight.", ["midnight"]),
@@ -1932,6 +1969,7 @@ def snippet_text_fits_its_card():
 
 
 @check
+@testkit.full
 def banner_and_pill_stay_in_the_safe_area():
     """on real pixels, with outline and shadow: a banner's pill is inside the safe area even at the top of its pop, and a banner of three long words is drawn smaller to stay there (never under size 48); the subscribe pill is inside the safe area under the captions (and at the top when a label is in its way), its cursor stays inside too, it is white before the click and pink after, and nothing of it is left on the last frames"""
     ok, notes = True, []
@@ -2054,7 +2092,7 @@ def ps5_video_gets_the_range_fix():
     """a VP9 file with the PS5's mislabel renders with the same colours as its H.264 twin, because it gets clip.py's fix (without the fix its picture is washed out, which this check also renders to be sure it can tell); the real test1.webm, when it is on this PC, reads as 1920x1080 and gets the fix"""
     import clip
     beat_assets()
-    encode = ex.pick_encoder()[1]
+    encode = piece_encoder()
 
     def first_frame(name, out):
         visual = settled({"beat": "full", "file": name})
@@ -2116,6 +2154,7 @@ def beat_shot(log, beat):
 
 
 @check
+@testkit.full
 def beats_render_lock_on_follows_the_zoom():
     """a real render with every beat type: while the camera zooms, the red box stays centred on the picture's white square and keeps its size next to it (the box is 4 squares wide), it grows by the lock-on's zoom, and at the end the box and its tag are inside the safe area; before the box lands there is no red on screen; the lock-on's click is in the log at the moment it lands"""
     folder, log, stdout = beats_run()
@@ -2154,6 +2193,7 @@ def beats_render_lock_on_follows_the_zoom():
 
 
 @check
+@testkit.full
 def beats_render_compare_slides_in_and_captions_move():
     """in the same render: the compare's top card shows its picture from the start and the bottom card's place is still background; 1.3 s in the bottom card is there with its video, the two cards have white borders with background between them, and the labels are on the outer edges (grey above, pink below); a word said while both are up is drawn on the seam between the cards, not in the usual caption band; two whooshes, low then high"""
     folder, log, _ = beats_run()
@@ -2190,6 +2230,7 @@ def beats_render_compare_slides_in_and_captions_move():
 
 
 @check
+@testkit.full
 def beats_render_video_backgrounds_and_cards():
     """in the same render: the banner's pink pill is over the mislabelled VP9 clip, whose blue comes out as it should, full screen; the snippet's white card with its dark words and yellow marker is over that clip blurred; the count card counts to 212; the square card is framed as before; no moment of the Short is black or flat"""
     folder, log, _ = beats_run()
@@ -2221,6 +2262,7 @@ def beats_render_video_backgrounds_and_cards():
 
 
 @check
+@testkit.full
 def beats_render_never_ends_frozen_and_still_loops():
     """in the same render, which opens on a 1 s clip used from its start: the loop ending plays that clip (the log says it runs backwards), the picture moves in every quarter of the last 1.5 s, the last frame matches the first frame, the subscribe pill is white, then pink after its click, and gone by the last frame; the pill's click is in the log"""
     folder, log, _ = beats_run()
@@ -2252,6 +2294,7 @@ def beats_render_never_ends_frozen_and_still_loops():
 
 
 @check
+@testkit.full
 def beats_render_prints_the_pacing_check():
     """in the same render: the console prints the pacing check (length, changes, rate, longest gap), the log holds the same numbers with every change it counted (the compare's second card and the pill among them; the lock-on box and the marker count with their cuts), and a Short this short gets the under-34 s warning without failing"""
     folder, log, stdout = beats_run()
@@ -2275,6 +2318,7 @@ def beats_render_prints_the_pacing_check():
 
 
 @check
+@testkit.needs("gta")
 def beat_example_scripts_read():
     """the two PR 18 example scripts read (checked when the Rockstar files and test1.webm are on this PC): beats_demo.json uses every beat type, has a subscribe pill, opens on a clip and holds only Rockstar's files; the video test is marked TEST ONLY in its file name, title, banner and pill and plays the GTA 5 recording behind every beat; the PR 17 example reads as before, with no beats"""
     root = Path(r"C:\AI\gta")
@@ -2303,7 +2347,7 @@ def beat_example_scripts_read():
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run
