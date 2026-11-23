@@ -2926,6 +2926,51 @@ def caption_checks(run_log, plan, script_lines, checker, hud_series, out_dir, lo
     return checks
 
 
+CAPTION_LINE = re.compile(r"Dialogue: [^,]*,[^,]*,[^,]*,Caption,(?:[^,]*,){5}(.*)")   # a word caption in captions.ass
+
+
+def caption_coverage(run_log, plan, script_lines, ass_file, checks):
+    """What caption_checks had to look at, so its empty list can't pass for a checked Short (PR 31: M24 showed 23
+    captions, none is a word it knows, and nothing said so). Engine v4: (report, bad checks, flags). The captions
+    burnt in (captions.ass) must be the lines' words, in order, and each must start over one of the Short's shots. The
+    report counts the captions, those over a shot and those tested against their frame; none tested is a flag."""
+    said = [t for ln in script_lines for t in word_tokens(ln["say"])]
+    text = Path(ass_file).read_text(encoding="utf-8") if Path(ass_file).is_file() else ""
+    burnt = [t for raw in text.splitlines() for m in [CAPTION_LINE.match(raw)] if m
+             for t in word_tokens(re.sub(r"\{[^}]*\}", "", m.group(1)))]
+    words = [(t, w) for w in run_log.get("word_times") or [] for t in word_tokens(w["text"])]
+    clips = {str(Path(e["clip"])) for lp in plan for e in lp}
+    visuals = run_log.get("visuals") or []
+
+    def shot(t):
+        return next((v for v in visuals if v["start_s"] <= t < v["start_s"] + v["seconds"]
+                     and str(Path(str(v["source"]))) in clips), None)
+
+    def row(k, rule, why):
+        w = words[min(k, len(words) - 1)][1] if words else {"text": "", "start_s": 0.0}
+        v = shot(w["start_s"])
+        return {"word": w["text"], "t": round(w["start_s"], 2), "line": v["line"] if v else 0, "rule": rule, "ok": False,
+                "why": why}
+    bad = []
+    for k in range(max(len(said), len(burnt))):
+        want, got = (seq[k] if k < len(seq) else None for seq in (said, burnt))
+        if want != got:                                  # one missing word shifts all the rest: the first one is enough
+            bad.append(row(k, "the captions are the words said",
+                           f"the caption is {got!r} where the line says {want!r}" if got and want else
+                           f"the line's word {want!r} has no caption" if want else f"nobody says the caption {got!r}"))
+            break
+    lost = [k for k, (_, w) in enumerate(words) if shot(w["start_s"]) is None]
+    bad += [row(k, "over a shot", "the caption shows over none of the Short's shots") for k in lost]
+    tested = len({(c["word"], c["t"]) for c in checks})
+    things = {t for terms in cutplan.SUBJECTS.values() for t in terms} - set(SEEN_WORDS)
+    unknown = list(dict.fromkeys(t.upper() for t, _ in words if t in things))
+    flags = [] if tested or not burnt else [
+        f"CAPTIONS: none of the {len(burnt)} words shown is one the caption check knows, so none was checked against its "
+        "frame: look yourself" + (f" ({', '.join(unknown)} names a thing the frame question has no field for)"
+                                  if unknown else "")]
+    return {"shown": len(burnt), "over_a_shot": len(words) - len(lost), "tested": tested, "unknown_things": unknown}, bad, flags
+
+
 def full_screen_share(run_log):
     """The share of the Short whose picture is gameplay full screen (explainer's "full" layout, insets included)."""
     total = ((run_log.get("durations") or {}).get("video_s")) or sum(v["seconds"] for v in run_log.get("visuals") or [])
@@ -3227,6 +3272,10 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,
                                         "am_puck", log)
     checks["caption_checks"] = caption_checks(run_log, cplan, lines, checker, v3_hud(cplan, m, prof, hud6), out_dir, log)
+    checks["captions"], more, cflags = caption_coverage(run_log, cplan, lines, out_dir / "captions.ass",
+                                                        checks["caption_checks"])
+    checks["caption_checks"] += more
+    flags += cflags
     (out_dir / "checks.json").write_text(json.dumps(checks, indent=2, ensure_ascii=False), encoding="utf-8")
     bad = [c for c in checks["caption_checks"] if not c["ok"]]
     if bad:
@@ -3444,7 +3493,10 @@ def checks_block(checks):
     out = []
     if checks.get("full_screen") is not None:
         out.append(f"<p>Full-screen gameplay: <b>{checks['full_screen']:.0%}</b> of the Short</p>")
-    caps = checks.get("caption_checks") or []
+    caps, seen = checks.get("caption_checks") or [], checks.get("captions")
+    if seen:
+        out.append(f"<p>Captions: {seen['shown']} words shown, {seen['over_a_shot']} over a shot, "
+                   f"<b>{seen['tested']}</b> checked against the picture</p>")
     if caps:
         rows = "".join(f'<li class="{"ok" if c["ok"] else "bad"}">{"&#10003;" if c["ok"] else "&#10007;"} '
                        f'{c["t"]:.1f} s "{esc(c["word"])}" (line {c["line"]}): {esc(c["rule"])}'

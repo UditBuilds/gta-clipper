@@ -707,6 +707,126 @@ def no_subscribe_pill_and_no_click_in_a_v4_short():
                 and log["durations"]["video_s"] - last <= cutplan.END_AFTER_WORDS_S + 0.05)
 
 
+# --- 9. The caption check sees a v4 Short's captions (PR 31: M24's check list was empty and nothing said so) ---
+
+def v4_captions(tmp, s=None, checker=None, burn=None, late=0.0):
+    """A v4 Short's captions without a render: the plan, then assemble's own word times, visuals and burnt-in captions,
+    and what launch.render_v4 makes of them: (caption_checks, report, bad, flags). burn(words) may change the words that
+    are burnt in; late moves the last word that many seconds."""
+    import assemble
+    import explainer as ex
+    tmp, s = Path(tmp), s or short()
+    p, _, _ = cutplan.plan(s, moment(), secs(s), 21.0)
+    for x in p["shots"]:
+        x["clip"] = str(tmp / f"shot{x['n']}.mp4")
+    _, _, words = assemble.voice_track(fake_voice([])(s["lines"], 1.2), p["placed"], p["total_s"])
+    words[-1].update(start=words[-1]["start"] + late, end=words[-1]["end"] + late)
+    events = ex.word_events(burn([dict(w) for w in words]) if burn else words, p["total_s"])
+    (tmp / "captions.ass").write_text(ex.ass_document(events), encoding="utf-8")
+    run_log = {"word_times": [{"text": w["text"], "start_s": w["start"], "end_s": w["end"]} for w in words],
+               "visuals": assemble.visuals(p["shots"], p["placed"], p["total_s"])}
+    plan = [[{"clip": x["clip"], "video": "synth", "from_s": x["from"], "inset": None}] for x in p["shots"]]
+    real = launch.frame_jpeg
+    launch.frame_jpeg = lambda *a, **k: tmp / "frame.jpg"       # topictest makes real ones; here only the answer counts
+    try:
+        checks = launch.caption_checks(run_log, plan, s["lines"], checker or FakeChecker(), {}, tmp)
+    finally:
+        launch.frame_jpeg = real
+    return (checks, *launch.caption_coverage(run_log, plan, s["lines"], tmp / "captions.ass", checks))
+
+
+class NoCrash(FakeChecker):
+    """The vision model, seeing no crash in any frame."""
+    def frame(self, jpg, meta):
+        answer, error = super().frame(jpg, meta)
+        return dict(answer, crash=False), error
+
+
+@check
+def the_caption_check_sees_every_caption_of_a_v4_short():
+    """the fixture's 4 lines are 13 words: all 13 are found burnt in and over a shot, and the one the check knows
+    ("CRASH", line 3) is asked about its own frame at its own second of the recording; nothing is flagged"""
+    with tempfile.TemporaryDirectory() as tmp:
+        checks, report, bad, flags = v4_captions(tmp)
+    got = [(c["word"], c["line"], c["rule"], c["ok"], c["rec_s"]) for c in checks]
+    return (report == {"shown": 13, "over_a_shot": 13, "tested": 1, "unknown_things": []} and not bad and not flags
+            and got == [("CRASH", 3, "crash in the frame", True, 23.43)])
+
+
+@check
+def a_bad_caption_in_a_v4_short_is_caught():
+    """deliberately bad captions: "CRASH" over a frame with no crash fails; a burnt-in word the voice doesn't say, a
+    word with no caption, no captions at all and a caption past the last shot each fail, naming the word"""
+    def swap(words):
+        words[6]["text"] = "BRIDGE"                  # "That crash was huge": CRASH is burnt in as BRIDGE
+        return words
+    with tempfile.TemporaryDirectory() as tmp:
+        blind = v4_captions(tmp, checker=NoCrash())[0]
+        wrong = v4_captions(tmp, burn=swap)[2]
+        missing = v4_captions(tmp, burn=lambda words: words[:3] + words[4:])[2]
+        nothing = v4_captions(tmp, burn=lambda words: [])[2]
+        past = v4_captions(tmp, late=60.0)[2]
+
+    def why(rows):
+        return [r["why"] for r in rows if not r["ok"]]
+    return (len(why(blind)) == 1 and "sees no crash" in why(blind)[0]
+            and why(wrong) == ["the caption is 'bridge' where the line says 'crash'"]
+            and why(missing) == ["the caption is 'it' where the line says 'for'"]
+            and why(nothing) == ["the line's word 'watch' has no caption"]
+            and why(past) == ["the line's word 'going' has no caption", "the caption shows over none of the Short's shots"])
+
+
+@check
+def captions_it_cannot_test_are_flagged_never_silent():
+    """M24's own lines (23 words, none of them one the check knows): the report says 23 shown, 0 tested; a flag says
+    none was checked against its frame and names OVERPASS; the review page shows the count (it showed nothing)"""
+    m24 = short(lines=[{"say": "Can you survive jumping off this overpass?", "claim": "ask", "at": 14.0},
+                       {"say": "Wait for it.", "claim": "hype", "at": 17.5},
+                       {"say": "Yes, you get right back up.", "claim": "on_screen", "evidence": ["E2"], "at": 23.0},
+                       {"say": "You just run off like nothing happened.", "claim": "on_screen", "evidence": ["E2"],
+                        "at": 33.9}])
+    with tempfile.TemporaryDirectory() as tmp:
+        checks, report, bad, flags = v4_captions(tmp, m24)
+    page = launch.checks_block({"caption_checks": checks, "captions": report})
+    return (checks == [] and not bad
+            and report == {"shown": 23, "over_a_shot": 23, "tested": 0, "unknown_things": ["OVERPASS"]}
+            and len(flags) == 1 and "none of the 23 words" in flags[0] and "OVERPASS names a thing" in flags[0]
+            and "23 words shown" in page and "<b>0</b> checked" in page)
+
+
+@check
+def a_bad_caption_fails_the_whole_v4_render():
+    """launch.render with engine v4 and captions that say TINY where the voice says HUGE: the Short is FAILED and the
+    problem names the word (the shots and the build are small stand-ins; the captions and their checks are real)"""
+    import numpy as np
+
+    def make_shot(video, s, path, grade, log):
+        make_video(path, 12, size="108x192")
+        return {"pieces": []}
+
+    def build(out_dir, video, shots, lines, spoken, placed, *rest):
+        import assemble
+        import explainer as ex
+        total = sum(s["frames"] for s in shots) / cutplan.FPS
+        _, _, words = assemble.voice_track(spoken, placed, total)
+        burnt = [dict(w, text="TINY") if w["text"] == "HUGE" else w for w in words]
+        (Path(out_dir) / "captions.ass").write_text(ex.ass_document(ex.word_events(burnt, total)), encoding="utf-8")
+        return {"word_times": [{"text": w["text"], "start_s": w["start"], "end_s": w["end"]} for w in words],
+                "visuals": assemble.visuals(shots, placed, total)}
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "x.webm"
+        folder = run_folder_with(tmp, [moment(video)], [short()])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "build": build,
+                                       "light": lambda v, s: np.full((16, 480, 270), 150, np.uint8),
+                                       "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+        e = data["shorts"][0]
+    return (e["status"] == "FAILED" and len(e["problems"]) == 1
+            and has(e["problems"], "the caption is 'tiny' where the line says 'huge'"))
+
+
 # --- PR 30 (Nov 23): the low-light grade ---
 
 OLD_GRADE = ",eq=contrast=1.09:saturation=1.25,vignette=angle=0.35"     # pinned: what every v4 shot had until Nov 23
