@@ -707,6 +707,139 @@ def no_subscribe_pill_and_no_click_in_a_v4_short():
                 and log["durations"]["video_s"] - last <= cutplan.END_AFTER_WORDS_S + 0.05)
 
 
+# --- PR 30 (Nov 23): the low-light grade ---
+
+OLD_GRADE = ",eq=contrast=1.09:saturation=1.25,vignette=angle=0.35"     # pinned: what every v4 shot had until Nov 23
+
+
+def light_video(path, level, seconds=2):
+    """A made-up 16:9 recording: a fine texture round one brightness (a sunset street ~60, a day street ~150)."""
+    src = f"color=c=0x{level:02x}{level:02x}{level:02x}:size=1920x1080:rate=30:duration={seconds}"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-vf",
+                    "noise=alls=40:allf=u,format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-crf", "12", "-colorspace", "bt709", "-color_range", "tv", str(path)], check=True, capture_output=True)
+    return path
+
+
+def graded_mean(video, tmp, grade, name, info):
+    import proof
+    made = steady.make_piece(video, 0.2, 15, Path(tmp) / f"{name}.mp4", info, grade=grade)
+    return proof.frame_stats(proof.clip_frames(made, [0.25])[0], 270, 480)["mean"]
+
+
+@check
+def a_dark_shot_is_not_darkened():
+    """a dark made-up shot (about 53, M24's landing): the old grade darkens it; the low-light grade has no contrast or
+    vignette, is never darker than the ungraded picture and brings it over the check's minimum, which is still 55 and
+    still measured on the graded clip; a dim one (about 60) isn't darker either"""
+    import proof
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for level in (53, 65):
+            v = light_video(Path(tmp) / f"v{level}.mp4", level)
+            info = steady.info_of(v)
+            grade, rep = steady.shot_grade(steady.light_frames(v, 0.0, 1.5, info), OLD_GRADE)
+            none, old, new = (graded_mean(v, tmp, g, f"{n}{level}", info)
+                              for g, n in (("", "none"), (OLD_GRADE, "old"), (grade, "new")))
+            print(f"       level {level}: ungraded {none:.1f}, old grade {old:.1f}, new {new:.1f} (gamma {rep['gamma']})")
+            out.append(rep["low_light"] and "contrast" not in grade and "vignette" not in grade and old < none - 5
+                       and new >= none and abs(rep["level"] - none) < 1.0)
+            if level == 53:
+                out.append(none < 55 and proof.DARK_MEAN == 55 and new > none and new >= 55)
+    return all(out)
+
+
+@check
+def a_daytime_shot_is_graded_exactly_as_before():
+    """a bright made-up shot gets the old grade, letter for letter, and the made clip is the same picture as the old
+    grade's, byte for byte; the line is one constant (70): just above it nothing changes"""
+    import numpy as np
+    import explainer
+    with tempfile.TemporaryDirectory() as tmp:
+        v = light_video(Path(tmp) / "day.mp4", 150)
+        info = steady.info_of(v)
+        grade, rep = steady.shot_grade(steady.light_frames(v, 0.0, 1.5, info), explainer.graded(True))
+        made = [steady.make_piece(v, 0.2, 10, Path(tmp) / f"{n}.mp4", info, grade=g)
+                for n, g in (("now", grade), ("before", OLD_GRADE))]
+        raw = [subprocess.run(["ffmpeg", "-v", "error", "-i", str(x), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
+                              capture_output=True).stdout for x in made]
+
+    def flat(n):
+        return np.full((16, 480, 270), n, np.uint8)
+    over, _ = steady.shot_grade(flat(71), OLD_GRADE)
+    under, _ = steady.shot_grade(flat(69), OLD_GRADE)
+    return (grade == OLD_GRADE == explainer.graded(True) and not rep["low_light"] and raw[0] == raw[1]
+            and len(raw[0]) == 10 * 1080 * 1920 * 3 // 2 and steady.LOW_LIGHT == 70 and over == OLD_GRADE
+            and under != OLD_GRADE)
+
+
+@check
+def the_lift_is_capped_and_black_stays_black():
+    """a night-dark shot gets the strongest lift and no more (gamma 1.2, at most 18 of 255), and stays under the check;
+    on real video levels through ffmpeg, black (16) and white (235) don't move, the darkest shadows (to 2 % of white)
+    move at most 1, nothing gets darker, the order of the greys is kept and the colour planes are untouched"""
+    import numpy as np
+    night = np.random.default_rng(1).integers(0, 50, (16, 480, 270)).astype(np.uint8)
+    grade, rep = steady.shot_grade(night, OLD_GRADE)
+    x = np.arange(256) / 255
+    rise = 255 * (steady.lift_curve(x, steady.LIFT_MAX) - x)
+    out = subprocess.run(["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "256x2", "-i", "-",
+                          "-vf", steady.lift_filter(steady.LIFT_MAX), "-f", "rawvideo", "-"],
+                         input=bytes(range(256)) * 2 + bytes([128]) * 256, capture_output=True).stdout
+    y = np.frombuffer(out[:256], np.uint8).astype(int)
+    move = y[16:236] - np.arange(16, 236)
+    return (steady.LIFT_MAX == 1.2 and rep["gamma"] == 1.2 and steady.lift_filter(1.2) in grade and rep["lifted"] < 55
+            and rise.max() <= 18 and y[16] == 16 and y[235] == 235 and (move >= 0).all() and move[:5].max() <= 1
+            and move.max() <= 16 and (np.diff(y[16:236]) >= 0).all() and out[512:] == bytes([128]) * 256)
+
+
+@check
+def a_shot_that_ends_in_the_dark_is_dark_and_a_flash_of_dark_is_not():
+    """M24's shot starts in the sun (80) and lands in the shade (54): the quarter of its frames in the dark decides, so
+    the landing is not darkened. A day shot with 2 dark frames of 16 is graded as always; nothing measured is too"""
+    import numpy as np
+
+    def shot(levels):
+        return np.stack([np.full((480, 270), n, np.uint8) for n in levels])
+    m24, rep = steady.shot_grade(shot([80] * 11 + [54] * 5), OLD_GRADE)
+    flash, _ = steady.shot_grade(shot([120] * 14 + [30] * 2), OLD_GRADE)
+    nothing, r0 = steady.shot_grade(np.zeros((0, 480, 270), np.uint8), OLD_GRADE)
+    return (m24 != OLD_GRADE and rep["low_light"] and 1 < rep["gamma"] <= 1.1 and rep["lifted"] >= steady.LIFT_TO > 55
+            and flash == OLD_GRADE and nothing == OLD_GRADE and r0["level"] is None)
+
+
+@check
+def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
+    """launch.render_v4: a dark payoff shot gets the low-light grade, its replay the same grade (not its own), a day
+    shot the old one"""
+    import numpy as np
+    import explainer
+    asked, grades = [], []
+
+    def light(video, s):
+        asked.append(s["n"])
+        return np.full((16, 480, 270), 54 if s["n"] == 1 else 150, np.uint8)
+
+    def make_shot(video, s, path, grade, log):
+        grades.append((s["n"], bool(s.get("replay")), grade))
+        return {"pieces": []}
+    with tempfile.TemporaryDirectory() as tmp:
+        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 36.0}], replay={"from": 20.6, "to": 21.4},
+                    lines=short()["lines"][:2] + [{"say": "Wait for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
+        folder = run_folder_with(tmp, [moment(Path(tmp) / "x.webm")], [one])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", Path(tmp) / "x.webm")],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "light": light,
+                                       "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+        e = data["shorts"][0]
+    if len(grades) != 3:
+        raise AssertionError("; ".join(e["problems"]))
+    (_, r1, g1), (_, r2, g2), (_, r3, g3) = grades
+    return (asked == [1, 3] and not r1 and r2 and not r3 and g1 == g2 and g1.startswith(",eq=saturation=1.25,lutyuv")
+            and g3 == explainer.graded(True))
+
+
 def main():
     ok = True
     for fn in CHECKS:

@@ -3086,15 +3086,15 @@ def v4_voice(lines, speed):
 
 
 def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, checker=None, hud6=None, synth=None,
-              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None):
+              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None):
     """One Short with engine v4 (editor-v3, Nov 20): payoff first. Before anything is made: the Short's one payoff
     (the interest gate: none, no Short), its shots as spans of the recording (the payoff whole inside one, no second
     twice, 15 s or more), an action payoff on the loudest moment (the hit), a hook about the HUD shown from frame 0.
     Then the first frame (blurry or blocked moves the start later), the voice and each line placed into the picture
     (ending before its cut; no voice over an action payoff; every cut on a sentence end or an event), the truth rules,
     clean and unused footage. Then the shots (one fixed 9:16 window, steadied only where that measures calmer, HUD
-    close-ups on top), every shot bright and full, the Short put together (assemble.py), every caption against its
-    frame. The makers are replaced in tests."""
+    close-ups on top; a dark shot graded for low light), every shot bright and full, the Short put together
+    (assemble.py), every caption against its frame. The makers are replaced in tests."""
     import explainer
     out_dir = Path(out_dir)
     kind = m["type"]
@@ -3110,6 +3110,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                                                                                 focus=s["focus"], grade=grade, log=log,
                                                                                 splits=s.get("splits", ()),
                                                                                 speed=s.get("speed", 1.0)))
+    light = light or (lambda v, s: steady().light_frames(v, s["from"], s["to"], steady().info_of(v), s["focus"]))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
@@ -3173,14 +3174,20 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                             "and render again")
 
     prof = clip.load_profile(m["profile"]) if m.get("profile") else clip.load_profile("gta6")
-    grade = explainer.graded(True)
+    normal = explainer.graded(True)
     (out_dir / "shots").mkdir(parents=True, exist_ok=True)
     report = []
+    grade = lit = None
     for s, ins in zip(plan["shots"], insets):
         split = pay["from"] - 0.3                 # steady.PAYOFF_SPLIT_S: the setup and the payoff's jolt apart
         s["splits"] = [split] if s["from"] + 0.5 < split < s["to"] - 0.5 else []
         path = out_dir / "shots" / f"shot{s['n']}.mp4"
-        rep = make_shot(m["path"], s, path, grade, log)
+        if grade is None or not s.get("replay"):  # the replay shows the payoff's shot again: the same grade
+            grade, lit = steady().shot_grade(light(m["path"], s), normal)
+        rep = dict(make_shot(m["path"], s, path, grade, log), light=lit)
+        if lit["low_light"]:
+            flags.append(f"LOW LIGHT: shot {s['n']} is dark (ungraded {lit['level']:.0f} of 255): no contrast or "
+                         f"vignette, shadows lifted (gamma {lit['gamma']:.2f}); look that it isn't washed out")
         if ins:
             made = path.with_name(f"shot{s['n']}_inset.mp4")
             add_inset(path, m["path"], ins, made, prof)

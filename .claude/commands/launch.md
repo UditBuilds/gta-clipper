@@ -162,7 +162,7 @@ beat format, with its loop ending, for comparison only.)
 ```
 
 It checks shorts.json (the payoff, the shots, truth and timing rules), finds a clear first frame, makes every shot
-(one fixed window, steadied where that measures calmer, HUD close-ups), places the voice, renders every Short (engine
+(one fixed window, steadied where that measures calmer, a dark shot's shadows gently lifted, HUD close-ups), places the voice, renders every Short (engine
 v4: the hook card, am_puck at 1.2, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
 payoff; no subscribe pill, no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
 the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short

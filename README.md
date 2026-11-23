@@ -1032,6 +1032,12 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 - **Words a minute, two ways** (`speech.wpm`, printed by `speech.py <short.mp4>`; a number, never a reason to fail): with
   the pauses (words over first word to last word, what a viewer hears) and voiced only (pauses of 0.1 s or more left
   out). The first speed test's 262 was three lines glued 0.12 s apart, so it had no pauses to count.
+- **A low-light grade** (`steady.shot_grade`, v4 only; Nov 23). v4's grade (contrast and a vignette) takes about 12 off
+  a dark picture's brightness, so M24's sunset shots failed the shot check's 55. A shot whose ungraded picture is dark
+  (a quarter of its frames under `LOW_LIGHT` = 70 of 255) now keeps only the grade's colour, and its shadows are lifted
+  until its darkest quarter averages 58, by a gamma of 1.03 to 1.2 at most, never below 6 % of white (black stays
+  black). Every other shot is graded exactly as before, and the check still measures the finished picture against 55. The
+  replay uses its payoff's grade. Before/after: `C:\AI\gta\shorts\pr30-first-seconds\lowlight_before_after.jpg`.
 - Three bugs: an early swear word found by the speech check now fails the Short with its moment, folder and hooks
   (it was a bare stub on the review page); `render()` and `render_one()` default to engine v4, as the command line
   does; a window the safety checks moved keeps the vision check's verdict (`verified`), so a crash or police the

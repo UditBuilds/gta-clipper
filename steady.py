@@ -39,6 +39,21 @@ PAYOFF_SPLIT_S = 0.3                      # a shot is also split this long befor
 FLAT_BLOCK, FLAT_LEVEL, FLAT_MAX = 30, 2.0, 0.30
 DETAIL_SHARE = 0.6                        # frame 0's detail at least this share of the same shot's later frames
 REPICK_S, REPICK_STEP_S = 1.5, 0.1        # a bad first frame moves the start later, up to this far
+# Low light (PR 30, Nov 23). v4's grade (contrast round mid-grey, and a vignette) takes about 12 off a dark picture's
+# mean brightness: M24's sunset went from 63 to 51 and its landing from 53 to 40, under the shot check's 55. So a shot
+# whose ungraded picture is under LOW_LIGHT (the old grade would leave it under about 57) keeps only the grade's
+# colour, and its shadows are lifted, as far as LIFT_TO and never past LIFT_MAX. All measured as the check measures.
+LOW_LIGHT = 70.0                          # the one line between "dark" and "graded as always"
+LIGHT_PART = 25                           # ...compared with the level a quarter of the shot's frames are under: a shot
+                                          # that starts in the sun and lands in the shade is a dark shot
+LIFT_TO = 58.0                            # the lift stops when the shot's darkest quarter averages this: the
+                                          # check's 55 and a little room, no brighter
+LIFT_MIN = 1.03                           # the gentlest: the colour step and the encoder took 0.6 off a dim shot,
+                                          # and a dark shot must never come out darker than it was
+LIFT_MAX = 1.2                            # the strongest gamma; a shot that needs more stays dark and fails the check
+LIFT_TOE = 0.06                           # below 6 % of white the lift fades to nothing: black stays black
+LIGHT_FRAMES = 16
+LOW_LIGHT_COLOUR = "eq=saturation=1.25"   # the colour half of explainer.GRADE
 PIECE_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-bf", "0", "-g", "30"]
 COLOUR_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
 
@@ -83,6 +98,59 @@ def geometry(info, focus=0.5):
 def finish(info, speed=1.0, grade=""):
     slow = f",setpts={1 / speed:g}*(PTS-STARTPTS)" if speed != 1.0 else ""
     return f"{slow},scale={W}:{H}:flags=lanczos{colour_fix(info)},fps={FPS}{grade},format=yuv420p,setsar=1"
+
+
+def light_frames(video, a, b, info, focus=0.5, count=LIGHT_FRAMES):
+    """The ungraded picture of a..b through the shot's fixed window, as the shot check sees a made clip: `count` grey
+    270x480 frames spread evenly (limited-range video, so grey is stretched to 0-255)."""
+    import numpy as np
+    static, _, _ = geometry(info, focus)
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.4f}", "-t", f"{b - a:.4f}", "-i", str(video), "-an",
+                          "-vf", f"setpts=PTS-STARTPTS,{static},fps={count / (b - a):.6f},"
+                          f"scale=270:480{colour_fix(info)},format=yuv420p,setparams=range=tv,"
+                          "scale=270:480,format=gray", "-frames:v", str(count), "-f", "rawvideo", "-"],
+                         capture_output=True).stdout
+    return np.frombuffer(raw[:len(raw) // (270 * 480) * 270 * 480], np.uint8).reshape(-1, 480, 270)
+
+
+def lift_curve(x, gamma):
+    """The shadow lift on brightness 0-1: gamma, fading to nothing under LIFT_TOE. 0 and 1 stay where they are."""
+    import numpy as np
+    x = np.asarray(x, dtype=np.float64)
+    return x + (x ** (1 / gamma) - x) * np.minimum(1.0, x / LIFT_TOE)
+
+
+def lift_filter(gamma):
+    """lift_curve as an ffmpeg filter, on the video's own black and white (16 and 235; plain eq=gamma starts at 0 and
+    would lift black to grey)."""
+    x = "max((val-minval)/(maxval-minval),0)"
+    return (f"lutyuv=y='round(minval+(maxval-minval)*({x}+(pow({x},{1 / gamma:.6f})-{x})*min(1,{x}/{LIFT_TOE})))'")
+
+
+def darkest_quarter(means):
+    import numpy as np
+    means = np.sort(np.asarray(means, dtype=np.float64))
+    return float(means[:max(1, round(len(means) * LIGHT_PART / 100))].mean())
+
+
+def shot_grade(frames, normal):
+    """(grade, report) for one shot from its ungraded frames (light_frames). Not dark, or nothing to measure: `normal`
+    (v4's grade as always). Dark: no contrast and no vignette (they darken), the colour kept, and the smallest lift
+    that brings its darkest quarter to LIFT_TO, from LIFT_MIN to LIFT_MAX."""
+    import numpy as np
+    if not len(frames):
+        return normal, {"level": None, "low_light": False, "gamma": 1.0}
+    level = float(np.percentile(frames.mean(axis=(1, 2)), LIGHT_PART))
+    if level >= LOW_LIGHT:
+        return normal, {"level": round(level, 1), "low_light": False, "gamma": 1.0}
+    for k in range(round(LIFT_MIN * 100), round(LIFT_MAX * 100) + 1):
+        gamma = k / 100
+        lut = 255 * lift_curve(np.arange(256) / 255, gamma)
+        lifted = darkest_quarter([lut[f].mean() for f in frames])
+        if lifted >= LIFT_TO:
+            break
+    return (f",{LOW_LIGHT_COLOUR},{lift_filter(gamma)}",
+            {"level": round(level, 1), "low_light": True, "gamma": gamma, "lifted": round(lifted, 1)})
 
 
 def count_frames(path):
