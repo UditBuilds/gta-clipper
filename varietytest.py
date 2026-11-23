@@ -128,8 +128,9 @@ def posted_topics_cost_points_and_match_only_their_own_moments():
     return (star[0] == launch.STRONG_REPEAT_COST and "wanted stars" in star[1] and "crime reported" in star[1]
             and bike == (launch.REPEAT_COST, ["motorbike crash (Short 6)"]) and truck == (0.0, [])
             and bike_then == (0.0, []) and {"motorbike crash (Short 6)", "tree effigy / passing out",
-                                             "crime needs a witness"} <= names
-            and len(now) - len(then) == 3), (star, bike, truck)
+                                             "crime needs a witness",
+                                             "can you survive jumping off an overpass"} <= names
+            and len(now) - len(then) == 4), (star, bike, truck)
 
 
 @check
