@@ -1392,6 +1392,28 @@ def running_out_of_memory_in_the_safety_checks_stops_with_a_plain_error():
     return issubclass(safety.MemoryError_, safety.SafetyError)
 
 
+@check
+def a_safety_shifted_window_keeps_the_vision_checks_verdict():
+    """PR 30: when the safety checks move a type's start, choose_types and story_gate rebuild that window's evidence;
+    they passed no verified=..., so a crash or police the frames never showed came back (the chase moment, with
+    safety answers that saw nothing). Now the shifted window keeps the verdict: no crash, no police, no crash payoff"""
+    rec = made_up_rec()
+    chase = next(m for m in launch.mine(rec) if 95 <= m["start_s"] <= 130)
+    opts = launch.type_options(rec, chase)
+    a0, a1 = opts["action"]["window"]
+    n0, n1 = opts["narrated"]["window"]
+    m = dict(chase, verified={}, safe_options={"action": [a0 + 1.0, a1], "narrated": [n0 + 1.0, n1]})
+    out = launch.choose_types([dict(m)], {"rec_a": rec})[0]
+    unseen = {(e["kind"], e["value"]) for k in out["options"] for e in out["options"][k]["evidence"]
+              if e["kind"] in ("event", "police")}
+    gate = dict(m, safe_options={"action": [n0 + 1.0, n1]})
+    launch.story_gate(rec, gate, "gta6", True)
+    seen = dict(m, verified={"crash": [[n0, n1]]}, safe_options={"action": [n0 + 1.0, n1]})
+    launch.story_gate(rec, seen, "gta6", True)
+    return (not unseen and "crash" not in gate["point"]["action_payoff"]
+            and "crash" in seen["point"]["action_payoff"])
+
+
 def main():
     ok = True
     for fn in CHECKS:

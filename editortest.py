@@ -45,11 +45,11 @@ def short(**over):
          "title": "This GTA 6 CRASH came out of nowhere", "description": "A car speeds down the road. Then it crashes.",
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
          "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
-         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.3},
+         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.0},           # PR 30: on frame 0 (was 14.3)
                    {"say": "Wait for it.", "claim": "hype", "at": 17.5},
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
-                   {"say": "You just keep going.", "claim": "hype", "at": 30.3}]}
+                   {"say": "You just keep going.", "claim": "hype", "at": 34.8}]}  # PR 30: ends the Short (was 30.3)
     s.update(over)
     return s
 
@@ -355,7 +355,7 @@ def a_slowed_shot_splits_at_camera_cuts_on_its_own_timeline():
     return steady.split_points(10.0, 60, [10.4], 0.5) == [24, 36] and steady.split_points(10.0, 60, [10.4]) == [12, 48]
 
 
-# --- 6. The voice at 1.2 and the punchy style ---
+# --- 6. The voice at 1.2 (the owner's pick by ear, Nov 23) and the punchy style ---
 
 @check
 def punchy_lines_and_hype():
@@ -373,9 +373,28 @@ def punchy_lines_and_hype():
 
 
 @check
-def the_voice_speed_is_1_2():
-    """the owner's speed: engine v4 speaks at 1.2 unless the Short says otherwise"""
-    return cutplan.SPEED == 1.2
+def the_voice_speed_is_1_20():
+    """the owner's speed, picked by ear on Nov 23: engine v4 speaks at 1.20 unless the Short says otherwise, in the
+    plan and in assemble.build's own default; explainer warns above 1.4"""
+    import inspect
+    import assemble
+    import explainer
+    return (cutplan.SPEED == 1.2 and inspect.signature(assemble.build).parameters["speed"].default == 1.2
+            and explainer.MAX_SPEED == 1.4)
+
+
+@check
+def words_a_minute_with_the_pauses_and_voiced_only():
+    """speech.wpm: 6 words in 0.0-1.2 s, a 2.8 s pause (a payoff), 6 more in 4.0-5.2 s: 12 words over 5.2 s is 138 a
+    minute with the pauses, 300 voiced only; the 0.05 s gaps inside a line count as voice; one line has both the
+    same; nothing heard gives None"""
+    import speech
+    run = [(0.2 * k, 0.2 * k + 0.15, "word") for k in range(5)] + [(1.0, 1.2, "word")]
+    two = speech.wpm(run + [(a + 4.0, b + 4.0, w) for a, b, w in run])
+    one = speech.wpm(run)
+    return (two["words"] == 12 and abs(two["wpm_with_pauses"] - 138.5) < 0.1 and abs(two["wpm_voiced_only"] - 300) < 0.1
+            and abs(one["wpm_with_pauses"] - 300) < 0.1 and one["wpm_voiced_only"] == one["wpm_with_pauses"]
+            and speech.wpm([])["wpm_with_pauses"] is None and speech.wpm([(0.0, 0.1, "-")])["words"] == 0)
 
 
 # --- 7 and end to end: a real Short from a made-up recording, through launch.render ---
@@ -479,6 +498,346 @@ def a_short_without_a_payoff_is_rejected_on_the_page():
                              v4_parts={"synth": fake_voice([]), "loudest": lambda *a: 21.0})
         e = data["shorts"][0]
         return e["status"] == "FAILED" and has(e["problems"], "No clear payoff, no Short")
+
+
+@check
+def early_swearing_fails_with_the_shorts_metadata():
+    """PR 30: the speech check's "swearing in the first 7 s" was raised outside render_one's try, so render() replaced
+    the Short's entry with a bare stub (no moment, folder, hooks or type on the review page). Now it is FAILED with
+    all of them and the reason"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
+        folder = run_folder_with(tmp, [moment(v)], [short()])
+        old = launch.speech_check
+        launch.speech_check = lambda path, log=print, check=None: {"early": [(1.2, "damn")], "later": [], "words": 9}
+        try:
+            data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                                 facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                                 v4_parts={"synth": fake_voice([]), "build": no_music_build})
+        finally:
+            launch.speech_check = old
+        e = data["shorts"][0]
+        return (e["status"] == "FAILED" and has(e["problems"], "spoken swearing in the first 7 s")
+                and e.get("moment") == "M1" and e.get("type") == "action" and e.get("folder")
+                and e.get("hooks") == short()["hooks"])
+
+
+@check
+def render_and_render_one_default_to_engine_v4_like_the_command_line():
+    """PR 30: main() renders with v4 by default, but render() and render_one() defaulted to v3, so a caller that
+    left the engine out got the old engine"""
+    import argparse
+    import inspect
+    seen = {}
+    real = argparse.ArgumentParser.parse_args
+    old_render = launch.render
+    try:
+        argparse.ArgumentParser.parse_args = lambda self, *a, **k: real(self, ["render"])
+        launch.render = lambda *a, **k: seen.update(k) or {"shorts": []}
+        launch.main()
+    finally:
+        argparse.ArgumentParser.parse_args = real
+        launch.render = old_render
+    return (seen.get("engine") == "v4"
+            and inspect.signature(launch.render).parameters["engine"].default == "v4"
+            and inspect.signature(launch.render_one).parameters["engine"].default == "v4")
+
+
+# --- 8. The first seconds (PR 30) ---
+
+@check
+def the_first_word_by_0_2_s_the_hook_by_3_5_s_line_2_by_4_s():
+    """the swipe is decided in 2-3 s: line 1 0.3 s in is refused (first word by 0.2 s), a hook still talking at 3.9 s
+    is refused, line 2 at 4.5 s is refused; the fixture (line 1 at 0.0, ends 0.56; line 2 at 3.5) passes"""
+    late = short(lines=[dict(short()["lines"][0], at=14.3)] + short()["lines"][1:])
+    long_hook = short(lines=[{"say": "Watch this car go. It is fast. It is red. Look at it now.", "claim": "hype",
+                       "at": 14.0}]
+                      + short()["lines"][1:])
+    slow_two = short(lines=short()["lines"][:1] + [dict(short()["lines"][1], at=18.5)] + short()["lines"][2:])
+    p, problems, _ = cutplan.plan(short(), moment(), secs(short()), 21.0)
+    return (has(problems_of(late), "line 1 starts 0.30 s in") and has(problems_of(long_hook), "ends 3.9 s in")
+            and has(problems_of(slow_two), "line 2 starts 4.5 s in") and not problems
+            and p["placed"][0]["start"] == 0.0 and p["placed"][1]["start"] <= cutplan.SECOND_LINE_S)
+
+
+class LeadKokoro:
+    """Kokoro's place in explainer.speak_sentence: 0.25 s of near silence, then a tone, as the model starts a line."""
+
+
+def fake_sentence(kokoro, sentence, voice, speed):
+    import numpy as np
+    rate = 24000
+    lead, body = np.full(int(0.25 * rate), 1e-5, np.float32), 0.3 * np.sin(np.arange(int(0.6 * rate)) / 10.0)
+    words = sentence.rstrip(".!?").split()
+    step = 0.6 / len(words)
+    times = [(0.25 + k * step, 0.25 + (k + 1) * step) for k in range(len(words))]
+    return np.concatenate([lead, body.astype(np.float32)]), rate, words, times, True
+
+
+@check
+def kokoros_lead_in_is_trimmed_so_the_line_starts_on_its_first_word():
+    """assemble.speak cuts each sentence's quiet lead-in (0.25 s in the stand-in) to 0.02 s and moves the word times
+    with it: the first word starts at 0.02 s, not 0.25 s, and the line is 0.23 s shorter"""
+    import assemble
+    import explainer
+    old = explainer.speak_sentence
+    explainer.speak_sentence = fake_sentence
+    try:
+        out = assemble.speak(LeadKokoro(), [{"say": "Watch this car."}], "am_puck", 1.2)
+    finally:
+        explainer.speak_sentence = old
+    w = out[0]["words"]
+    return abs(w[0]["start"] - 0.02) < 0.011 and abs(out[0]["seconds"] - 0.62) < 0.011 and w[1]["start"] > w[0]["start"]
+
+
+SPOIL = ["This GTA 6 motorbike ride ends BADLY", "He crashes at 200 mph", "The bike explodes", "He dies here",
+         "He gets busted in GTA 6", "This rider gets wiped out", "The jump fails", "He survives the fall",
+         "He doesn't make it", "This SUV blows up", "He got away clean"]
+CLEAN = ["Watch the black SUV in GTA 6", "Can you survive jumping off this bridge in GTA 6?", "Watch this crash",
+         "Does this jump end badly?", "Watch the bike on the left", "Wait for the cops"]
+
+
+@check
+def a_hook_title_or_open_card_that_tells_the_result_is_refused():
+    """the flop's hook ("ends BADLY") gave the result away and lost 59 %: result words are refused in any hook, the
+    title and the open card; a question may name one; "crash" as a thing to watch is not a result"""
+    bad = [t for t in SPOIL if not cutplan.spoilers_in(t)]
+    good = [t for t in CLEAN if cutplan.spoilers_in(t)]
+    hook = problems_of(short(hooks=["Watch this crash", "This GTA 6 motorbike ride ends BADLY", "x"]))
+    title = problems_of(short(title="The black SUV crashes in GTA 6"))
+    card = problems_of(short(open_card="He dies"))
+    return (not bad and not good and has(hook, "hook 2: \"This GTA 6 motorbike ride ends BADLY\" tells the result")
+            and has(title, "title:") and has(card, "open card:") and not problems_of(short()))
+
+
+def suv_moment(at=13.0, to=14.5, extra=()):
+    m = moment()
+    m["evidence"] = m["evidence"] + [{"id": "E3", "kind": "seen", "value": "A black SUV waits at the lights.",
+                                      "from_s": at, "to_s": to, "source": "made up"}, *extra]
+    return m
+
+
+@check
+def the_hooks_subject_is_in_the_evidence_at_frame_0():
+    """"Watch the black SUV" needs the SUV in the moment's evidence at shot 1's start (13.0-14.5 covers 14.0); seen
+    only later it is refused; "the cops" with the police not seen by the vision check is refused; a hook that names
+    no subject ("Watch this crash") needs nothing"""
+    hooks = ["Watch the black SUV in GTA 6", "Wait for the cops", "Watch this crash"]
+    ok = problems_of(short(hooks=hooks, star=0), m=suv_moment())
+    later = problems_of(short(hooks=hooks, star=0), m=suv_moment(18.0, 24.0))
+    cops = problems_of(short(hooks=hooks, star=1), m=suv_moment(extra=[{
+        "id": "E4", "kind": "seen", "value": "Police cars block the road.", "from_s": 12.0, "to_s": 18.0,
+        "not_seen": ["police"], "source": "made up"}]))
+    none = problems_of(short(hooks=hooks, star=2))
+    return (not has(ok, "no evidence shows it") and has(later, "the hook names 'suv'") and has(cops, "names 'police'")
+            and not has(none, "no evidence shows it"))
+
+
+@check
+def a_moved_first_frame_is_checked_again_for_the_hooks_subject():
+    """steady.clear_start moves shot 1 from 14.0 to 15.0 s (a blurred frame): line 1 moves with it to the new frame 0,
+    and the SUV, seen only up to 14.5 s, is no longer at frame 0, so the Short is refused before anything is made"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = Path(tmp) / "synth.mp4"
+        v.write_bytes(b"x")
+        pick = dict(suv_moment(), path=str(v))
+        hooks = ["Watch the black SUV", "Watch this car go", "Watch this crash"]
+        folder = run_folder_with(tmp, [pick], [short(hooks=hooks, star=0)])
+        moved = lambda video, a, latest, focus: (a + 1.0, [], [{"at": a, "why": ["it is blurry"]}])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "loudest": lambda *a: 21.0, "clear": moved})
+        e = data["shorts"][0]
+        return (e["status"] == "FAILED" and has(e["problems"], "no evidence shows it at shot 1's start (15.00 s)")
+                and not has(e["problems"], "in none of the shots"))
+
+
+@check
+def the_open_card_is_5_words_at_most_small_and_above_the_action():
+    """the open card: at most 5 words ("Watch the black SUV in GTA 6" makes "Watch the black SUV"; a 7-word card is
+    refused), at most 120 px, its text centred at y 487 of 1920 and fitted into y 390-584 (the top of the safe area,
+    over a HUD close-up's top at 600), for 2 s from frame 0, in lines of up to 20 characters ("Watch the overpass
+    railing" takes 2 lines, where explainer's 13 made 3 and a smaller font)"""
+    import re
+    import assemble
+    derived = cutplan.card_words(short(hooks=["Watch the black SUV in GTA 6", "b", "c"], star=0))
+    long_ = problems_of(short(open_card="Watch this black SUV take the bridge"))
+    ev = assemble.card_events("WATCH THE|BLACK SUV")
+    pos = [tuple(map(float, x)) for e in ev for x in re.findall(r"\\pos\((\d+),(\d+)\)", e)]
+    size = [int(x) for e in ev for x in re.findall(r"\\fs(\d+)", e)]
+    lines = launch.open_card_text("Watch the overpass railing", assemble.CARD_CHARS)
+    return (derived == "Watch the black SUV" and has(long_, "has 7 words; at most 5") and pos
+            and lines == "WATCH THE OVERPASS|RAILING"
+            and all(380 <= y <= 655 for _, y in pos) and size and max(size) <= assemble.CARD_SIZE
+            and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
+
+
+@check
+def the_short_ends_as_the_talking_ends_or_on_the_replay():
+    """no dead air at the end: the last word 4.6 s before the end is refused; the fixture's last word ends 0.08 s
+    before; an ending on the slow-mo replay is allowed however long after the last word"""
+    early = short(lines=short()["lines"][:3] + [dict(short()["lines"][3], at=30.3)])
+    shots = [{"n": 1, "from": 0.0, "to": 6.0, "start": 0.0, "end": 6.0},
+             {"n": 2, "from": 5.0, "to": 5.8, "start": 6.0, "end": 7.6, "speed": 0.5, "replay": True}]
+    placed = [{"line": 1, "start": 0.0, "end": 1.0}]
+    return (has(problems_of(early), "goes on 4.6 s after the last word") and not problems_of(short())
+            and not cutplan.ending_problems(shots, placed)
+            and cutplan.ending_problems(shots[:1], placed))
+
+
+@check
+def no_subscribe_pill_and_no_click_in_a_v4_short():
+    """the v4 Short has no "@NeonGetaway • Subscribe" pill in its captions and no click in its sound effects (only the
+    cuts' whooshes), and its first word is at 0.0 s"""
+    with tempfile.TemporaryDirectory() as tmp:
+        v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
+        folder = run_folder_with(tmp, [moment(v)], [short()])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "build": no_music_build})
+        e = data["shorts"][0]
+        if e["status"] != "READY":
+            raise AssertionError("; ".join(e["problems"]))
+        out = Path(e["folder"])
+        ass = (out / "captions.ass").read_text(encoding="utf-8")
+        log = json.loads((out / "log.json").read_text(encoding="utf-8"))
+        last = max(w["end_s"] for w in log["word_times"])
+        return ("Subscribe" not in ass and "NeonGetaway" not in ass
+                and all(x["kind"] == "whoosh" for x in log["sfx"]) and log["word_times"][0]["start_s"] <= 0.2
+                and log["durations"]["video_s"] - last <= cutplan.END_AFTER_WORDS_S + 0.05)
+
+
+# --- PR 30 (Nov 23): the low-light grade ---
+
+OLD_GRADE = ",eq=contrast=1.09:saturation=1.25,vignette=angle=0.35"     # pinned: what every v4 shot had until Nov 23
+
+
+def light_video(path, level, seconds=2):
+    """A made-up 16:9 recording: a fine texture round one brightness (a sunset street ~60, a day street ~150)."""
+    src = f"color=c=0x{level:02x}{level:02x}{level:02x}:size=1920x1080:rate=30:duration={seconds}"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-vf",
+                    "noise=alls=40:allf=u,format=yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-crf", "12", "-colorspace", "bt709", "-color_range", "tv", str(path)], check=True, capture_output=True)
+    return path
+
+
+def graded_mean(video, tmp, grade, name, info):
+    import proof
+    made = steady.make_piece(video, 0.2, 15, Path(tmp) / f"{name}.mp4", info, grade=grade)
+    return proof.frame_stats(proof.clip_frames(made, [0.25])[0], 270, 480)["mean"]
+
+
+@check
+def a_dark_shot_is_not_darkened():
+    """a dark made-up shot (about 53, M24's landing): the old grade darkens it; the low-light grade has no contrast or
+    vignette, is never darker than the ungraded picture and brings it over the check's minimum, which is still 55 and
+    still measured on the graded clip; a dim one (about 60) isn't darker either"""
+    import proof
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for level in (53, 65):
+            v = light_video(Path(tmp) / f"v{level}.mp4", level)
+            info = steady.info_of(v)
+            grade, rep = steady.shot_grade(steady.light_frames(v, 0.0, 1.5, info), OLD_GRADE)
+            none, old, new = (graded_mean(v, tmp, g, f"{n}{level}", info)
+                              for g, n in (("", "none"), (OLD_GRADE, "old"), (grade, "new")))
+            print(f"       level {level}: ungraded {none:.1f}, old grade {old:.1f}, new {new:.1f} (gamma {rep['gamma']})")
+            out.append(rep["low_light"] and "contrast" not in grade and "vignette" not in grade and old < none - 5
+                       and new >= none and abs(rep["level"] - none) < 1.0)
+            if level == 53:
+                out.append(none < 55 and proof.DARK_MEAN == 55 and new > none and new >= 55)
+    return all(out)
+
+
+@check
+def a_daytime_shot_is_graded_exactly_as_before():
+    """a bright made-up shot gets the old grade, letter for letter, and the made clip is the same picture as the old
+    grade's, byte for byte; the line is one constant (70): just above it nothing changes"""
+    import numpy as np
+    import explainer
+    with tempfile.TemporaryDirectory() as tmp:
+        v = light_video(Path(tmp) / "day.mp4", 150)
+        info = steady.info_of(v)
+        grade, rep = steady.shot_grade(steady.light_frames(v, 0.0, 1.5, info), explainer.graded(True))
+        made = [steady.make_piece(v, 0.2, 10, Path(tmp) / f"{n}.mp4", info, grade=g)
+                for n, g in (("now", grade), ("before", OLD_GRADE))]
+        raw = [subprocess.run(["ffmpeg", "-v", "error", "-i", str(x), "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"],
+                              capture_output=True).stdout for x in made]
+
+    def flat(n):
+        return np.full((16, 480, 270), n, np.uint8)
+    over, _ = steady.shot_grade(flat(71), OLD_GRADE)
+    under, _ = steady.shot_grade(flat(69), OLD_GRADE)
+    return (grade == OLD_GRADE == explainer.graded(True) and not rep["low_light"] and raw[0] == raw[1]
+            and len(raw[0]) == 10 * 1080 * 1920 * 3 // 2 and steady.LOW_LIGHT == 70 and over == OLD_GRADE
+            and under != OLD_GRADE)
+
+
+@check
+def the_lift_is_capped_and_black_stays_black():
+    """a night-dark shot gets the strongest lift and no more (gamma 1.2, at most 18 of 255), and stays under the check;
+    on real video levels through ffmpeg, black (16) and white (235) don't move, the darkest shadows (to 2 % of white)
+    move at most 1, nothing gets darker, the order of the greys is kept and the colour planes are untouched"""
+    import numpy as np
+    night = np.random.default_rng(1).integers(0, 50, (16, 480, 270)).astype(np.uint8)
+    grade, rep = steady.shot_grade(night, OLD_GRADE)
+    x = np.arange(256) / 255
+    rise = 255 * (steady.lift_curve(x, steady.LIFT_MAX) - x)
+    out = subprocess.run(["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "256x2", "-i", "-",
+                          "-vf", steady.lift_filter(steady.LIFT_MAX), "-f", "rawvideo", "-"],
+                         input=bytes(range(256)) * 2 + bytes([128]) * 256, capture_output=True).stdout
+    y = np.frombuffer(out[:256], np.uint8).astype(int)
+    move = y[16:236] - np.arange(16, 236)
+    return (steady.LIFT_MAX == 1.2 and rep["gamma"] == 1.2 and steady.lift_filter(1.2) in grade and rep["lifted"] < 55
+            and rise.max() <= 18 and y[16] == 16 and y[235] == 235 and (move >= 0).all() and move[:5].max() <= 1
+            and move.max() <= 16 and (np.diff(y[16:236]) >= 0).all() and out[512:] == bytes([128]) * 256)
+
+
+@check
+def a_shot_that_ends_in_the_dark_is_dark_and_a_flash_of_dark_is_not():
+    """M24's shot starts in the sun (80) and lands in the shade (54): the quarter of its frames in the dark decides, so
+    the landing is not darkened. A day shot with 2 dark frames of 16 is graded as always; nothing measured is too"""
+    import numpy as np
+
+    def shot(levels):
+        return np.stack([np.full((480, 270), n, np.uint8) for n in levels])
+    m24, rep = steady.shot_grade(shot([80] * 11 + [54] * 5), OLD_GRADE)
+    flash, _ = steady.shot_grade(shot([120] * 14 + [30] * 2), OLD_GRADE)
+    nothing, r0 = steady.shot_grade(np.zeros((0, 480, 270), np.uint8), OLD_GRADE)
+    return (m24 != OLD_GRADE and rep["low_light"] and 1 < rep["gamma"] <= 1.1 and rep["lifted"] >= steady.LIFT_TO > 55
+            and flash == OLD_GRADE and nothing == OLD_GRADE and r0["level"] is None)
+
+
+@check
+def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
+    """launch.render_v4: a dark payoff shot gets the low-light grade, its replay the same grade (not its own), a day
+    shot the old one"""
+    import numpy as np
+    import explainer
+    asked, grades = [], []
+
+    def light(video, s):
+        asked.append(s["n"])
+        return np.full((16, 480, 270), 54 if s["n"] == 1 else 150, np.uint8)
+
+    def make_shot(video, s, path, grade, log):
+        grades.append((s["n"], bool(s.get("replay")), grade))
+        return {"pieces": []}
+    with tempfile.TemporaryDirectory() as tmp:
+        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 36.0}], replay={"from": 20.6, "to": 21.4},
+                    lines=short()["lines"][:2] + [{"say": "Wait for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
+        folder = run_folder_with(tmp, [moment(Path(tmp) / "x.webm")], [one])
+        data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", Path(tmp) / "x.webm")],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "light": light,
+                                       "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+        e = data["shorts"][0]
+    if len(grades) != 3:
+        raise AssertionError("; ".join(e["problems"]))
+    (_, r1, g1), (_, r2, g2), (_, r3, g3) = grades
+    return (asked == [1, 3] and not r1 and r2 and not r3 and g1 == g2 and g1.startswith(",eq=saturation=1.25,lutyuv")
+            and g3 == explainer.graded(True))
 
 
 def main():

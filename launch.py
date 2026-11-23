@@ -1273,7 +1273,7 @@ def choose_types(picks, recs):
                     del opts[k]
                 elif k in opts and list(m["safe_options"][k]) != list(opts[k]["window"]):
                     opts[k]["window"] = list(m["safe_options"][k])
-                    opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
+                    opts[k]["evidence"] = evidence(rec, *m["safe_options"][k], verified=m.get("verified"))
         m["options"] = {k: v for k, v in opts.items() if k in ("action", "narrated")}
         fits = [k for k in ("action", "narrated") if opts.get(k, {}).get("fits")]
         if m.get("topic") and "narrated" in fits:      # topic first (launch-fixes): a topic is taught, narrated
@@ -1493,7 +1493,7 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
                 del opts[k]
             elif list(m["safe_options"][k]) != list(opts[k]["window"]):
                 opts[k]["window"] = list(m["safe_options"][k])
-                opts[k]["evidence"] = evidence(rec, *m["safe_options"][k])
+                opts[k]["evidence"] = evidence(rec, *m["safe_options"][k], verified=m.get("verified"))
     nar = opts.get("narrated")
     formats = []
     if nar:
@@ -2445,13 +2445,14 @@ SEEN_WORDS = {"police": "police", "cop": "police", "cops": "police", "officer": 
               "buildings": "buildings"}
 
 
-def open_card_text(hook):
-    """The hook as explainer's open card: upper case, 2-3 lines of at most OPEN_CARD_CHARS, or None if it can't fit."""
+def open_card_text(hook, chars=OPEN_CARD_CHARS):
+    """The hook as explainer's open card: upper case, 2-3 lines of at most `chars`, or None if it can't fit. Engine v4's
+    smaller card takes longer lines (assemble.CARD_CHARS), so it needs fewer of them in its band."""
     words, lines = str(hook).upper().split(), [""]
     for w in words:
-        if len(w) > OPEN_CARD_CHARS:
+        if len(w) > chars:
             return None
-        if lines[-1] and len(lines[-1]) + 1 + len(w) > OPEN_CARD_CHARS:
+        if lines[-1] and len(lines[-1]) + 1 + len(w) > chars:
             lines.append(w)
         else:
             lines[-1] = (lines[-1] + " " + w).strip()
@@ -3085,15 +3086,15 @@ def v4_voice(lines, speed):
 
 
 def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, checker=None, hud6=None, synth=None,
-              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None):
+              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None):
     """One Short with engine v4 (editor-v3, Nov 20): payoff first. Before anything is made: the Short's one payoff
     (the interest gate: none, no Short), its shots as spans of the recording (the payoff whole inside one, no second
     twice, 15 s or more), an action payoff on the loudest moment (the hit), a hook about the HUD shown from frame 0.
     Then the first frame (blurry or blocked moves the start later), the voice and each line placed into the picture
     (ending before its cut; no voice over an action payoff; every cut on a sentence end or an event), the truth rules,
     clean and unused footage. Then the shots (one fixed 9:16 window, steadied only where that measures calmer, HUD
-    close-ups on top), every shot bright and full, the Short put together (assemble.py), every caption against its
-    frame. The makers are replaced in tests."""
+    close-ups on top; a dark shot graded for low light), every shot bright and full, the Short put together
+    (assemble.py), every caption against its frame. The makers are replaced in tests."""
     import explainer
     out_dir = Path(out_dir)
     kind = m["type"]
@@ -3109,6 +3110,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                                                                                 focus=s["focus"], grade=grade, log=log,
                                                                                 splits=s.get("splits", ()),
                                                                                 speed=s.get("speed", 1.0)))
+    light = light or (lambda v, s: steady().light_frames(v, s["from"], s["to"], steady().info_of(v), s["focus"]))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
@@ -3136,13 +3138,18 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                       + "; ".join(tried[0]["why"]) + ")")
         log("  " + first_note)
         short = dict(short, shots=[dict(short["shots"][0], **{"from": start})] + list(short["shots"][1:]))
+        # PR 30: a line that was to start in the seconds now left out (line 1, on frame 0) starts on the new frame 0
+        old0 = s1["from"]
+        lines = [dict(ln, at=start) if cutplan.number(ln.get("at")) and old0 - 1e-6 <= ln["at"] < start else ln
+                 for ln in lines]
+        short = dict(short, lines=lines)
         plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
         if problems:
             raise RenderProblem("\n  ".join(problems))
 
     speed = short.get("speed", cutplan.SPEED)
     if not cutplan.number(speed) or not 0.8 <= speed <= 1.4:
-        raise RenderProblem("speed is the voice's speed, 0.8-1.4 (the owner's is 1.2)")
+        raise RenderProblem(f"speed is the voice's speed, 0.8-1.4 (the default is {cutplan.SPEED:g})")
     spoken = (synth or v4_voice)(lines, speed)
     cams = sorted({c for s in plan["shots"] for c in cuts(m["path"], s["from"], s["to"])})
     plan, problems, more = cutplan.plan(short, m, [sp["seconds"] for sp in spoken], loud, cams, hud_words)
@@ -3167,14 +3174,20 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                             "and render again")
 
     prof = clip.load_profile(m["profile"]) if m.get("profile") else clip.load_profile("gta6")
-    grade = explainer.graded(True)
+    normal = explainer.graded(True)
     (out_dir / "shots").mkdir(parents=True, exist_ok=True)
     report = []
+    grade = lit = None
     for s, ins in zip(plan["shots"], insets):
         split = pay["from"] - 0.3                 # steady.PAYOFF_SPLIT_S: the setup and the payoff's jolt apart
         s["splits"] = [split] if s["from"] + 0.5 < split < s["to"] - 0.5 else []
         path = out_dir / "shots" / f"shot{s['n']}.mp4"
-        rep = make_shot(m["path"], s, path, grade, log)
+        if grade is None or not s.get("replay"):  # the replay shows the payoff's shot again: the same grade
+            grade, lit = steady().shot_grade(light(m["path"], s), normal)
+        rep = dict(make_shot(m["path"], s, path, grade, log), light=lit)
+        if lit["low_light"]:
+            flags.append(f"LOW LIGHT: shot {s['n']} is dark (ungraded {lit['level']:.0f} of 255): no contrast or "
+                         f"vignette, shadows lifted (gamma {lit['gamma']:.2f}); look that it isn't washed out")
         if ins:
             made = path.with_name(f"shot{s['n']}_inset.mp4")
             add_inset(path, m["path"], ins, made, prof)
@@ -3207,7 +3220,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     import assemble
     hooks, star = short.get("hooks") or [], short.get("star")
     hook = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
-    card = short.get("open_card") or (open_card_text(hook) if hook else None)
+    card = cutplan.card_words(short)              # PR 30: at most 5 words (cutplan.hook_text_problems)
+    card = open_card_text(card, assemble.CARD_CHARS) if card else None
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
                                         quiet if kind == "action" else None, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,
@@ -3237,7 +3251,7 @@ def short_folder(folder, n, title):
 
 
 def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_cold_open=False, log=print,
-               checker=None, timing=None, narrated_render=None, action_render=None, engine="v3", synth=None,
+               checker=None, timing=None, narrated_render=None, action_render=None, engine="v4", synth=None,
                v2_render=None, v3_render=None, used=None, hud6=None, v4_parts=None):
     """One Short, start to finish. Returns its entry for render.json (status READY or FAILED, with the problems).
     v4_parts: engine v4's makers, replaced in tests (render_v4's keyword arguments)."""
@@ -3318,10 +3332,11 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
             flags.append("SOUND: the game's own sound is in (car radio, mission music, dialogue). Spoken swearing is "
                          "NOT checked (no speech-to-text): listen once before uploading")
     else:
-        if heard["early"]:
-            raise RenderProblem("spoken swearing in the first 7 s (speech check): "
-                                + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
-                                + "; pick another start or footage without that line")
+        if heard["early"]:                    # FAILED with its metadata (moment, folder, hooks), not a bare stub
+            entry["problems"] = ["spoken swearing in the first 7 s (speech check): "
+                                 + ", ".join(f"{w!r} at {t:.1f} s" for t, w in heard["early"])
+                                 + "; pick another start or footage without that line"]
+            return entry
         for t, w in heard["later"]:
             flags.append(f"SWEARING: {w!r} is said at {t:.1f} s (speech check); cut it or mute that part")
         if game_sound and not heard["later"]:
@@ -3368,7 +3383,7 @@ def kept_results(old, written):
 
 def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_dir=SHORTS_DIR, today=None, log=print,
            facts=None, checker="auto", timing=None, narrated_render=None, action_render=None, indexes=None,
-           engine="v3", synth=None, v2_render=None, v3_render=None, v4_parts=None):
+           engine="v4", synth=None, v2_render=None, v3_render=None, v4_parts=None):
     """The render stage for a run folder (default: the newest). Every Short in shorts.json, or only --short N.
     Returns the render.json data; review.html is written next to it."""
     import facts as facts_file

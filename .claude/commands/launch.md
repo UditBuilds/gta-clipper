@@ -89,7 +89,7 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    then the payoff. No play-by-play ("Then the SUV pulls up ..."). `"claim"` is `on_screen` (cite `evidence` on
    screen while it is said, and `teaches`), `fact` (`facts` from facts.json), `ask` (a question with `answered_by`)
    or **`hype`**: at most 5 words that claim nothing ("Watch this.", "Wait for it."). Anything a line names (a truck,
-   the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (`"speed"` changes it).
+   the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (the owner's pick; `"speed"` changes it).
 6. **One slow-mo replay, action Shorts only** (the only second shown twice): `"replay": {"from": s, "to": s}` names
    the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
    plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
@@ -98,6 +98,25 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    replay comes straight after it (Short 6's payoff ran 0.3 s into a swing, which flashed just before the replay).
 7. **Words the voice says unclearly get misheard** (Nov 20: "Lane closed?" was heard as "Laying closed", "Easy." as
    "He's here"). The swear check transcribes the finished Short; if its words differ from yours, reword.
+8. **The first seconds decide the swipe** (PR 30; YouTube Studio: hits kept 71-74 % of viewers, flops 41-48 %).
+   Code refuses a Short that breaks these (cutplan.py):
+   - **Line 1 starts on frame 0**: its first word by 0.2 s, so its `"at"` is shot 1's `"from"` (the voice's quiet
+     lead-in is trimmed). If the first frame moves later (rule 3), line 1 moves with it.
+   - **The spoken hook (line 1) has ended by 3.5 s; line 2 starts by 4.0 s.** In an action Short both come before the
+     payoff (which starts 1.5 s in at the earliest and has no voice over it): plan the setup shot for that.
+   - **No hook, title or open card tells the result**: "ends badly", "crashes", "dies", "explodes", "gets busted",
+     "wiped out", "fails", "survives", "doesn't make it", "blows up", "gets away" ... are refused. Name what to watch,
+     or ask: a question may ("Can you survive jumping off this bridge in GTA 6?"). "Watch this crash" names a thing
+     to watch and is fine. This holds for all 3 hooks, since `--hook N` can use any of them.
+   - **What the starred hook names is on screen at frame 0**: its main subject (the first of: SUV, car, truck, bike,
+     bus, boat, helicopter, plane, cops/police, bridge/overpass, highway, beach, train, gator) must be in the pick's
+     evidence at shot 1's start (an evidence line or label whose span covers it). Start shot 1 where it is seen, or
+     name what is there.
+   - **The open card has at most 5 words.** Without `"open_card"` it is the starred hook less a trailing "in GTA 6"
+     ("Watch the black SUV in GTA 6" makes "WATCH THE BLACK SUV"). It sits in the top of the safe area, above the
+     action, for 2 s.
+   - **The Short ends as the talking ends**: at most 0.5 s after the last word, unless its last shot is the slow-mo
+     replay (rule 6). There is no subscribe pill.
 
 ```json
 {"shorts": [
@@ -111,7 +130,7 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
              {"from": 288.0, "to": 291.6}],
    "lines": [
      {"say": "Watch this, you're flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
-      "teaches": "the setup: a fast weave through traffic", "at": 265.25},
+      "teaches": "the setup: a fast weave through traffic", "at": 265.0},
      {"say": "Wait for it.", "claim": "hype", "at": 267.45},
      {"say": "And the truck didn't even notice.", "claim": "on_screen", "evidence": ["E3"],
       "teaches": "the truck keeps driving after the hit", "at": 270.15},
@@ -128,7 +147,7 @@ viewer to watch must be easy to find in the picture (no ring is drawn for you): 
 **Still true:** words match the picture (a label in `dropped_labels` is not on screen: never name it); one moment, in
 time order; no story spoilers, no names but Jason and Lucia, no dialogue quotes; mission footage needs
 `"mission_ok"`; F2 never says why something happened unless the change and the result are both cited, in order; no
-spoken call to action (a silent subscribe pill ends every Short).
+spoken call to action (and since PR 30 no subscribe pill either: the Short ends as the talking ends).
 
 **Title** 32-46 characters with 1-2 words in ALL CAPS (Title Case is fine), description exactly 2 sentences, 3-5
 hashtags (`#GTA6`, `#GTAVI`, `#Shorts`; a `--game gta5` trial uses `#GTA5`).
@@ -143,9 +162,9 @@ beat format, with its loop ending, for comparison only.)
 ```
 
 It checks shorts.json (the payoff, the shots, truth and timing rules), finds a clear first frame, makes every shot
-(one fixed window, steadied where that measures calmer, HUD close-ups), places the voice, renders every Short (engine
+(one fixed window, steadied where that measures calmer, a dark shot's shadows gently lifted, HUD close-ups), places the voice, renders every Short (engine
 v4: the hook card, am_puck at 1.2, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
-payoff, the subscribe pill; no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
+payoff; no subscribe pill, no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
 the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short
 and render it alone with `--short N`. At most 3 tries per Short; after that leave it FAILED and go on.
 
