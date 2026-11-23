@@ -11,6 +11,7 @@ import math
 import shutil
 from pathlib import Path
 
+import cutplan
 import explainer as ex
 
 CRASH_LUFS = -15.0           # an action payoff with no voice over it: the game's own sound comes up to about this
@@ -153,7 +154,7 @@ def visuals(shots, placed, total_s):
 
 
 def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, music="auto", seed="short",
-          speed=1.25, voice="am_puck", log=print):
+          speed=cutplan.SPEED, voice="am_puck", log=print):
     """The finished Short: out_dir/short.mp4, voice.wav, captions.ass, log.json. shots: cutplan shots with "clip"
     (their made clips); placed: cutplan.place_lines. Returns the log."""
     import numpy as np

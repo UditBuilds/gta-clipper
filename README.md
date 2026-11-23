@@ -930,7 +930,7 @@ puts the voice into it:
   - Each line starts at its own second (`"at"`) and ends before its shot's cut.
   - Every cut lands on a sentence end or a footage event.
   - No line talks over an action payoff; the game's sound plays it, brought up to about -15 LUFS.
-  - am_puck speaks at 1.25 (1.2 until PR 30). Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
+  - am_puck speaks at 1.2 (`cutplan.SPEED`). Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
     like "Wait for it." claim nothing.
 
 ```powershell
@@ -1027,9 +1027,11 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
   top at 600), for 2 s. It was explainer's card: up to 220 px, centred at y 650, so it could cover y 390-910.
 - **No subscribe pill** (and no click). The Short ends at most 0.5 s after the last word, unless its last shot is the
   slow-mo replay.
-- **The voice at 1.25.** am_puck at 1.20, 1.25, 1.30 and 1.35, heard by faster-whisper: 262, 269, 276 and 318 words a
-  minute (from the first heard word to the last); 1.20 and 1.25 were heard word for word, 1.30 misheard "that", 1.35 four phrases. explainer.py's speed
-  warning moved from 1.1 to 1.4.
+- **The voice at 1.2**, my pick by ear (Nov 23) of 1.20-1.35; faster-whisper heard 1.20 and 1.25 word for word, misheard
+  one word at 1.30 and four phrases at 1.35. explainer.py's speed warning moved from 1.1 to 1.4.
+- **Words a minute, two ways** (`speech.wpm`, printed by `speech.py <short.mp4>`; a number, never a reason to fail): with
+  the pauses (words over first word to last word, what a viewer hears) and voiced only (pauses of 0.1 s or more left
+  out). The first speed test's 262 was three lines glued 0.12 s apart, so it had no pauses to count.
 - Three bugs: an early swear word found by the speech check now fails the Short with its moment, folder and hooks
   (it was a bare stub on the review page); `render()` and `render_one()` default to engine v4, as the command line
   does; a window the safety checks moved keeps the vision check's verdict (`verified`), so a crash or police the

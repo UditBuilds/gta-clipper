@@ -62,7 +62,7 @@ FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 W, H, FPS = 1080, 1920, 30
 MIN_TOTAL_S, MAX_TOTAL_S = 34, 39    # the target runtime since PR 18 (it was 40-50); outside it warns
 DEFAULT_VOICE, DEFAULT_SPEED = "am_puck", 1.0
-MAX_SPEED = 1.4                      # faster than this warns (PR 30: was 1.1; engine v4 speaks at 1.25, Whisper
+MAX_SPEED = 1.4                      # faster than this warns (PR 30: was 1.1; engine v4 speaks at 1.2, Whisper
                                      # heard every word up to 1.25 and misheard words from 1.3)
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}

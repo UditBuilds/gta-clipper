@@ -24,8 +24,8 @@ Standard library only: the measuring (shake, first frame, loudness, camera cuts)
 import re
 
 FPS = 30
-SPEED = 1.25                              # am_puck (PR 30: was 1.2 since Nov 20): the fastest of 1.20-1.35 that
-                                          # faster-whisper heard word for word (1.30 misheard "that")
+SPEED = 1.2                               # am_puck: the owner's pick by ear (Nov 23) of 1.20-1.35; the only default
+                                          # (assemble.build reads it); "speed" in shorts.json changes one Short
 LENGTH_S = {"action": (15.0, 25.0), "narrated": (15.0, 39.0)}
 MIN_SHOT_S = 0.8                          # a shot shorter than this is a flash, not a picture
 PAYOFF_S = (0.6, 8.0)                     # how long a payoff may be

@@ -8,7 +8,7 @@ the Short (the owner's rule: the first 7 s must be clean); later ones are flags.
 Runs only where faster-whisper is installed (.venv-tts; approved: small.en, CPU int8, no CUDA wheels). clip.py and
 .venv are untouched. Without it, available() is False and render keeps the old "listen once" flag.
 
-  .venv-tts\\Scripts\\python.exe speech.py <short.mp4>        # prints every word with its time, then the hits
+  .venv-tts\\Scripts\\python.exe speech.py <short.mp4>   # every word with its time, the words a minute, then the hits
 """
 import sys
 from pathlib import Path
@@ -18,6 +18,8 @@ import safety
 MODEL = "small.en"
 MODEL_DIR = Path(r"C:\AI\gta\models\whisper")
 FIRST_S = 7.0
+PAUSE_S = 0.1                # a gap between two words this long is a pause (assemble leaves 0.12 s between sentences,
+                             # cutplan 0.12 s or more between lines); a shorter one is inside the talking
 _model = None
 
 
@@ -57,6 +59,29 @@ def words(path, transcribe=None):
     return transcribe(path)
 
 
+def wpm(ws):
+    """The talking speed of [(start_s, end_s, word)], two ways (Nov 23; PR 30's test said 262 for lines glued 0.12 s
+    apart, which no Short sounds like):
+      wpm_with_pauses   words / (the last word's end - the first word's start): what a viewer hears
+      wpm_voiced_only   words / the seconds someone is talking, every pause of PAUSE_S or more left out
+    A number only, never a reason to fail a Short. None where nothing was said."""
+    ws = sorted(w for w in ws if any(c.isalnum() for c in w[2]))
+    out = {"words": len(ws), "span_s": None, "voiced_s": None, "wpm_with_pauses": None, "wpm_voiced_only": None}
+    if not ws:
+        return out
+    pauses, end = 0.0, ws[0][1]
+    for a, b, _ in ws[1:]:
+        if a - end >= PAUSE_S - 1e-6:
+            pauses += a - end
+        end = max(end, b)
+    span = end - ws[0][0]
+    voiced = span - pauses
+    if voiced <= 0:
+        return out
+    return dict(out, span_s=round(span, 2), voiced_s=round(voiced, 2), wpm_with_pauses=round(len(ws) / span * 60, 1),
+                wpm_voiced_only=round(len(ws) / voiced * 60, 1))
+
+
 def swearing(path, transcribe=None, first_s=FIRST_S):
     """{"words": n, "early": [(t, word)], "later": [(t, word)]}: swear words said before first_s, and after."""
     ws = words(path, transcribe)
@@ -72,6 +97,10 @@ def main():
     ws = words(sys.argv[1])
     for t0, t1, w in ws:
         print(f"{t0:6.2f}-{t1:6.2f}  {w}")
+    r = wpm(ws)
+    if r["wpm_with_pauses"] is not None:
+        print(f"WORDS A MINUTE: {r['wpm_with_pauses']:.0f} with the pauses ({r['words']} words in {r['span_s']:.1f} s); "
+              f"{r['wpm_voiced_only']:.0f} voiced only, pauses left out ({r['voiced_s']:.1f} s of talking)")
     hits = [(t0, bad) for t0, _, w in ws for bad in safety.profanity(w)]
     print("SWEARING: " + (", ".join(f"{b!r} at {t:.1f} s" for t, b in hits) if hits else "none"))
 

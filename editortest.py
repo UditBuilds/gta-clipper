@@ -355,7 +355,7 @@ def a_slowed_shot_splits_at_camera_cuts_on_its_own_timeline():
     return steady.split_points(10.0, 60, [10.4], 0.5) == [24, 36] and steady.split_points(10.0, 60, [10.4]) == [12, 48]
 
 
-# --- 6. The voice at 1.25 (PR 30; was 1.2) and the punchy style ---
+# --- 6. The voice at 1.2 (the owner's pick by ear, Nov 23) and the punchy style ---
 
 @check
 def punchy_lines_and_hype():
@@ -373,10 +373,28 @@ def punchy_lines_and_hype():
 
 
 @check
-def the_voice_speed_is_1_25():
-    """the owner's speed: engine v4 speaks at 1.25 unless the Short says otherwise (PR 30's speed test: the fastest
-    of 1.20-1.35 that faster-whisper heard word for word; it was 1.2)"""
-    return cutplan.SPEED == 1.25
+def the_voice_speed_is_1_20():
+    """the owner's speed, picked by ear on Nov 23: engine v4 speaks at 1.20 unless the Short says otherwise, in the
+    plan and in assemble.build's own default; explainer warns above 1.4"""
+    import inspect
+    import assemble
+    import explainer
+    return (cutplan.SPEED == 1.2 and inspect.signature(assemble.build).parameters["speed"].default == 1.2
+            and explainer.MAX_SPEED == 1.4)
+
+
+@check
+def words_a_minute_with_the_pauses_and_voiced_only():
+    """speech.wpm: 6 words in 0.0-1.2 s, a 2.8 s pause (a payoff), 6 more in 4.0-5.2 s: 12 words over 5.2 s is 138 a
+    minute with the pauses, 300 voiced only; the 0.05 s gaps inside a line count as voice; one line has both the
+    same; nothing heard gives None"""
+    import speech
+    run = [(0.2 * k, 0.2 * k + 0.15, "word") for k in range(5)] + [(1.0, 1.2, "word")]
+    two = speech.wpm(run + [(a + 4.0, b + 4.0, w) for a, b, w in run])
+    one = speech.wpm(run)
+    return (two["words"] == 12 and abs(two["wpm_with_pauses"] - 138.5) < 0.1 and abs(two["wpm_voiced_only"] - 300) < 0.1
+            and abs(one["wpm_with_pauses"] - 300) < 0.1 and one["wpm_voiced_only"] == one["wpm_with_pauses"]
+            and speech.wpm([])["wpm_with_pauses"] is None and speech.wpm([(0.0, 0.1, "-")])["words"] == 0)
 
 
 # --- 7 and end to end: a real Short from a made-up recording, through launch.render ---
@@ -413,7 +431,7 @@ def no_music_build(out_dir, video, shots, lines, spoken, placed, hook, kind, qui
 @check
 def end_to_end_a_v4_short_names_its_payoff():
     """launch.render with engine v4 on a made-up 40 s recording: READY, 17 s, the payoff named in render.json and on
-    the review page, every shot once, the voice at 1.25, no word over a cut or over the payoff, the crash sound up"""
+    the review page, every shot once, the voice at 1.2, no word over a cut or over the payoff, the crash sound up"""
     with tempfile.TemporaryDirectory() as tmp:
         v = make_video(Path(tmp) / "synth.mp4", 40, loud_at=21.0, size="640x360")
         idx = made_up_idx("synth", v)
@@ -434,7 +452,7 @@ def end_to_end_a_v4_short_names_its_payoff():
         words_ok = all(not (w["start_s"] < c < w["end_s"]) for w in log["word_times"] for c in cuts)
         quiet = all(not (pay["at_s"] < w["start_s"] < pay["at_s"] + 2.5) for w in log["word_times"])
         return (abs(e["length_s"] - 17.0) < 0.1 and pay["what"] == "the car slams into the wall"
-                and "slams into the wall" in page and speeds == [1.25] and words_ok and quiet
+                and "slams into the wall" in page and speeds == [1.2] and words_ok and quiet
                 and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 36.0]]
                 and (log["game_audio"].get("quiet_lift_db") is not None))
 
