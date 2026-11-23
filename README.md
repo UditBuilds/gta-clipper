@@ -200,7 +200,8 @@ Render:
 That writes `short.mp4`, `voice.wav` (the voice alone), `captions.ass` and `log.json` to
 `C:\AI\gta\explainers\<slug>\<YYYYMMDD-HHMMSS>\`, and prints the runtime, the shots, the music and sound effects used and
 the final loudness.
-`.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool in about 3 minutes. `examples\explainer_sample.json` is
+`.\.venv-tts\Scripts\python.exe explainertest.py` checks the tool (88 checks, 2.8 min through `run_tests.py`; 23 min with
+an ffmpeg that is slow to start, see [Tests](#tests-pr-31-nov-23)). `examples\explainer_sample.json` is
 the longer PR 14 demo, in the short string form.
 
 A script is a JSON file, and paths are relative to `C:\AI\gta\`:
@@ -364,7 +365,7 @@ by hand, in Windows PowerShell:
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json           # checks, picks, renders
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --allow-stale              # render even with a fact checked over 3 days ago
 .\.venv-tts\Scripts\python.exe make_short.py C:\path\to\script.json --folder-date 2026-11-11   # render that day's folder again
-.\.venv\Scripts\python.exe shorttest.py                                  # 42 checks, about 20 s, no Ollama needed
+.\.venv\Scripts\python.exe shorttest.py                                  # 42 checks, 10 s, no Ollama needed
 ```
 
 Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
@@ -680,7 +681,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 48 checks, about 4 minutes, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 48 checks, half a minute, no Ollama
 ```
 
 **What prepare does.**
@@ -796,7 +797,7 @@ channel (`docs/reference/`, not in the repo); the plan is [docs/S4_PLAN.md](docs
 .\.venv-tts\Scripts\python.exe edit2.py examples\s4_sample.json --plan               # timeline, anchors, gaps
 .\.venv-tts\Scripts\python.exe launch.py frame --short 1 --at 113.5                  # a gridded frame to read a box from
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v1     # PR 25's render
-.\.venv-tts\Scripts\python.exe storytest.py                                          # 16 checks, about 1.5 minutes
+.\.venv-tts\Scripts\python.exe storytest.py                                          # 16 checks, 25 s
 ```
 
 **The rules in code.**
@@ -893,7 +894,7 @@ its share), are all checked before picking; every one that fails is listed in `c
 .\.venv\Scripts\python.exe launch.py prepare --count 3          # the default; --count 5 for more
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"
 .\.venv\Scripts\python.exe facts.py own                        # facts from my own footage, waiting for my yes
-.\.venv-tts\Scripts\python.exe topictest.py                     # 24 checks, about 15 s
+.\.venv-tts\Scripts\python.exe topictest.py                     # 24 checks, 40 s
 ```
 
 **Known limits:**
@@ -936,7 +937,7 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 45 checks, about 12 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 51 checks, 1.6 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1001,7 +1002,7 @@ Shorts instead, take that exception out of `pick_varied`'s `blocked()`.
 
 ```powershell
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
-.\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, a few seconds
+.\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, 1 s
 ```
 
 ## The first seconds (PR 30, Nov 22)
@@ -1043,5 +1044,64 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
   does; a window the safety checks moved keeps the vision check's verdict (`verified`), so a crash or police the
   frames didn't show can't come back.
 
-All 16 test suites, one at a time on Nov 23: 522 checks, all pass (editortest 45 and launchtest 48 are the ones that
-grew; calibtest and hooktest name no interpreter and were run with `.venv`).
+- **The caption check says what it saw** (PR 31, `launch.caption_coverage`, engine v4). M24 showed 23 yellow captions and
+  its list of caption checks was empty: the check saw them all, but it only tests words it knows (the HUD, police,
+  vehicles, streets, a crash ...) and none of the 23 is one. Now:
+  - The captions burnt in must be the lines' words, in order, each over one of the Short's shots. A difference fails the
+    Short (the 7 v4 renders made so far all pass).
+  - The report counts the captions shown, over a shot, and tested against their frame. None tested is a flag (M24:
+    "none of the 23 words ... OVERPASS names a thing the frame question has no field for"), and the review page shows it.
+
+## Tests (PR 31, Nov 23)
+
+```powershell
+.\.venv\Scripts\python.exe run_tests.py --quick     # while working: logic checks and tiny renders
+.\.venv\Scripts\python.exe run_tests.py --full      # before calling anything safe to merge: every check
+.\.venv\Scripts\python.exe run_tests.py --ci        # what GitHub runs: the quick checks that need no GPU, voice or footage
+.\.venv\Scripts\python.exe run_tests.py --full --only launchtest editortest     # just these suites
+```
+
+| | checks | time |
+|---|---:|---:|
+| before (the suites one by one, Nov 23) | 522 | 75.5 min |
+| `--full` | 535 | 8.4 min |
+| `--quick` | 459 | 1.7 min |
+| `--ci`, on GitHub's Windows machine | 445 | 2.6 min |
+
+| suite | interpreter | full | quick | ci | before | now (full) |
+|---|---|---:|---:|---:|---:|---:|
+| explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 167 s |
+| hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 72 s |
+| editortest | `.venv-tts` | 51 | 44 | 44 | 715 s | 97 s |
+| shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
+| topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 40 s |
+| launchtest | `.venv-tts` | 48 | 47 | 47 | 196 s | 28 s |
+| footagetest | `.venv-tts` | 31 | 26 | 26 | 152 s | 19 s |
+| calibtest | `.venv` | 38 | 35 | 35 | 147 s | 27 s |
+| storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 23 s |
+| selftest | `.venv` | 3 | - | - | 33 s | 15 s |
+| hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
+| indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
+| varietytest, vlmtest, spreadtest, evaltest | `.venv` | 86 | 86 | 86 | 2 s | 2 s |
+| runnertest (new) | `.venv` | 7 | 7 | 7 | - | 0.4 s |
+
+Every check before PR 31 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
+(the runner writes it), the start in `docs/test-timings-before.md`.
+
+- **Why it was slow: ffmpeg's start.** The suites start ffmpeg about 2300 times. On this laptop the installed ffmpeg.exe
+  takes 1.9 s to start, even for `ffmpeg -version`, most likely because the virus scanner reads its 211 MB again every
+  time; a byte-identical copy takes 0.03 s from its second start on. That was 91 % of the 75 minutes. The runner
+  therefore keeps a copy in `C:\AI\gta\test\_cache` and puts it first on the suites' own PATH (`--installed-ffmpeg`
+  doesn't). Nothing else uses it: a real render still pays about 2 s per ffmpeg call, 2 minutes a Short, until the
+  installed file starts fast again.
+- **Renders are shared, not repeated.** editortest's three checks that look at a plain v4 Short look at the same one.
+- **The production defaults are pinned.** `editortest.v4_runs_the_same_commands_as_before_the_speed_work` compares all 172
+  ffmpeg and ffprobe commands that engine v4 runs for the fixture, plain and with its replay, with the ones main ran
+  before PR 31 (`testdata/v4_commands.json`).
+- **Tiers** are tags (`testkit.py`): a check is quick unless it has `@testkit.full`, and `@testkit.needs("kokoro" |
+  "whisper" | "gta" | "nvenc")` keeps it off GitHub. A suite run on its own runs every check, as before.
+- **A run that checks nothing fails:** no RESULT line, no check, a failed check, fewer checks than `SUITES` and `MINIMUM`
+  in `run_tests.py` say, or a `*test.py` nobody listed (`runnertest.py` checks all of that).
+- **One heavy job at a time:** the runner takes heavy.py's lock for the whole run and its suites inherit it.
+- **GitHub** (`.github/workflows/tests.yml`): every pull request to main and every push to it, on windows-latest, with
+  ffmpeg 9.0 (the laptop's build, checked by SHA-256). There is no NVIDIA card there, so what encodes uses libx264.
