@@ -52,6 +52,7 @@ def suite(name, venv, checks, tiers=testkit.TIERS):
 
 # Light ones first, so a plain mistake shows in seconds.
 SUITES = [
+    suite("runnertest", ".venv", 7),
     suite("evaltest", ".venv", 21),
     suite("spreadtest", ".venv", 13),
     suite("vlmtest", ".venv", 39),
@@ -69,7 +70,7 @@ SUITES = [
     suite("explainertest", ".venv-tts", 88),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
-MINIMUM = {"quick": 452, "ci": 0}      # fewer checks than this in all, and the run fails
+MINIMUM = {"quick": 459, "ci": 445}      # fewer checks than this in all, and the run fails
 
 
 def start_seconds(exe):
@@ -94,27 +95,29 @@ def fast_ffmpeg(log=print):
         if not found:
             continue
         exe = Path(found).resolve()
-        was = min(start_seconds(exe) for _ in range(2))
-        if was < SLOW_START_S:
-            continue
         info = exe.stat()
-        folder = CACHE / f"ffmpeg-{info.st_size}-{info.st_mtime_ns}"
-        copy = folder / exe.name
+        mine = CACHE / f"ffmpeg-{info.st_size}-{info.st_mtime_ns}"
+        copy = mine / exe.name
         if not copy.is_file() or copy.stat().st_size != info.st_size:
+            was = min(start_seconds(exe) for _ in range(2))
+            if was < SLOW_START_S:
+                continue
             for old in CACHE.glob("ffmpeg-*"):
-                if old != folder:
+                if old != mine:
                     shutil.rmtree(old, ignore_errors=True)
-            folder.mkdir(parents=True, exist_ok=True)
+            mine.mkdir(parents=True, exist_ok=True)
             part = copy.with_suffix(".part")
             shutil.copyfile(exe, part)
             if sha(part) != sha(exe):
                 part.unlink()
                 log(f"WARNING: the copy of {name} differs from the installed one; using the installed one")
-                return None
+                continue
             part.replace(copy)
-        start_seconds(copy)                  # the first start is scanned, like any new file's
+            start_seconds(copy)              # the first start is scanned, like any new file's
+            log(f"{name}: the installed one takes {was:.2f} s to start, so the suites get a copy of it")
+        folder = mine
         now = min(start_seconds(copy) for _ in range(3))
-        log(f"{name}: the installed one takes {was:.2f} s to start, its copy {now:.2f} s ({copy})")
+        log(f"{name}: a copy that starts in {now:.2f} s ({copy})")
         if now > SLOW_START_S:
             log(f"WARNING: the copy of {name} is slow to start too, so the times below are slow ones")
     return folder
@@ -153,8 +156,32 @@ def run_suite(s, env, log_file):
     if p.returncode or not (result or "").startswith("RESULT: PASS"):
         out.problems.append(f"exit code {p.returncode}, {result or 'no RESULT line'}")
         out.problems += ["  " + line[:200] for line in tail]
+    elif not out.passed:
+        out.problems.append("it checked nothing")
     out.ok = not out.problems and not out.failed
     return out
+
+
+def failures(tier, results, only=False):
+    """What makes this run fail, a line each: a suite with a problem; in the full tier a suite with fewer checks passed
+    than SUITES says; fewer checks in all than MINIMUM (unless only some suites were asked for)."""
+    expected = {s.name: s.checks for s in SUITES}
+    out = []
+    for r in results:
+        if tier == "full" and r.passed < expected.get(r.name, 0) and r.ok:
+            r.problems.append(f"{r.passed} checks passed; {expected[r.name]} are expected")
+            r.ok = False
+        if not r.ok:
+            out.append(r.name)
+    n = sum(r.passed for r in results)
+    if not only and n < MINIMUM.get(tier, 0):
+        out.append(f"only {n} checks passed (--{tier} has at least {MINIMUM[tier]})")
+    return out
+
+
+def unlisted(folder=HERE):
+    """Suites in the repo that SUITES doesn't know: nobody would run them."""
+    return sorted({p.stem for p in folder.glob("*test.py")} - {s.name for s in SUITES})
 
 
 def write_timings(tier, results, total_s, path=TIMINGS):
@@ -192,6 +219,8 @@ def main():
     args = ap.parse_args()
     suites = [s for s in SUITES if args.tier in s.tiers and (not args.only or s.name in args.only)]
     unknown = [n for n in args.only or [] if n not in {s.name for s in suites}]
+    if unlisted():
+        ap.error(f"add to SUITES: {', '.join(unlisted())}")
     if unknown:
         ap.error(f"no such suite in --{args.tier}: {', '.join(unknown)}")
     if args.tier == "ci":
@@ -206,23 +235,17 @@ def main():
     t0, results = time.perf_counter(), []
     for s in suites:
         r = run_suite(s, env, LOGS / f"{args.tier}_{s.name}.log")
-        if args.tier == "full" and r.passed < s.checks:
-            r.problems.append(f"{r.passed} checks passed; {s.checks} are expected")
-            r.ok = False
         results.append(r)
+        failures(args.tier, [r], only=True)
         total = r.passed + r.failed + r.skipped
         print(f"{r.name:14s} {r.passed:3d}/{total:<3d} {r.seconds:7.1f} s  {r.venv:9s} {'' if r.ok else 'FAIL'}".rstrip(),
               flush=True)
         for line in r.problems:
             print(f"    {line}", flush=True)
     total_s = time.perf_counter() - t0
-    n, bad = sum(r.passed for r in results), [r.name for r in results if not r.ok]
+    n, bad = sum(r.passed for r in results), failures(args.tier, results, bool(args.only))
     print(f"TOTAL: {n} checks passed in {len(results)} suites, {total_s / 60:.1f} min ({total_s:.0f} s)"
           + (f"; FAILED: {', '.join(bad)}" if bad else ""))
-    least = MINIMUM.get(args.tier, 0)
-    if not args.only and n < least:
-        print(f"FAILED: only {n} checks ran; --{args.tier} has at least {least}")
-        bad.append("too few checks")
     if not args.only and args.tier != "ci" and not bad and not args.installed_ffmpeg:
         write_timings(args.tier, results, total_s)
     print(f"RESULT: {'FAIL' if bad else 'PASS'} (logs: {LOGS})")
