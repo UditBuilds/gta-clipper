@@ -936,7 +936,7 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 39 checks, about 10 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 45 checks, about 12 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1043,5 +1043,5 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
   does; a window the safety checks moved keeps the vision check's verdict (`verified`), so a crash or police the
   frames didn't show can't come back.
 
-All 16 test suites, one at a time on Nov 22: 516 checks, all pass (editortest 39 and launchtest 48 are the ones that
+All 16 test suites, one at a time on Nov 23: 522 checks, all pass (editortest 45 and launchtest 48 are the ones that
 grew; calibtest and hooktest name no interpreter and were run with `.venv`).
