@@ -1066,12 +1066,12 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | `--full` | 536 | 8.2 min |
 | `--quick` | 460 | 1.7 min |
-| `--ci`, on GitHub's Windows machine | 446 | 1.6 min |
+| `--ci`, on GitHub's Windows machine | 446 | 1.6-2.6 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
 | explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 164 s |
-| hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 71 s |
+| hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 70 s |
 | editortest | `.venv-tts` | 52 | 45 | 45 | 715 s | 94 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
@@ -1079,7 +1079,7 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 | footagetest | `.venv-tts` | 31 | 26 | 26 | 152 s | 18 s |
 | calibtest | `.venv` | 38 | 35 | 35 | 147 s | 24 s |
 | storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 22 s |
-| selftest | `.venv` | 3 | - | - | 33 s | 15 s |
+| selftest | `.venv` | 3 | - | - | 33 s | 14 s |
 | hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
 | indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 86 | 86 | 86 | 2 s | 2 s |
