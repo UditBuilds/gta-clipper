@@ -1100,7 +1100,7 @@ def a_damaged_record_stops_everything_and_keeps_every_byte():
                 lambda: footage_short.set_status(tmp, "n", [["rec_a", 5.0, 6.0]], "posted"), lambda: bank.status_spans(tmp),
                 lambda: launch.all_used_spans(tmp))
         empty = footage_short.load_used(tmp) == {"shorts": []} and launch.load_posted(topics, log=quiet) == []
-        empty = empty and launch.load_runs(tmp) == {"runs": []}
+        empty = empty and launch.load_runs(tmp) == {"runs": []} and stops(lambda: bank.add_topic({"name": "n"}, topics), "isn't there")
         for text in (good[:40], "", "[]", '{"shorts": {}}'):
             used.write_text(text, encoding="utf-8")
             out += [stops(act, footage_short.USED_FOOTAGE) for act in acts]
@@ -1108,6 +1108,8 @@ def a_damaged_record_stops_everything_and_keeps_every_byte():
         for text in ('{"topics": [{', "[]", '{"topics": {}}', "{}"):
             topics.write_text(text, encoding="utf-8")
             out.append(stops(lambda: launch.load_posted(topics, log=quiet), "posted_topics.json"))
+            out.append(stops(lambda: bank.add_topic({"name": "n", "rules": []}, topics), "posted_topics.json"))
+            out.append(topics.read_text(encoding="utf-8") == text)
         runs.write_text('{"runs": [', encoding="utf-8")
         out.append(stops(lambda: launch.note_run(tmp, tmp / "x", [], "prepared"), launch.RUNS_LOG))
         out.append(runs.read_text(encoding="utf-8") == '{"runs": [')

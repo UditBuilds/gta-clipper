@@ -1111,8 +1111,10 @@ def new_topics(topic, path=None):
     there is touched, every earlier topic must still be there word for word, and the picker must be able to read it
     (launch.load_posted) before it may take the list's place. Otherwise BankError, and no temp file."""
     path = Path(path or launch.POSTED_FILE)
+    before = index.read_record(path, "topics")             # (a damaged one stops here: index.StateError)
+    if before is None:
+        raise BankError(f"{path} isn't there: put back the copy in bank\\backups (or the repo's) and try again")
     text = path.read_text(encoding="utf-8")
-    before = json.loads(text)
     if any(t.get("name") == topic["name"] for t in before["topics"]):
         raise BankError(f"posted_topics.json already has a topic called {topic['name']!r}: give another --name")
     at = text.rstrip().rfind("]")
