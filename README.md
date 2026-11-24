@@ -1123,7 +1123,7 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 - **What /launch would pick from the whole bank today:** the motorbike crash that throws both riders (_164843, 28:42-29:13, new
   footage), the truck crash (_135610, 7:17-7:37) and the boar attack (_143644, 6:52-7:12).
 
-**Hardened (PR 35, Nov 24)** after an outside read-only review; `docs/breaks-pr35.md` has each claim, its check and the 34
+**Hardened (PR 35, Nov 24)** after an outside read-only review; `docs/breaks-pr35.md` has each claim, its check and the 35
 deliberate breaks:
 
 - **A damaged record stops everything.** `_used_footage.json`, `posted_topics.json` and `_launch_runs.json`: only a file

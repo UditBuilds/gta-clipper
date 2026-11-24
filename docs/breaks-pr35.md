@@ -24,7 +24,7 @@ An outside read-only review named these problems against main after PR 32. Check
 
 Each one is one change to the fixed code; the suite that should notice was run, then the file put back.
 
-First round: 34 breaks, 32 caught. The two that were not (marked) meant a check was too weak: the questions check never got as far as the line filter, and the id check had no moment that wanted a gone one's id. Both were made stricter, and their items run again: **34 breaks, 34 caught**.
+First round: 34 breaks, 32 caught. The two that were not (marked) meant a check was too weak: the questions check never got as far as the line filter, and the id check had no moment that wanted a gone one's id. Both were made stricter, and their items run again. A 35th came from a last read of the diff (a damaged posted_topics.json ended `bank.py posted` in a traceback). **35 breaks, 35 caught**.
 
 | item | break | file | caught by |
 |---|---|---|---|
@@ -60,6 +60,7 @@ First round: 34 breaks, 32 caught. The two that were not (marked) meant a check 
 | B11 | a quiet crash is unsure at once | bank.py | `a_quiet_crash_does_not_hide_what_else_the_peak_shows`, `a_crash_that_is_only_ticked_names_nothing_else` |
 | B11 | a crash that is only ticked falls through | bank.py | `a_label_the_peak_does_not_show_is_unsure_and_counts_for_nothing`, `a_crash_must_be_heard_and_a_wreck_is_not_one`, `a_crash_that_is_only_ticked_names_nothing_else` |
 | B12 | an empty build is written | bank.py | `an_empty_build_never_replaces_a_full_bank` |
+| B2 | add_topic reads the topics list without checking it | bank.py | `a_damaged_record_stops_everything_and_keeps_every_byte` |
 | B13 | /footage-short ignores rejected footage | footage_short.py | `rejected_footage_is_never_picked` |
 | B13 | a whole run doesn't read the rejected list | footage_short.py | `rejected_footage_is_never_picked` |
 
