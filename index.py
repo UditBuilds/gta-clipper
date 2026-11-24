@@ -55,6 +55,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import clip
+import fastff
 import vlm
 
 LIBRARY = Path(r"C:\AI\gta\library")
@@ -806,6 +807,7 @@ def main():
     ap.add_argument("--library", type=Path, default=LIBRARY, help=f"library folder (default {LIBRARY})")
     ap.add_argument("--review-only", action="store_true", help="rebuild review.html from the saved index.json")
     args = ap.parse_args()
+    fastff.use()
     if (args.video is None) == (args.all is None):
         ap.error("give one video, or --all FOLDER")
     if args.every <= 0 or args.width < 64:

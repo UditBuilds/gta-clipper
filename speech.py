@@ -91,6 +91,8 @@ def swearing(path, transcribe=None, first_s=FIRST_S):
 
 
 def main():
+    import fastff
+    fastff.use()
     if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(2)

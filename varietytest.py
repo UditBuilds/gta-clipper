@@ -16,6 +16,10 @@ import testkit
 from launchtest import made_up_idx
 
 CHECKS = []
+# The owner's posted list as it was on Nov 23 (15 topics): these checks must not change with the next posted Short.
+# Nothing in this suite reads the real posted_topics.json (checked below).
+FIXTURE = Path(__file__).resolve().parent / "testdata" / "posted_topics_2026-11-23.json"
+REAL_POSTED, launch.POSTED_FILE = launch.POSTED_FILE, FIXTURE
 
 
 def check(fn):
@@ -62,7 +66,7 @@ def text_of(m):
 
 
 def posted(as_of=None):
-    """The owner's list (posted_topics.json in the repo), as launch.load_posted reads it."""
+    """The owner's list as it was on Nov 23 (FIXTURE), as launch.load_posted reads it."""
     return launch.load_posted(launch.POSTED_FILE, as_of, log=lambda s: None)
 
 
@@ -132,6 +136,23 @@ def posted_topics_cost_points_and_match_only_their_own_moments():
                                              "crime needs a witness",
                                              "can you survive jumping off an overpass"} <= names
             and len(now) - len(then) == 4), (star, bike, truck)
+
+
+@check
+def a_new_posted_short_changes_no_check_here():
+    """this suite reads its own copy of the owner's posted list (testdata), never the real one: repick and the checks
+    above see only the copy, so a Short posted tomorrow breaks nothing here; the real list (wherever it is now) still
+    reads as a list of topics"""
+    with tempfile.TemporaryDirectory() as tmp:
+        data = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        path = Path(tmp) / "posted_topics.json"
+        data["topics"].append({"name": "tomorrow", "type": "crash", "posted": "2026-11-25",
+                               "added": "2026-11-25T10:00:00", "rules": [{"term": ["crash"]}]})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        tomorrow = launch.load_posted(path, log=quiet)
+    return (launch.POSTED_FILE == FIXTURE and REAL_POSTED != FIXTURE and len(posted()) == 15 and len(tomorrow) == 16
+            and not any(t["name"] == "tomorrow" for t in posted())
+            and isinstance(launch.load_posted(REAL_POSTED, log=quiet), list))
 
 
 @check

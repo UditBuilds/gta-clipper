@@ -5,11 +5,13 @@ off must fail, on GitHub as well. The suites here are a few lines each, made up 
 """
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import fastff
 import run_tests
 import testkit
 
@@ -165,6 +167,108 @@ def a_slow_ffmpeg_gets_an_identical_copy_and_a_fast_one_is_left_alone():
             run_tests.CACHE, run_tests.start_seconds, run_tests.shutil.which = keep
         return (same and left == [first.name] and second == first and not again and fast is None
                 and not (tmp / "cache2").exists())
+
+
+def with_ffmpeg(fn):
+    """fn(tmp, exe) with a made-up installed ffmpeg first on PATH and fastff.FOLDER in tmp; everything is put back."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "bin").mkdir()
+        exe = tmp / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        exe.write_bytes(os.urandom(5000))
+        exe.chmod(0o755)
+        path, checked, folder = os.environ.get("PATH", ""), os.environ.pop(fastff.CHECKED, None), fastff.FOLDER
+        os.environ["PATH"] = str(exe.parent)
+        fastff.FOLDER = tmp / "tools"
+        try:
+            return fn(tmp, exe)
+        finally:
+            os.environ["PATH"], fastff.FOLDER = path, folder
+            os.environ.pop(fastff.CHECKED, None)
+            if checked is not None:
+                os.environ[fastff.CHECKED] = checked
+
+
+def made_copy(exe):
+    """The copy fastff.make makes of a slow made-up ffmpeg."""
+    folder = fastff.make(log=lambda m: None, start=lambda p: 1.9 if Path(p) == exe.resolve() else 0.03)
+    return folder / exe.name
+
+
+@check
+def production_uses_the_checked_copy_first_on_its_own_path():
+    """fastff.use(): a copy whose SHA-256 is the noted one comes first on this process's PATH, so "ffmpeg" is the copy, a
+    child process inherits it without hashing it again, and explainer's FFMPEG (looked up when it was imported) points
+    at it; nothing is said. The tests make and use the same folder (run_tests.CACHE is fastff.FOLDER), and production
+    never makes one by itself"""
+    same_folder = run_tests.CACHE == fastff.FOLDER
+
+    def run(tmp, exe):
+        copy, said = made_copy(exe), []
+        sys.modules["explainer"], old = SimpleNamespace(FFMPEG=str(exe), FFPROBE=None), sys.modules.get("explainer")
+        try:
+            got = fastff.use(log=said.append)
+            named = Path(shutil.which("ffmpeg")).resolve()
+            pointed = Path(sys.modules["explainer"].FFMPEG).resolve()
+        finally:
+            sys.modules.pop("explainer")
+            if old is not None:
+                sys.modules["explainer"] = old
+        keep, fastff.sha = fastff.sha, lambda p: (_ for _ in ()).throw(AssertionError("hashed again"))
+        try:
+            child = fastff.use(log=said.append)       # as a child process sees it: CHECKED is in its environment
+        finally:
+            fastff.sha = keep
+        return (got == copy.parent == child and named == copy.resolve() == pointed and not said
+                and os.environ["PATH"].startswith(str(copy.parent)) and os.environ[fastff.CHECKED] == str(copy.parent)
+                and fastff.installed("ffmpeg") == exe.resolve())
+    return same_folder and with_ffmpeg(run)
+
+
+@check
+def a_missing_or_wrong_copy_falls_back_to_the_installed_ffmpeg_with_a_warning():
+    """no copy, a copy whose bytes changed, a copy with no noted hash, and an installed ffmpeg that was updated since:
+    each time PATH stays as it was, the installed ffmpeg answers, and one warning says why and how to make the copy
+    again; nothing is copied by use(). make() puts a wrong copy right"""
+    def run(tmp, exe):
+        got = []
+
+        def fell_back(name):
+            said, before = [], os.environ["PATH"]
+            ok = (fastff.use(log=said.append) is None and os.environ["PATH"] == before
+                  and Path(shutil.which("ffmpeg")).resolve() == exe.resolve() and fastff.CHECKED not in os.environ
+                  and len(said) == 1 and said[0].startswith("WARNING") and "fastff.py --make" in said[0])
+            got.append((name, ok, said))
+        fell_back("missing")
+        nothing_made = not fastff.FOLDER.exists()
+        copy = made_copy(exe)
+        good = copy.read_bytes()
+        copy.write_bytes(good[:-1] + bytes([good[-1] ^ 1]))
+        fell_back("changed")
+        mended = made_copy(exe).read_bytes() == good
+        (copy.parent / fastff.MANIFEST).unlink()
+        fell_back("no hash")
+        made_copy(exe)
+        exe.write_bytes(os.urandom(6000))
+        fell_back("updated")
+        return all(ok for _, ok, _ in got) and nothing_made and mended, got
+    good, got = with_ffmpeg(run)
+    if not good:
+        raise AssertionError(str(got))
+    return True
+
+
+@check
+def every_program_that_renders_or_indexes_asks_for_the_fast_ffmpeg():
+    """launch, index, footage_short, make_short, tag_media, explainer, edit2, speech and bank call fastff.use() in main()
+    and only there (importing them changes nothing), and clip.py is left alone"""
+    wrong = []
+    for name in ("launch", "index", "footage_short", "make_short", "tag_media", "explainer", "edit2", "speech", "bank"):
+        text = (run_tests.HERE / f"{name}.py").read_text(encoding="utf-8")
+        body = re.split(r"^def main\(.*\):$", text, flags=re.M)[-1].split("\ndef ")[0]
+        if text.count("fastff.use(") != 1 or "fastff.use(" not in body:
+            wrong.append(name)
+    return not wrong and "fastff" not in (run_tests.HERE / "clip.py").read_text(encoding="utf-8")
 
 
 @check

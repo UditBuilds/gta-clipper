@@ -11,16 +11,14 @@ One line per suite: checks passed, seconds, interpreter; then a total. Exit code
 PASS, no check failed, and as many checks passed as are expected (a suite that checks nothing, or loses a check, fails
 the run). --quick and --full write their part of docs/test-timings-after.md.
 
-Why a copy of ffmpeg: on the owner's laptop the virus scanner reads the installed ffmpeg.exe (211 MB) again at every
-start, about 1.9 s each time, and the full tier starts it over a thousand times. A byte-identical copy is scanned once
-and then starts in 0.03 s. So when the installed one is slow to start, the suites get a copy (kept in CACHE, made again
-when the installed file changes) first on their own PATH. Nothing else on the PC changes, and nothing but these tests
-uses it.
+Why a copy of ffmpeg: on the owner's laptop the installed ffmpeg.exe (211 MB) takes about 1.9 s to start, every time, and
+the full tier starts it over a thousand times; a byte-identical copy starts in 0.03 s (fastff.py says why). So when the
+installed one is slow to start, the suites get the copy production uses (fastff.FOLDER, its SHA-256 checked, made here
+when it is missing or the installed file changed) first on their own PATH. Nothing else on the PC changes.
 
 A suite can always be run on its own, and then runs every check:  .\\.venv-tts\\Scripts\\python.exe editortest.py
 """
 import argparse
-import hashlib
 import os
 import re
 import shutil
@@ -32,16 +30,16 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+import fastff
 import heavy
 import testkit
 
 HERE = Path(__file__).resolve().parent
 VENVS = {v: HERE / v / "Scripts" / "python.exe" for v in (".venv", ".venv-tts")}
-CACHE = Path(os.environ.get("GTA_TEST_CACHE", r"C:\AI\gta\test\_cache"))
+CACHE = fastff.FOLDER                     # the fast copy of ffmpeg: the same one production uses
 TIMINGS = HERE / "docs" / "test-timings-after.md"
 LOGS = Path(tempfile.gettempdir()) / "gta-clipper-tests"
 CHECK_LINE = re.compile(r"\s+(PASS|FAIL|SKIP)\s+(.+)")   # how every suite prints a check
-SLOW_START_S = 0.5           # an ffmpeg that takes this long to say its version is being scanned at every start
 
 
 def suite(name, venv, checks, tiers=testkit.TIERS):
@@ -52,11 +50,12 @@ def suite(name, venv, checks, tiers=testkit.TIERS):
 
 # Light ones first, so a plain mistake shows in seconds.
 SUITES = [
-    suite("runnertest", ".venv", 7),
+    suite("runnertest", ".venv", 10),
     suite("evaltest", ".venv", 21),
     suite("spreadtest", ".venv", 13),
     suite("vlmtest", ".venv", 39),
-    suite("varietytest", ".venv", 13),
+    suite("varietytest", ".venv", 14),
+    suite("banktest", ".venv", 34),
     suite("indextest", ".venv", 41),
     suite("shorttest", ".venv", 42),
     suite("calibtest", ".venv", 38),
@@ -70,56 +69,21 @@ SUITES = [
     suite("explainertest", ".venv-tts", 88),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
-MINIMUM = {"quick": 460, "ci": 446}      # fewer checks than this in all, and the run fails
+MINIMUM = {"quick": 498, "ci": 483}      # fewer checks than this in all, and the run fails
 
 
-def start_seconds(exe):
-    t = time.perf_counter()
-    subprocess.run([str(exe), "-version"], capture_output=True)
-    return time.perf_counter() - t
-
-
-def sha(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while block := f.read(2 ** 20):
-            h.update(block)
-    return h.hexdigest()
+start_seconds = fastff.start_seconds
 
 
 def fast_ffmpeg(log=print):
-    """The folder to put first on the suites' PATH, or None to use the installed ffmpeg as it is (see the top)."""
-    folder = None
-    for name in ("ffmpeg", "ffprobe"):
-        found = shutil.which(name)
-        if not found:
-            continue
-        exe = Path(found).resolve()
-        info = exe.stat()
-        mine = CACHE / f"ffmpeg-{info.st_size}-{info.st_mtime_ns}"
-        copy = mine / exe.name
-        if not copy.is_file() or copy.stat().st_size != info.st_size:
-            was = min(start_seconds(exe) for _ in range(2))
-            if was < SLOW_START_S:
-                continue
-            for old in CACHE.glob("ffmpeg-*"):
-                if old != mine:
-                    shutil.rmtree(old, ignore_errors=True)
-            mine.mkdir(parents=True, exist_ok=True)
-            part = copy.with_suffix(".part")
-            shutil.copyfile(exe, part)
-            if sha(part) != sha(exe):
-                part.unlink()
-                log(f"WARNING: the copy of {name} differs from the installed one; using the installed one")
-                continue
-            part.replace(copy)
-            start_seconds(copy)              # the first start is scanned, like any new file's
-            log(f"{name}: the installed one takes {was:.2f} s to start, so the suites get a copy of it")
-        folder = mine
+    """The folder to put first on the suites' PATH, or None to use the installed ffmpeg as it is (see the top). The copy
+    is the one production uses (fastff.py); it is made here when it is missing."""
+    folder = fastff.make(CACHE, log, start_seconds)
+    for copy in sorted(Path(folder).glob("ff*.exe")) if folder else []:
         now = min(start_seconds(copy) for _ in range(3))
-        log(f"{name}: a copy that starts in {now:.2f} s ({copy})")
-        if now > SLOW_START_S:
-            log(f"WARNING: the copy of {name} is slow to start too, so the times below are slow ones")
+        log(f"{copy.stem}: a copy that starts in {now:.2f} s ({copy})")
+        if now > fastff.SLOW_START_S:
+            log(f"WARNING: the copy of {copy.stem} is slow to start too, so the times below are slow ones")
     return folder
 
 

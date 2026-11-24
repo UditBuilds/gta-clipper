@@ -29,10 +29,12 @@ tell the owner the error in one plain sentence and what to do, and stop: that is
 ```
 
 Run it **in the background**; don't poll it or sleep, you are told when it ends. It finds the new recordings (only
-those not indexed yet), reads the HUD with `profiles/gta6.json` (every HUD step in `<run folder>\logs\hud.txt`),
-indexes them, then builds a **pool of 15-25 candidates** spread over all recordings: **topic candidates first** (the
-shot-list topics the footage matches, and GTA 6 HUD changes such as the heat icons or the stars' look), then the best
-action moments. Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood in the first 7 s or
+those not indexed yet; none is fine), reads the HUD with `profiles/gta6.json` (every HUD step in
+`<run folder>\logs\hud.txt`), indexes them, brings the **content bank** up to date (`bank.py`: every moment of every
+recording, each labelled from the frames at its loudest second; `C:\AI\gta\bank\bank.html`), then takes a **pool of 15-25
+candidates** from the bank's action and proof shelves, spread over all recordings: moments whose status is **new**, or
+**rendered** and not posted (ranked after new ones of the same payoff). **Posted and rejected footage is never offered.**
+Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood in the first 7 s or
 swearing in the subtitles, and **never a child near guns, shooting, a body or blood, or a body with blood**, anywhere
 in it (the Nov 20 dock shootout); and its **labels are checked against what the vision model sees in its own frames** (a
 "crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. Then the picks
@@ -55,6 +57,9 @@ For every entry of `picks`:
 - `topic` (a topic candidate): what the footage proves (`id`, `why`, `at_s`) and the facts.json ids it may use
   (`facts`). `format_options`: the formats this moment can teach (T1 a topic, F1-F4 as before); an action pick is A1.
 - `payoff_strength` and `pick_why` (why this moment won), `repeats` (posted topics it repeats).
+- `bank_id`, `status` (new, or rendered before and not posted), `label` (what the frames at the moment's loudest second,
+  `peak_s`, show: `name`, `text`, `sure`, `why`; **not `sure`: look before you believe it**), `questions` (the
+  experiments and shot-list questions it answers on screen: a good test Short asks one of them).
 - `window`, `anchor_s`, `evidence` (E1, E2 ...: what the footage shows, when, and where that comes from: the HUD's stars,
   `heat` (the icons under the stars) and `star_look` (red, red outline, white outline), activities, events the frames
   confirmed, the model's lines), `flags`, `mode`, `mission`, `dropped_labels` (what the frames did not confirm).
@@ -189,4 +194,6 @@ can fix; otherwise say so in the report.
    strength and why it was picked (`pick_why`), the replay if it has one, the 3 hooks
    with the starred one marked, what it teaches or shows, the length, the title, its flags.
 4. Candidates left out and why (`candidates.json` `rejected`, and picks you didn't write).
-5. How long prepare and render took. Ask nothing.
+5. For each READY Short, the line the owner runs after posting it:
+   `.\.venv\Scripts\python.exe bank.py posted "<the Short's folder>"` (until then its footage is not locked).
+6. How long prepare and render took. Ask nothing.

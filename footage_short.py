@@ -52,6 +52,7 @@ from urllib.parse import quote
 
 import clip
 import facts as facts_file
+import fastff
 import index
 import library
 import make_short
@@ -403,9 +404,36 @@ def recent_spans(used, name=None, last=RECENT_SHORTS):
     return [tuple(span) for s in shorts for span in s.get("spans", [])]
 
 
-def save_used(shorts_dir, name, spans):
+def locked(entry):
+    """Whether an entry's footage may not be shown again (PR 32): every entry but one that says it was only rendered.
+    An entry with no status, from before PR 32, is locked."""
+    return entry.get("status") != "rendered"
+
+
+def save_used(shorts_dir, name, spans, status=None):
+    """The footage a Short showed. status "rendered": made, not posted (bank.py posted locks it). Rendering a Short that
+    was posted again keeps it posted, with the footage it was posted with."""
     used = load_used(shorts_dir)
-    used["shorts"] = [s for s in used["shorts"] if s.get("name") != name] + [{"name": name, "spans": spans}]
+    old = next((s for s in used["shorts"] if s.get("name") == name), None)
+    entry = dict(old or {}, name=name, spans=spans)
+    if old and (old.get("status") == "posted" or old.get("posted")):
+        entry["spans"] = old.get("spans", []) + [list(s) for s in spans if list(s) not in old.get("spans", [])]
+    elif status and not (old and locked(old)):
+        entry["status"] = status
+    used["shorts"] = [s for s in used["shorts"] if s.get("name") != name] + [entry]
+    index.write_json(Path(shorts_dir) / USED_FOOTAGE, used)
+
+
+def set_status(shorts_dir, name, spans, status, **fields):
+    """An entry's status (and other fields: posted, note), in its place; a new entry at the end when there is none. The
+    spans it had stay."""
+    used = load_used(shorts_dir)
+    entry = next((s for s in used["shorts"] if s.get("name") == name), None)
+    if entry is None:
+        entry = {"name": name, "spans": []}
+        used["shorts"].append(entry)
+    entry["spans"] = entry.get("spans", []) + [list(s) for s in spans if list(s) not in entry.get("spans", [])]
+    entry.update(status=status, **fields)
     index.write_json(Path(shorts_dir) / USED_FOOTAGE, used)
 
 
@@ -743,7 +771,7 @@ def footage_short(script_path, check_only=False, shorts_dir=SHORTS_DIR, root=mak
     (out / "picks.json").write_text(json.dumps(picks_file, indent=1, ensure_ascii=False), encoding="utf-8")
     ready = not not_ready
     if ready:
-        save_used(shorts_dir, name, [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in logged])
+        save_used(shorts_dir, name, [[Path(s["video"]).stem, s["start_s"], s["end_s"]] for s in logged], "rendered")
         picker.save_used(name, [p["file"] for p in rock if p.get("file")], used_log)
     log(f"Folder: {out}")
     for item in ("short.mp4", "picks.html", "picks.json", "script.json", "upload.txt", "claims.txt", "pacing.txt"):
@@ -771,6 +799,7 @@ def main():
                         help="the date in the Short's folder name (default: today)")
     parser.add_argument("--library", type=Path, default=index.LIBRARY, help=f"footage library (default {index.LIBRARY})")
     args = parser.parse_args()
+    fastff.use()
     if args.folder_date and facts_file.day_of(args.folder_date) is None:
         parser.error("--folder-date must be a day written as YYYY-MM-DD")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
