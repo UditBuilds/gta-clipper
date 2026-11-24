@@ -32,6 +32,7 @@
   {"name": "can you survive jumping off an overpass", "type": "stunt", "posted": "2026-11-23", "added": "2026-11-23T21:45:00",
    "rules": [{"term": ["stunt"], "words": ["overpass", "bridge"]}, {"all_words": ["overpass", "jump"]},
              {"all_words": ["overpass", "fall"]}, {"all_words": ["bridge", "jump"]},
-             {"all_words": ["bridge", "falls off"]}, {"all_words": ["bridge", "falls from"]}]}
+             {"all_words": ["bridge", "falls off"]}, {"all_words": ["bridge", "falls from"]}]},
+  {"name": "Which GTA 6 animal takes you DOWN first?", "type": "stunt", "posted": "2026-11-24", "added": "2026-11-24T19:36:16", "rules": [{"term": ["stunt"], "words": ["which", "animal", "takes"]}, {"all_words": ["which", "animal", "takes"]}]}
  ]
 }
