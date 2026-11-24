@@ -54,7 +54,7 @@ def short(**over):
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
          "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
          "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.0},           # PR 30: on frame 0 (was 14.3)
-                   {"say": "Wait for it.", "claim": "hype", "at": 17.5},
+                   {"say": "Hold for it.", "claim": "hype", "at": 17.5},          # PR 34: "Wait for it." is filler now
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
                    {"say": "You just keep going.", "claim": "hype", "at": 34.8}]}  # PR 30: ends the Short (was 30.3)
@@ -442,25 +442,27 @@ def synth_video():
     return make_video(ROOT / "synth.mp4", 40, loud_at=21.0, size="640x360")
 
 
-def render_short(name, s, **parts):
+def render_short(name, s, heard=None, **parts):
     """One Short from synth_video through launch.render with engine v4: its run folder, its render.json entry, the voice
-    speeds asked for and every command it ran."""
+    speeds asked for and every command it ran. heard: the words the first-word check hears at the start (its voice is a
+    tone, so Whisper is stood in for: line 1's own words by default)."""
     v = synth_video()
     tmp = ROOT / name
     tmp.mkdir()
-    speeds, commands, run = [], [], subprocess.run
+    speeds, commands, run, first = [], [], subprocess.run, launch.first_words_check
 
     def recorder(args, *a, **k):
         commands.append([str(x) for x in args])
         return run(args, *a, **k)
     subprocess.run = recorder
+    launch.first_words_check = lambda path, say, log=print: first(path, say, log, lambda p: heard or say.split())
     try:
         folder = run_folder_with(tmp, [moment(v)], [s])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)], facts=FACTS,
                              today=TODAY, shorts_dir=tmp, log=lambda m: None,
                              v4_parts={"synth": fake_voice(speeds), "build": no_music_build, **parts})
     finally:
-        subprocess.run = run
+        subprocess.run, launch.first_words_check = run, first
     return SimpleNamespace(folder=folder, entry=data["shorts"][0], speeds=speeds, commands=commands, name=name)
 
 
@@ -541,12 +543,9 @@ def a_short_without_a_payoff_is_rejected_on_the_page():
         return e["status"] == "FAILED" and has(e["problems"], "No clear payoff, no Short")
 
 
-@check
-@testkit.full
-def early_swearing_fails_with_the_shorts_metadata():
-    """PR 30: the speech check's "swearing in the first 7 s" was raised outside render_one's try, so render() replaced
-    the Short's entry with a bare stub (no moment, folder, hooks or type on the review page). Now it is FAILED with
-    all of them and the reason (the shots and the finished Short are plain_render's, copied in)"""
+def made_again(name, early=(), heard=None):
+    """The made-up Short again without rendering it (the shots and the finished Short are plain_render's, copied in), with
+    what the speech check hears (early: the swearing) and the words heard at the start: its render.json entry."""
     first = plain_render()
 
     def make_shot(video, s, path, grade, log):
@@ -559,14 +558,88 @@ def early_swearing_fails_with_the_shorts_metadata():
         there, here = (json.dumps(str(x))[1:-1] for x in (first.out, out_dir))
         return json.loads((first.out / "log.json").read_text(encoding="utf-8").replace(there, here))
     old = launch.speech_check
-    launch.speech_check = lambda path, log=print, check=None: {"early": [(1.2, "damn")], "later": [], "words": 9}
+    launch.speech_check = lambda path, log=print, check=None: {"early": list(early), "later": [], "words": 9}
     try:
-        e = render_short("swearing", short(), make_shot=make_shot, build=build).entry
+        return render_short(name, short(), heard, make_shot=make_shot, build=build).entry
     finally:
         launch.speech_check = old
+
+
+@check
+@testkit.full
+def early_swearing_fails_with_the_shorts_metadata():
+    """PR 30: the speech check's "swearing in the first 7 s" was raised outside render_one's try, so render() replaced
+    the Short's entry with a bare stub (no moment, folder, hooks or type on the review page). Now it is FAILED with
+    all of them and the reason (the shots and the finished Short are plain_render's, copied in)"""
+    e = made_again("swearing", early=[(1.2, "damn")])
     return (e["status"] == "FAILED" and has(e["problems"], "spoken swearing in the first 7 s")
             and e.get("moment") == "M1" and e.get("type") == "action" and e.get("folder")
             and e.get("hooks") == short()["hooks"])
+
+
+@check
+def the_first_three_words_heard_must_be_the_hooks():
+    """PR 34: Kokoro's "Can you ..." is heard as "And you ..." (M24 went up like that), so the render transcribes the first
+    2 s and compares the first 3 words with line 1's: "and you survive" for "Can you survive" is refused and both are
+    named; capitals, punctuation and "six" for 6 are no difference; a 2-word line needs its 2 words; nothing heard is
+    refused; where it can't be checked (no Whisper, or it breaks) the Short gets a flag, never a silent pass"""
+    import speech
+    say = "Can you survive this GTA 6 fall?"
+    bad = launch.first_words_check("x.mp4", say, listen=lambda p: ["And", "you", "survive", "this"])
+    good = launch.first_words_check("x.mp4", say, listen=lambda p: ["CAN", "you,", "survive...", "that"])
+    same = [speech.first_words_problem(*x) for x in (("Will GTA 6 animals attack?", ["will", "GTA", "six", "animals"]),
+                                                     ("Don’t move.", ["Dont", "move."]),
+                                                     ("Watch this.", ["Watch", "this,", "wait"]))]
+    wrong = [speech.first_words_problem(*x) for x in ((say, []), (say, ["Can", "you"]), ("Watch this.", ["Watch"]))]
+
+    def broken(path):
+        raise RuntimeError("no model")
+    none, flag = launch.first_words_check("x.mp4", say, log=lambda m: None, listen=broken)
+    return ("can you survive" in bad[0] and "and you survive" in bad[0] and bad[1] is None and good == (None, None)
+            and same == [None] * 3 and all(wrong) and none is None and "not checked" in flag)
+
+
+@check
+def only_the_first_two_seconds_are_transcribed_for_it():
+    """speech.first_words hands Whisper the first 2 s of sound and nothing else; the swear check still hears all of it"""
+    import numpy as np
+    import speech
+    sent, saved = [], (speech.audio, speech.load)
+
+    def transcribe(sound, **kw):
+        sent.append(len(sound))
+        return [SimpleNamespace(words=[SimpleNamespace(start=0.0, end=0.3, word=" Can")])], None
+    speech.audio = lambda p: np.zeros(16000 * 10, np.float32)
+    speech.load = lambda: SimpleNamespace(transcribe=transcribe)
+    try:
+        heard, all_of_it = speech.first_words("x.mp4"), speech.words("x.mp4")
+    finally:
+        speech.audio, speech.load = saved
+    return heard == ["Can"] and all_of_it == [(0.0, 0.3, "Can")] and sent == [32000, 160000]
+
+
+@check
+@testkit.full
+def a_short_whose_hook_is_misheard_fails_and_one_heard_right_is_ready():
+    """PR 34, through launch.render: line 1 is "Watch this."; heard as "Wash this" the Short is FAILED with both named and
+    keeps its metadata; heard right it is READY (the shots and the finished Short are plain_render's, copied in)"""
+    bad, good = made_again("misheard", heard=["Wash", "this."]), made_again("heard", heard=["watch", "This"])
+    return (bad["status"] == "FAILED" and has(bad["problems"], "watch this") and has(bad["problems"], "wash this")
+            and bad.get("moment") == "M1" and bad.get("folder") and good["status"] == "READY")
+
+
+@check
+def filler_lines_are_refused():
+    """PR 34, the owner's rule: a line that only fills time ("Wait for it.", "That was close!", "Ouch", "Let's see") is
+    refused, alone or next to other words, in any case; a line that only looks like one is fine"""
+    def found(say):
+        return has(truth.story_problems(short(lines=[{"say": say, "claim": "hype", "at": 14.0}]), moment(), FACTS, "v4"),
+                   "is filler")
+    said = ["Wait for it.", "WAIT... for it!", "That was close.", "On the helmet. Ouch.", "Let’s see what happens.",
+            "So let's see.", "Okay, wait for it"]
+    fine = ["Nowhere to go now.", "The gap was closer than it looked.", "You wait for the light.", "Vouch for this one.",
+            "Let's go."]
+    return all(found(x) for x in said) and not any(found(x) for x in fine)
 
 
 @check
@@ -1104,7 +1177,7 @@ def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
         return {"pieces": []}
     with tempfile.TemporaryDirectory() as tmp:
         one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 36.0}], replay={"from": 20.6, "to": 21.4},
-                    lines=short()["lines"][:2] + [{"say": "Wait for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
+                    lines=short()["lines"][:2] + [{"say": "Hold for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
         folder = run_folder_with(tmp, [moment(Path(tmp) / "x.webm")], [one])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", Path(tmp) / "x.webm")],
                              facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,

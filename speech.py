@@ -1,15 +1,18 @@
-"""Spoken swearing in a finished Short (launch-fixes, step 7): faster-whisper small.en on the CPU (int8).
+"""Spoken swearing in a finished Short (launch-fixes, step 7) and the first words it says (PR 34): faster-whisper small.en
+on the CPU (int8).
 
 The subtitle check (safety.py) only reads burned-in subtitles; the game's own sound in a Short (dialogue, a car radio)
 was never checked, so every Short with game sound carried a "listen once" flag. This transcribes the Short and looks
 for the same swear words as the subtitle check (safety.PROFANITY). A swear word in the first FIRST_S seconds fails
-the Short (the owner's rule: the first 7 s must be clean); later ones are flags.
+the Short (the owner's rule: the first 7 s must be clean); later ones are flags. The first 2 s are transcribed on their
+own too: when the first 3 words heard are not the hook's, the Short fails ("Can you ..." is heard as "And you ...").
 
 Runs only where faster-whisper is installed (.venv-tts; approved: small.en, CPU int8, no CUDA wheels). clip.py and
 .venv are untouched. Without it, available() is False and render keeps the old "listen once" flag.
 
   .venv-tts\\Scripts\\python.exe speech.py <short.mp4>   # every word with its time, the words a minute, then the hits
 """
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +21,8 @@ import safety
 MODEL = "small.en"
 MODEL_DIR = Path(r"C:\AI\gta\models\whisper")
 FIRST_S = 7.0
+FIRST_WORDS_S, FIRST_WORDS = 2.0, 3      # the hook check: this many words, heard in the first seconds
+DIGITS = {w: str(n) for n, w in enumerate("zero one two three four five six seven eight nine ten".split())}
 PAUSE_S = 0.1                # a gap between two words this long is a pause (assemble leaves 0.12 s between sentences,
                              # cutplan 0.12 s or more between lines); a shorter one is inside the talking
 _model = None
@@ -50,10 +55,12 @@ def audio(path, rate=16000):
     return np.frombuffer(raw, dtype=np.float32).copy()
 
 
-def words(path, transcribe=None):
-    """[(start_s, end_s, word)] for everything said in the file."""
+def words(path, transcribe=None, seconds=None):
+    """[(start_s, end_s, word)] for everything said in the file, or in its first `seconds` alone."""
     if transcribe is None:
-        segments, _ = load().transcribe(audio(path), language="en", word_timestamps=True, vad_filter=False,
+        sound = audio(path)
+        sound = sound if seconds is None else sound[:int(seconds * 16000)]
+        segments, _ = load().transcribe(sound, language="en", word_timestamps=True, vad_filter=False,
                                         beam_size=5, condition_on_previous_text=False)
         return [(w.start, w.end, w.word.strip()) for s in segments for w in (s.words or [])]
     return transcribe(path)
@@ -80,6 +87,28 @@ def wpm(ws):
         return out
     return dict(out, span_s=round(span, 2), voiced_s=round(voiced, 2), wpm_with_pauses=round(len(ws) / span * 60, 1),
                 wpm_voiced_only=round(len(ws) / voiced * 60, 1))
+
+
+def first_words(path):
+    """The words heard in the file's first FIRST_WORDS_S seconds, transcribed on their own."""
+    return [w for _, _, w in words(path, seconds=FIRST_WORDS_S)]
+
+
+def plain(text):
+    """A text's words for comparing: lower case, no punctuation ("don't" is "dont"), number words as digits."""
+    low = str(text or "").lower().replace("’", "").replace("'", "")
+    return [DIGITS.get(w, w) for w in re.findall(r"[a-z0-9]+", low)]
+
+
+def first_words_problem(say, heard):
+    """Why a Short's first words are not its hook's, or None. say: line 1 as written; heard: the words Whisper heard at the
+    start. The first FIRST_WORDS are compared (a hook of fewer words: all of them)."""
+    want = plain(say)[:FIRST_WORDS]
+    got = plain(" ".join(heard))[:len(want)]
+    if got == want:
+        return None
+    return (f"the hook is misheard: the first words are \"{' '.join(want)}\" but Whisper hears \"{' '.join(got)}\"; a viewer "
+            "may too. Use another opener (\"Can anyone ...\" is heard right, \"Can you ...\" as \"And you ...\")")
 
 
 def swearing(path, transcribe=None, first_s=FIRST_S):

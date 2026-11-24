@@ -183,7 +183,7 @@ def line_problems(n, line, by_id, nohud, facts, line_span=None, engine="v2"):
                    "works, from facts.json) or \"ask\" (a question a later line answers)"
                    + (" or \"hype\" (a few words to the viewer that claim nothing)" if engine == "v4" else ""))
     if claim == "hype" and len(words_of(say)) > HYPE_WORDS:
-        out.append(f"{where}: a hype line is at most {HYPE_WORDS} words (\"Watch this.\", \"Wait for it.\"); a longer "
+        out.append(f"{where}: a hype line is at most {HYPE_WORDS} words (\"Nowhere to go now.\"); a longer "
                    "line says what is on screen (on_screen, with its evidence)")
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         out.append(f"{where}: \"evidence\" is a list of evidence ids such as [\"E2\"]")
@@ -272,8 +272,8 @@ def upload_problems(short):
 
 # --- The story layer (PR 26): the owner's rules for what a Short says ---
 CLAIMS_V2 = CLAIMS + ("ask",)
-# Engine v4 (editor-v3, Nov 20): the owner's punchy style talks to the viewer ("Watch this.", "Wait for it."). A
-# "hype" line claims nothing: at most HYPE_WORDS words, no evidence, and every thing it names still needs evidence.
+# Engine v4 (editor-v3, Nov 20): the owner's punchy style talks to the viewer ("Nowhere to go now."). A "hype" line
+# claims nothing: at most HYPE_WORDS words, no evidence, and every thing it names still needs evidence.
 CLAIMS_V4 = CLAIMS_V2 + ("hype",)
 HYPE_WORDS = 5
 FORMATS = {"F1": "GTA 5 vs GTA 6: what changed", "F2": "a test: can you ...? and the answer",
@@ -293,11 +293,20 @@ NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", 
 TEACHING_KINDS = ("stars", "police", "event", "compare", "rockstar")
 CTA_WORDS = ("subscribe", "follow for", "follow me", "like and", "like this", "comment", "link in", "check out",
              "hit the bell")
+# The owner (Nov 24, PR 34: a bike Short whose lines only said what the picture shows): every line adds a fact, a detail
+# or tension. These add nothing, so no line says one, whatever else it says ("On the helmet. Ouch.").
+FILLER = ("wait for it", "that was close", "ouch", "let's see", "lets see", "let us see")
 # F2 (a test): a line may say why something happened only when both the change and the result are on screen, in
 # that order (the owner's rule): it cites two evidence items, the second later than the first.
 CAUSE = (r"\bbecause\b", r"\bso (?:the|they|it|he|she|i|we)\b", r"\bmade (?:them|the cops|the police|it|him|her)\b",
          r"\bthat'?s (?:why|how)\b", r"\bthanks to\b", r"\bby (?:changing|switching|swapping|hiding|jumping|ditching|"
          r"stealing|getting)\b", r"\blost (?:them|the cops|the police)\b", r"\bto lose\b", r"\bworked\b")
+
+
+def filler_in(text):
+    """The first FILLER phrase a line says (whole words, whatever the case, the punctuation and the spaces), or None."""
+    said = " ".join(w.strip("'") for w in re.findall(r"[a-z0-9']+", str(text or "").lower().replace("’", "'")))
+    return next((f for f in FILLER if f" {f} " in f" {said} "), None)
 
 
 def spoken_numbers(text):
@@ -451,6 +460,10 @@ def story_problems(short, moment, facts, engine="v2"):
             out.append(f"{where}: play-by-play: {why}")
         if any(has_word(say, w) for w in CTA_WORDS):
             out.append(f"{where}: no spoken call to action (a silent subscribe pill ends every Short)")
+        filler = filler_in(say)
+        if filler:
+            out.append(f"{where}: \"{filler}\" is filler: say something the picture doesn't show (a fact, a detail the "
+                       "viewer would miss, or tension), or leave the line out")
         if fmt == "F2" and claim != "ask":
             low = say.lower().replace("’", "'")
             if any(re.search(p, low) for p in CAUSE):
