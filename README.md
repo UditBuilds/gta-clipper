@@ -1064,7 +1064,7 @@ moment of every GTA 6 recording**, and footage is locked only when I post it.
 .\.venv\Scripts\python.exe bank.py posted "C:\AI\gta\shorts\launch-2026-11-24\1-my-short"     # or a finished Short's folder
 .\.venv\Scripts\python.exe bank.py rejected 1121-164843-0312 --why "too dark"
 .\.venv\Scripts\python.exe bank.py page         # write bank.html again with today's statuses
-.\.venv\Scripts\python.exe banktest.py          # 32 checks, 7 s
+.\.venv\Scripts\python.exe banktest.py          # 34 checks, 8 s
 ```
 
 It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`, and `raw\<recording>.json` (below).
@@ -1093,9 +1093,11 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 - **Statuses** come from `_used_footage.json`'s spans: `new`; `rendered` (a Short was made, not posted: still offered,
   ranked after new ones of the same payoff); `posted` (locked); `rejected` (never offered). An entry with no status is
   locked. A READY render writes `rendered`. `bank.py posted` locks the footage and adds the topic to
-  `posted_topics.json`; both files are copied to `bank\backups` first.
+  `posted_topics.json`; both files are copied to `bank\backups` first. By id it locks all that a Short /launch made of the
+  moment showed (more than the moment), else the moment's seconds. The Short's type comes from its pick, never a guess.
 - **The migration** (`bank.py migrate`, done on Nov 24): 11 entries before, 11 after, every span, day and note kept. 8 are
-  posted, 3 were rendered and never posted (six wanted stars, the bridge jam, the witness) and are free.
+  posted, 3 were rendered and never posted (six wanted stars, the bridge jam, the witness). The bridge jam's seconds lie in
+  the posted SUV crash's, so they stay locked; the other two are free.
 - **The picker reads the bank.** `/launch` offers the action and proof shelves' new and rendered moments of every
   recording; the 2/3 payoff bar and the variety rules are the same. It works with no new recordings. After a candidate's
   safety checks, an impact seen elsewhere in its footage no longer names it (`bank.keep_what_the_peak_shows`). A Short
@@ -1110,7 +1112,9 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 - **The labels, looked at by hand** (frames of every one). The first build had 13 crashes: 9 real (one only a scrape
   through bushes), 4 not (a truck that turns round, a drift, burnt cars after a fight, a carjacking). Since then a crash
   must also be heard, a wreck is not one, and most of the looks at the same seconds decide. All 11 action clips with a
-  payoff of 3/3 now show what they say: 9 crashes, M24's jump, and a wild boar that knocks the player over.
+  payoff of 3/3 now show what they say: 9 crashes, M24's jump, and a fall (a wild boar knocks the player over). Known
+  limit: a fall counts as a "stunt" like a jump, because no question asks the model about a person falling, so the picker
+  takes the boar for the same type as the overpass jump.
 - **Re-pick of the last real run** (launch-2026-11-20-part2), the old miner and then the bank:
   - as of that night: the motorbike crash, and nothing else (its next crash was M27, M24's footage under "truck crash");
     the bank: the motorbike crash **and the boar attack** (its next crash is a real one, 7:31);
@@ -1132,9 +1136,9 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 32): `--full` | 572 | 7.9 min |
-| now: `--quick` | 496 | 1.7 min |
-| now: `--ci`, on GitHub's Windows machine | 481 | about 2 min |
+| now (PR 32): `--full` | 574 | 7.9 min |
+| now: `--quick` | 498 | 1.8 min |
+| now: `--ci`, on GitHub's Windows machine | 483 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1152,7 +1156,7 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 | indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 10 | 10 | 10 | - | 0.5 s |
-| banktest (PR 32) | `.venv` | 32 | 32 | 31 | - | 8 s |
+| banktest (PR 32) | `.venv` | 34 | 34 | 33 | - | 8 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
