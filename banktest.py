@@ -27,6 +27,8 @@ from footagetest import made_up_index, made_up_timeline, seg
 
 HERE = Path(__file__).resolve().parent
 CHECKS = []
+# The owner's posted list as it was on Nov 23 (a copy): the next posted Short must change no check here.
+launch.POSTED_FILE = HERE / "testdata" / "posted_topics_2026-11-23.json"
 
 
 def check(fn):
@@ -672,6 +674,64 @@ def marking_a_moment_posted_locks_it_and_adds_its_topic():
             and used[0]["status"] == "posted" and "example.com" in used[0]["note"] and after["status"] == "posted" and same
             and len(refused) == 4 and unchanged and short["status"] == "posted" and len(short["spans"]) == 1
             and len(topics) == 17 and topics[-1]["name"] == "a whole short"), refused
+
+
+@check
+def marking_by_id_locks_all_the_short_showed():
+    """/launch made a Short of the moment that showed more than it (its window starts 15 s earlier): marking the moment's id
+    posted turns that Short's own entry to posted, all it showed is locked and no second entry is made; a dry run's render
+    of it doesn't count; a moment no Short was made of locks its own seconds"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(102, 300)}, used={"shorts": []})
+        posted = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, posted)
+        b = build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", only=CRASHES, crash=True))
+        first, second = sorted((x for x in b["moments"] if x["main"] == "crash"), key=lambda x: x["start_s"])
+        for run, dry in (("launch-2026-11-24", False), ("trial", True)):
+            (shorts / run / "1-a-short").mkdir(parents=True)
+            (shorts / run / "render.json").write_text(json.dumps({"dry_run": dry, "shorts": [
+                {"short": 1, "status": "READY", "bank_id": second["id"], "folder": str(shorts / run / "1-a-short"),
+                 "title": "Car into a wall", "shown": [["GTA_20261119120000", 280.0, 296.0], ["GTA_20261119120000", 296.0, 312.0]]}]}),
+                encoding="utf-8")
+        footage_short.save_used(shorts, "1-a-short@launch-2026-11-24", [["GTA_20261119120000", 280.0, 296.0]], "rendered")
+        kw = {"shorts_dir": shorts, "bank_dir": bdir, "posted_file": posted, "log": quiet, "on": "2026-11-24"}
+        bank.mark_posted(second["id"], "car into a wall", **kw)
+        one_ = footage_short.load_used(shorts)["shorts"]
+        locked = launch.all_used_spans(shorts)
+        bank.mark_posted(first["id"], "another wall", **kw)
+        two = footage_short.load_used(shorts)["shorts"]
+    return (second["start_s"] > 285 and [s["name"] for s in one_] == ["1-a-short@launch-2026-11-24"]
+            and one_[0]["status"] == "posted" and ("GTA_20261119120000", 280.0, 296.0) in locked
+            and ("GTA_20261119120000", 296.0, 312.0) in locked and [s["name"] for s in two][1] == f"{first['id']}@bank"
+            and two[1]["spans"] == [["GTA_20261119120000", first["start_s"], first["end_s"]]]), (one_, two)
+
+
+@check
+def a_posted_shorts_type_is_never_guessed():
+    """a Short from before the bank, marked by its folder: its type comes from its pick in that run's candidates.json (the
+    six wanted stars: star rise); with no pick there it is refused, nothing changes, and --type says it"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        shorts, bdir, posted = tmp / "shorts", tmp / "bank", tmp / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, posted)
+        run = shorts / "launch-2026-11-19-part3"
+        (run / "2-six-stars").mkdir(parents=True)
+        e = {"short": 2, "moment": "M4", "status": "READY", "folder": str(run / "2-six-stars"), "title": "GTA 6 has SIX wanted stars",
+             "shown": [["rec_a", 60.0, 62.0]]}
+        (run / "render.json").write_text(json.dumps({"shorts": [e]}), encoding="utf-8")
+        kw = {"shorts_dir": shorts, "bank_dir": bdir, "posted_file": posted, "log": quiet, "on": "2026-11-24"}
+        before = posted.read_bytes()
+        refused = None
+        try:
+            bank.mark_posted(str(run / "2-six-stars"), **kw)
+        except bank.BankError as err:
+            refused = str(err)
+        untouched = posted.read_bytes() == before and not (shorts / footage_short.USED_FOOTAGE).exists()
+        (run / "candidates.json").write_text(json.dumps({"picks": [{"short": 2, "id": "M4", "category": "star rise",
+                                                                    "terms": {"star_rise": 2.5}}]}), encoding="utf-8")
+        topic, _ = bank.mark_posted(str(run / "2-six-stars"), **kw)
+        said, _ = bank.mark_posted(str(run / "2-six-stars"), name="the same again", kind="discovery", **kw)
+    return refused and "--type" in refused and untouched and topic["type"] == "star rise" and said["type"] == "discovery"
 
 
 @check

@@ -1075,11 +1075,32 @@ def topic_words(text, n=3):
     return out[:n]
 
 
+def shorts_of(shorts_dir, bank_id):
+    """The finished Shorts /launch made of a moment: [(entry name in _used_footage.json, what it showed, title)]."""
+    out = []
+    for f in sorted(Path(shorts_dir).glob("*/" + launch.RENDER_LOG)):
+        log_ = index.read_json(f) or {}
+        out += [(f"{Path(e['folder']).name}@{f.parent.name}", [list(s) for s in e["shown"]], e.get("title"))
+                for e in log_.get("shorts", []) if e.get("bank_id") == bank_id and e.get("status") == "READY"
+                and e.get("shown") and e.get("folder") and not log_.get("dry_run")]
+    return out
+
+
+def type_of_short(folder, entry):
+    """The type of a finished Short in the posted list's words, from its pick in the run's candidates.json, or None."""
+    cand = index.read_json(Path(folder).parent / "candidates.json") or {}
+    pick = next((p for p in cand.get("picks", []) if p.get("short") == entry.get("short")
+                 or (entry.get("moment") and p.get("id") == entry["moment"])), None)
+    return launch.plain_type(launch.moment_type(pick)) if pick else None
+
+
 def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shorts_dir=None, bank_dir=None,
                 posted_file=None, log=log_line):
     """The owner posted a Short of this moment (a bank id, or a finished Short's folder): its footage is locked
     (_used_footage.json, status "posted") and its topic is added to posted_topics.json, as the M24 entry was by hand.
-    Both files are copied to bank\\backups first; nothing already in them changes."""
+    By id: when /launch made a Short of the moment, all that Short showed is locked (a Short shows more than the moment:
+    up to 35 s), else the moment's own seconds. Both files are copied to bank\\backups first; nothing already in them
+    changes."""
     shorts_dir, bank_dir = Path(shorts_dir or launch.SHORTS_DIR), Path(bank_dir or BANK)
     posted_file = Path(posted_file or launch.POSTED_FILE)
     on = on or date.today().isoformat()
@@ -1087,11 +1108,11 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
         raise BankError("--on is a day: YYYY-MM-DD")
     bank = read_bank(bank_dir) or {"moments": [], "recordings": []}
     m = next((x for x in bank["moments"] if x["id"] == what), None)
-    entry_name, text, title = None, "", None
+    text, title = "", None
     if m is not None:
-        spans = [[m["video"], m["start_s"], m["end_s"]]]
-        text, title = m["label"]["text"], name
-        entry_name = f"{m['id']}@bank"
+        made = shorts_of(shorts_dir, m["id"])
+        locks = [(n, s) for n, s, _ in made] or [(f"{m['id']}@bank", [[m["video"], m["start_s"], m["end_s"]]])]
+        text, title = m["label"]["text"], made[-1][2] if made else name
         kind = kind or launch.plain_type(launch.moment_type(dict(m, point=None)) or m["label"]["kind"])
     else:
         folder = Path(what)
@@ -1099,11 +1120,13 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
         e = next((x for x in log_.get("shorts", []) if x.get("folder") and Path(x["folder"]).name == folder.name), None)
         if e is None or not e.get("shown"):
             raise BankError(f"no moment in the bank has the id {what!r}, and it is not a finished Short's folder")
-        spans = [list(s) for s in e["shown"]]
+        locks = [(f"{folder.name}@{folder.parent.name}", [list(s) for s in e["shown"]])]
         title, text = e.get("title"), e.get("title") or ""
-        entry_name = f"{folder.name}@{folder.parent.name}"
         m = next((x for x in bank["moments"] if x["id"] == e.get("bank_id")), None)
-        kind = kind or (launch.plain_type(launch.moment_type(dict(m, point=None))) if m else None) or "stunt"
+        kind = kind or (launch.plain_type(launch.moment_type(dict(m, point=None))) if m else type_of_short(folder, e))
+        if not kind:
+            raise BankError("say what kind of Short it was: --type crash (or stunt, star rise, discovery, chase ...): the "
+                            "picker doesn't follow a Short with one of the same type")
     name = name or title
     if not name:
         raise BankError("say what it was: --name \"can you survive jumping off an overpass\"")
@@ -1118,12 +1141,14 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
     used_file = shorts_dir / footage_short.USED_FOOTAGE
     saved = backup([used_file, posted_file], bank_dir)
     add_topic(topic, posted_file)
-    footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
-                             note="posted by the owner" + (f": {url}" if url else ""))
+    for entry_name, spans in locks:
+        footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
+                                 note="posted by the owner" + (f": {url}" if url else ""))
     if bank["moments"]:
         write(refresh(bank, shorts_dir), bank_dir)
-    log(f"Posted: {name} ({on}). {len(spans)} span(s) locked as {entry_name}; topic added to {posted_file.name}. "
-        f"Copies of both files as they were: {saved}")
+    spans = [s for _, sp in locks for s in sp]
+    log(f"Posted: {name} ({on}). {len(spans)} span(s) locked as {', '.join(n for n, _ in locks)}; topic added to "
+        f"{posted_file.name}. Copies of both files as they were: {saved}")
     return topic, spans
 
 
@@ -1225,7 +1250,7 @@ details {{ margin-top:6px; }} summary {{ cursor:pointer; color:var(--soft); font
 <ol>
 <li>Pick a shelf below. The best moments are at the top of each one.</li>
 <li>Click a picture to play the recording from that second.</li>
-<li>After you upload a Short: open the moment's <b>Mark it</b> line, press <b>Copy</b> next to "Posted", change the words in quotes to what the Short was about, and paste it in PowerShell (in <code>C:\\AI\\gta-clipper</code>). That footage is then locked.</li>
+<li>After you post a Short that <b>/launch made</b>: use the line under "Posted it?" on its review page. After you post one you <b>made yourself</b> from a moment here: open the moment's <b>Mark it</b> line, press <b>Copy</b> next to "Posted", change the words in quotes to what the Short was about, and paste it in PowerShell (in <code>C:\\AI\\gta-clipper</code>). That footage is then locked.</li>
 <li>If you never want to see a moment again: copy the "Rejected" line instead.</li>
 <li><b>unsure</b> means the pictures at the loudest second did not show what the moment was found for. Look before you use it.</li>
 </ol>
