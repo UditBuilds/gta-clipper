@@ -915,7 +915,7 @@ def new_recordings(input_dir=None, lib_dir=None):
     """The GTA 6 recordings in the input folder that have no index yet, oldest first."""
     lib = index.read_json(Path(lib_dir or index.LIBRARY) / "library.json") or {}
     out = []
-    for v in sorted(Path(input_dir or launch.INPUT).glob("Grand Theft Auto VI_*")):
+    for v in sorted(Path(input_dir or launch.INPUT).glob(launch.GAME_FILES[GAME] + "*")):
         if v.suffix.lower() in index.VIDEO_EXTS and v.stem not in (lib.get("videos") or {}) and not index.off_limits(v):
             out.append(v)
     return out

@@ -50,7 +50,7 @@ def suite(name, venv, checks, tiers=testkit.TIERS):
 
 # Light ones first, so a plain mistake shows in seconds.
 SUITES = [
-    suite("runnertest", ".venv", 10),
+    suite("runnertest", ".venv", 11),
     suite("evaltest", ".venv", 21),
     suite("spreadtest", ".venv", 13),
     suite("vlmtest", ".venv", 39),
@@ -62,7 +62,7 @@ SUITES = [
     suite("hooktest", ".venv", 51),
     suite("hudtest", ".venv", 9, ("quick", "full")),         # the owner's recordings
     suite("footagetest", ".venv-tts", 31),
-    suite("launchtest", ".venv-tts", 48),
+    suite("launchtest", ".venv-tts", 49),
     suite("topictest", ".venv-tts", 24),
     suite("storytest", ".venv-tts", 16),
     suite("editortest", ".venv-tts", 54),

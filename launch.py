@@ -65,6 +65,8 @@ SHORTS_DIR = footage_short.SHORTS_DIR
 RUNS_LOG = "_launch_runs.json"           # in the shorts folder: every /launch run and the recordings it took
 GAMES = {"gta6": {"name": "GTA 6", "slots": 6, "hashtag": "#GTA6"},
          "gta5": {"name": "GTA V", "slots": 5, "hashtag": "#GTA5"}}
+GAME_FILES = {"gta6": "Grand Theft Auto VI_"}    # how the PS5 starts a recording's name: what isn't called that is not of
+                                                 # the game (the input folder also holds GTA 5 recordings)
 STEP = clip.BUCKET                       # 0.5 s: the HUD and the action score are per half second
 GUARD_S = footage_short.GUARD_S          # footage keeps this far from a never_use part
 LOOP_LEAD_S = 2.0                        # a narrated Short's loop ending replays this much from before its start
@@ -155,10 +157,11 @@ def load_runs(shorts_dir):
     return index.read_record(Path(shorts_dir) / RUNS_LOG, "runs") or {"runs": []}
 
 
-def find_recordings(input_dir, library_dir, runs, explicit=None):
+def find_recordings(input_dir, library_dir, runs, explicit=None, game=None):
     """(the recordings to use, in session order, {name: why it was skipped}). explicit: the --videos list, used as
-    given. Otherwise every video in input_dir that is not in the library yet and not part of an earlier run. A run
-    still "preparing" (it stopped) keeps its own recordings: they are taken again."""
+    given. Otherwise every video in input_dir that is not in the library yet and not part of an earlier run; with a
+    game of GAME_FILES, only that game's (PR 35: a GTA 5 file in the folder was taken for GTA 6). A run still
+    "preparing" (it stopped) keeps its own recordings: they are taken again."""
     skipped = {}
     if explicit:
         videos = [Path(v) for v in explicit]
@@ -187,7 +190,9 @@ def find_recordings(input_dir, library_dir, runs, explicit=None):
     out = []
     for v in videos:
         barred = index.off_limits(v)
-        if barred:
+        if not explicit and not v.name.startswith(GAME_FILES.get(game, "")):
+            skipped[v.name] = f"not a {GAMES[game]['name']} recording (its name doesn't start with {GAME_FILES[game]})"
+        elif barred:
             skipped[v.name] = f"held-out footage ({barred}) is never used"
         else:
             out.append(v)
@@ -1753,7 +1758,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         preflight(index.MODEL, log)
     recordings, skipped = find_recordings(input_dir, library_dir, runs,
                                           videos or ([str(v) for v in sorted(Path(input_dir).iterdir())
-                                                      if v.suffix.lower() in index.VIDEO_EXTS] if dry_run else None))
+                                                      if v.suffix.lower() in index.VIDEO_EXTS] if dry_run else None), game)
     # launch-fixes: a recording too short for a Short (launch night had a 14.9 s one) is left out with a plain line,
     # before anything else looks at it.
     durations = {v.stem: probe_duration(v) for v in recordings}

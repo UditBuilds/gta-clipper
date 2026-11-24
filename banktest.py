@@ -867,7 +867,7 @@ def a_short_may_not_grow_into_locked_footage():
         free = next(c for c in bank.candidates(b["moments"], recs, {"posted": [], "rendered": [], "rejected": []}) if c["kinds"] == ["crash"])
     windows = [o["window"] for k, o in w.items() if isinstance(o, dict)]
     return (c["span"] == [290.0, 330.0] and windows and all(290.0 <= a and b <= 330.0 for a, b in windows)
-            and free["span"] == [0, 600.0] or free["span"] == [0.0, 600.0]) and c["span"] == [290.0, 330.0]
+            and free["span"] == [0.0, 600.0]), (c["span"], windows, free["span"])
 
 
 @check
@@ -903,7 +903,7 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
         lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(102, 300)})
         inp = tmp / "input"
         inp.mkdir()
-        new = inp / "GTA_20261121010000.webm"
+        new = inp / "Grand Theft Auto VI_20261121010000.webm"
         new.write_bytes(b"x")
         footage_short.set_status(shorts, "p", [["GTA_20261119120000", 95.0, 115.0]], "posted", posted="2026-11-20")
 
@@ -941,25 +941,26 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
             except launch.LaunchError as e:
                 stopped = str(e)
             # a night on which nothing passes says so and is not carried on by the next one
-            (inp / "GTA_20261127010000.webm").write_bytes(b"x")
-            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in ("GTA_20261119120000", "GTA_20261121010000",
-                                                                               "GTA_20261127010000")], "posted", posted="2026-11-24")
+            (inp / "Grand Theft Auto VI_20261127010000.webm").write_bytes(b"x")
+            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in (
+                "GTA_20261119120000", "Grand Theft Auto VI_20261121010000", "Grand Theft Auto VI_20261127010000")], "posted",
+                posted="2026-11-24")
             nothing = None
             try:
                 launch.prepare("gta6", day="2026-11-27", bank_dir=bdir, **kw)
             except launch.LaunchError as e:
                 nothing = str(e)
-            (inp / "GTA_20261128010000.webm").write_bytes(b"x")
+            (inp / "Grand Theft Auto VI_20261128010000.webm").write_bytes(b"x")
             left, _ = launch.find_recordings(inp, lib, launch.load_runs(shorts))
         finally:
             launch.probe_duration, launch.choose_profile, launch.POSTED_FILE = keep
     picks = data["picks"]
     hit = [p for p in picks if p["video"] == "GTA_20261119120000" and launch.overlap(p["window"][0], p["window"][1], 95.0, 115.0) > 0]
-    return (in_bank == {"GTA_20261119120000", "GTA_20261121010000"} and {p["video"] for p in picks} == in_bank and not hit
+    return (in_bank == {"GTA_20261119120000", "Grand Theft Auto VI_20261121010000"} and {p["video"] for p in picks} == in_bank and not hit
             and all(p["bank_id"] and p["label"]["kind"] == "crash" for p in picks)
             and {r["stem"] for r in data["recordings"]} == in_bank and data2["picks"] and folder != again
             and stopped and "no new recordings" in stopped and nothing and "no moment passed" in nothing
-            and [v.name for v in left] == ["GTA_20261128010000.webm"]), ([(p["video"], p["window"]) for p in picks], stopped)
+            and [v.name for v in left] == ["Grand Theft Auto VI_20261128010000.webm"]), ([(p["video"], p["window"]) for p in picks], stopped)
 
 
 @check
