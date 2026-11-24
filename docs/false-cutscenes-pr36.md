@@ -109,3 +109,32 @@ hold the weapon wheel for under 1.5 s, as the rule always allowed.
   still never_use. The minimap can't tell it from a cutscene.
 - The 5 recordings indexed with no HUD (`_005008`, `_043305`, `_051818`, `_162122`, `_014057`) are as they were.
 - `_164843` 1453.5-1468.5 (after the car hits the tree) is still blocked: the minimap is not there in those frames.
+
+## The bank after the fix (Nov 24, real files)
+
+Rebuilt twice: first with main's code as it was (step 1), then after the 7 recordings were indexed again (40 new looks at peaks by
+the vision model, everything else from saved answers).
+
+| | before | main's code (PR 35) | after the fix |
+|---|---:|---:|---:|
+| moments | 419 | 419 | 445 |
+| action shelf | 34 | 25 | 25 |
+| proof shelf | 34 | 28 | 38 |
+| list shelf | 351 | 366 | 382 |
+| unsure labels | 99 | 99 | 106 |
+| payoff 2/3 or more | 16 | 16 | 23 |
+| posted (locked) | 42 | 42 | 43 |
+
+- Step 1: every id stays, 15 unsure moments move to the list shelf (9 from action, 6 from proof), nothing with payoff 2/3 or more
+  changes. M24's and the boar's footage stay locked.
+- After the fix: 36 new ids, 10 ids gone. Every gone one touches freed footage: its stretch is longer now, so it was cut anew. The one
+  gone with payoff 2/3 (`1119-135610-0638`) is `-0640` now.
+- The locks are the seconds in `_used_footage.json`, which nothing here changed (14 entries before and after the rebuilds). Posted
+  moments are 43 instead of 42 because two longer moments now reach into posted footage (`1119-023422-0172`, `1119-143644-0384`), one of
+  them in place of `1119-143644-0404`. M24's and the boar's own moments are posted as before.
+- **The star counter misreads this footage.** In `_135610`, 12 of the bank's star moments are labelled by a star change; looked at, 2 are
+  real (0 to 2 at 10:45, 3 to 4 at 12:07) and 10 are not: blinking (searched-for) stars, and solid white stars on a dark dusk sky,
+  are lost for a moment. One more real change, 2 to 3 at 11:32.5, is inside `1119-135610-0678`, which is labelled by a false one at
+  11:22. So of the 7 new moments with payoff 2/3 or more, `1121-164843-0937` (a crash), `1119-135610-0640` and `-0678` (real star rises
+  in them) stand; `-0662`, `-0694` and `-0907` rest on a misread, and `-0689` is a piece of `-0678`. It is an older problem that these
+  cutscenes hid; nothing was changed for it here.
