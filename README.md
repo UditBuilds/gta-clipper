@@ -1177,7 +1177,7 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
 | now (PR 36): `--full` | 607 | 8.5 min |
 | now: `--quick` | 530 | 1.9 min |
-| now: `--ci`, on GitHub's Windows machine | 488 | about 2 min |
+| now: `--ci`, on GitHub's Windows machine | 515 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
