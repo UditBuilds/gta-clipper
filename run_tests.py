@@ -55,7 +55,7 @@ SUITES = [
     suite("spreadtest", ".venv", 13),
     suite("vlmtest", ".venv", 39),
     suite("varietytest", ".venv", 14),
-    suite("banktest", ".venv", 27),
+    suite("banktest", ".venv", 29),
     suite("indextest", ".venv", 41),
     suite("shorttest", ".venv", 42),
     suite("calibtest", ".venv", 38),
@@ -69,7 +69,7 @@ SUITES = [
     suite("explainertest", ".venv-tts", 88),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
-MINIMUM = {"quick": 491, "ci": 476}      # fewer checks than this in all, and the run fails
+MINIMUM = {"quick": 493, "ci": 478}      # fewer checks than this in all, and the run fails
 
 
 start_seconds = fastff.start_seconds

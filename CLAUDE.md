@@ -21,10 +21,25 @@ README.md for how it works. This file is only what to run and what not to touch.
   `"nvenc"`. When a suite gains checks, raise its number in run_tests.py's SUITES.
 - Never remove, skip or weaken a check to make a run pass, and never widen a tolerance.
 
+## Content bank
+
+```powershell
+.\.venv\Scripts\python.exe bank.py build                          # index what is new, mine, label, write the bank + page
+.\.venv\Scripts\python.exe bank.py posted ID --name "what it was" # the owner posted it: lock its footage, add its topic
+.\.venv\Scripts\python.exe bank.py rejected ID                    # the owner said no: never offered again
+```
+
+- `C:\AI\gta\bank\content_bank.json` and `bank.html`: every moment of every GTA 6 recording. `/launch` picks from it.
+- Footage is locked when it is **posted** (or rejected), never by a render. Only the owner posts: run `posted` or `rejected`
+  only when they say so.
+- `_used_footage.json` and `posted_topics.json` are the owner's records: copy them before any change, never lose an entry.
+
 ## Rules
 
 - `.venv` (Python 3.14) is standard library only and runs clip.py; `.venv-tts` (Python 3.13) has the voice, numpy and
   faster-whisper. No new pip packages. clip.py stays standard library only.
+- ffmpeg: every program's main() calls `fastff.use()` first (a SHA-256-checked copy in `C:\AI\tools\ffmpeg`; the installed
+  one takes 1.9 s to start). Nothing happens on import. The tests use the same copy.
 - One heavy job at a time (heavy.py): renders, Kokoro, Whisper, Ollama. Never work round its lock.
 - Never commit recordings or other media; test fixtures stay under 5 MB in all.
 - The owner merges. Never merge a PR.

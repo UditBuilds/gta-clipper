@@ -3919,4 +3919,5 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.modules["launch"] = sys.modules["__main__"]      # bank.py and safety.py import launch: this one, not a second copy
     main()

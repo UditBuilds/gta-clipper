@@ -7,8 +7,10 @@ recording), or copied from the real M24.
 """
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -352,6 +354,29 @@ def each_moment_is_on_one_shelf():
             and stars_bare["shelf"] == "action" and find["shelf"] == "list" and all(m["shelf"] == "list" for m in calm)
             and not any(q["id"] == "driving-vehicles" for m in ms for q in m["questions"])
             and stars["end_s"] - stars["start_s"] >= 10.0), (stars["questions"], stars["shelf"])
+
+
+@check
+def a_question_needs_what_it_asks_about_on_screen():
+    """stars that all go after a chase answer "lose the stars"; they answer "does a new car lose them?" only where the
+    index saw a car change in the 45 s before, and "does a new outfit?" only where it saw clothes; a star rise answers the
+    robbery topic only in a shop"""
+    counts = [0] * 200 + [2] * 40 + [0] * 960
+    segs = [seg(0, 100, "driving"), seg(100, 120, "chase", stars=2), seg(120, 600, "driving")]
+    row = [("GTA_20261119120000", 60.0, 200.0)]
+    qs = [{"id": i, "kind": "experiment", "question": "x", "rows": row}
+          for i in ("f1-losing-the-stars", "f2-lose-stars-car-swap", "f2-lose-stars-outfit", "heist-robbery")]
+
+    def ids(lines):
+        rec = made_up(segs=segs, counts=counts, lines=lines)
+        m = one(rec, 120)
+        m["label"] = {"kind": "stars lost"}
+        return {q["id"] for q in bank.answers_question(m, qs, rec)}
+    return (ids({}) == {"f1-losing-the-stars"}
+            and ids({90.0: ("Player exits the car and enters a van", "driving")}) == {"f1-losing-the-stars", "f2-lose-stars-car-swap"}
+            and ids({90.0: ("Player browses outfits", "on_foot")}) == {"f1-losing-the-stars", "f2-lose-stars-outfit"}
+            and ids({90.0: ("Clerk stands behind the counter of a store", "on_foot")}) == {"f1-losing-the-stars", "heist-robbery"}
+            and ids({30.0: ("Player exits the car and enters a van", "driving")}) == {"f1-losing-the-stars"})
 
 
 @check
@@ -814,6 +839,34 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
             and {r["stem"] for r in data["recordings"]} == in_bank and data2["picks"] and folder != again
             and stopped and "no new recordings" in stopped and nothing and "no moment passed" in nothing
             and [v.name for v in left] == ["GTA_20261128010000.webm"]), ([(p["video"], p["window"]) for p in picks], stopped)
+
+
+@check
+def launch_run_as_a_program_shares_its_module_with_the_bank():
+    """python launch.py ... --bank: bank.py's "import launch" is the running program, so an error the bank raises stops it
+    with a plain ERROR line and exit code 2, not a traceback"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)})
+        run = shorts / "launch-2026-11-20"
+        run.mkdir()
+        (run / "candidates.json").write_text(json.dumps({"game": "gta6", "created": "2026-11-20T15:00:00", "recordings": [
+            {"stem": "GTA_20261119120000", "path": "x", "mode": "hud", "clip_run": None, "session_offset_s": 0.0}],
+            "settings": {"library": str(lib)}, "picks": []}), encoding="utf-8")
+        code = chr(10).join([f"HERE, RUN, LAUNCH = {str(HERE)!r}, {str(run)!r}, {str(HERE / 'launch.py')!r}",
+                          'import runpy, sys',
+                          "sys.path.insert(0, HERE); sys.argv = ['launch.py', 'repick', '--run', RUN, '--bank']",
+                          'import bank, safety',
+                          'def broken(*a, **k):',
+                          '    import launch',
+                          "    raise launch.LaunchError('made up')",
+                          'bank.load_recs = broken',
+                          'safety.Checker = lambda *a, **k: None',
+                          "del sys.modules['launch']",
+                          "runpy.run_path(LAUNCH, run_name='__main__')"])
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=HERE,
+                              env=dict(os.environ, GTA_HEAVY_LOCK=str(tmp / "lock.json")))
+    return done.returncode == 2 and "ERROR: made up" in done.stderr and "Traceback" not in done.stderr, done.stderr[-600:]
 
 
 @check

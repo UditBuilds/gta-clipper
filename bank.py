@@ -146,6 +146,12 @@ NEEDS = {"wanted-system": {"star rise", "stars lost", "star look"}, "police-chas
          "f4-first-switch": {"first look"}, "f1-police-chase": {"chase"}, "f1-losing-the-stars": {"stars lost"},
          "f1-night-rain-drive": {"star rise", "chase", "crash", "stunt", "fall"}, "f1-shootout": {"shooting"},
          "f1-sports-car": {"crash", "stunt", "chase", "loud"}, "f3-three-things-chase": {"chase"}}
+# ...and some ask for something the index's lines must say, in the moment or this many seconds before it: without it the
+# stars going away answers "lose the stars", not "does a new car (or an outfit) lose them?".
+MUST_SAY = {"f2-lose-stars-car-swap": (words(r"exits?|enters?|gets? (?:in|into|out)|hotwir\w*|steals?|stolen|another (?:car|truck)"), 45.0),
+            "f2-lose-stars-outfit": (words(r"outfits?|cloth\w*|wardrobe|changing room|mannequins?"), 60.0),
+            "stealing-cars": (words(r"steals?|stolen|hotwir\w*|lockpick\w*|carjack\w*|pulls? .* out"), 20.0),
+            "heist-robbery": (words(r"stores?|shops?|bank|counter|cashier|clerk|register|vault|robs?|robbery"), 20.0)}
 FIRST = ("boat", "flying", "swimming", "chase", "driving", "beach")
 RENDERED_COST = 2.0      # picker: a moment a Short was already rendered from (not posted) is worth this much less
 
@@ -647,9 +653,11 @@ def set_label(m, rec, sheets):
 
 def blocked(m, rec, sheets):
     """Why the moment can't be used at all, from the frames at its peak and the index's lines, or []: a phone, a menu, a
-    cutscene, a loading screen; a child near violence, a body with blood (safety.never_shown)."""
+    cutscene, a loading screen (in frames that lie in the moment: a saved look may reach past its end); a child near
+    violence, a body with blood (safety.never_shown). The whole footage is checked again before anything is picked."""
     frames = [dict(s, file="", error=None) for s in sheets]
-    why = [what for _, _, what in safety.found(frames, safety.BLOCKING)]
+    inside = [s for s in frames if m["start_s"] - 1.0 <= s["from_s"] and s["to_s"] - s["every_s"] <= m["end_s"]]
+    why = [what for _, _, what in safety.found(inside, safety.BLOCKING)]
     return list(dict.fromkeys(why)) + safety.never_shown(rec, frames, m["start_s"], m["end_s"])
 
 
@@ -685,14 +693,19 @@ def questions(recs, shotlist=None):
     return out
 
 
-def answers_question(m, qs):
-    """The questions this moment answers on screen: the query matches its seconds (half of them, or 4 s) and one of the
-    question's events (NEEDS) is in it. Experiments first."""
+def answers_question(m, qs, rec):
+    """The questions this moment answers on screen: the query matches its seconds (half of them, or 4 s), one of the
+    question's events (NEEDS) is in it, and the lines say what it asks for (MUST_SAY). Experiments first."""
     out = []
     for q in qs:
         need = NEEDS.get(q["id"])
         if not need or not need & (set(m["kinds"]) | {m["label"]["kind"]}):
             continue
+        if q["id"] in MUST_SAY:
+            rx, before = MUST_SAY[q["id"]]
+            if not any(rx.search(library.positive_text(s["notable"])) for s in rec["sheets"]
+                       if launch.overlap(m["start_s"] - before, m["end_s"], s["t"], s["t"] + rec["every"]) > 0):
+                continue
         share = max((launch.overlap(m["start_s"], m["end_s"], a, b) for v, a, b in q["rows"] if v == m["video"]), default=0.0)
         if share >= min(4.0, 0.5 * (m["end_s"] - m["start_s"])):
             out.append({"id": q["id"], "kind": q["kind"], "question": q["question"]})
@@ -829,7 +842,7 @@ def make_moments(recs, checker=None, cache_dir=None, work=None, shotlist=None, l
                                 "why": why})
                 continue
             set_label(m, rec, sheets)
-            m["questions"] = answers_question(m, qs)
+            m["questions"] = answers_question(m, qs, rec)
             m["shelf"] = shelf_of(m)
             m["pictures"] = pictures(m, rec)
             moments.append(m)
