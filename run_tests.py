@@ -69,7 +69,7 @@ SUITES = [
     suite("explainertest", ".venv-tts", 88),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
-MINIMUM = {"quick": 500, "ci": 485}      # fewer checks than this in all, and the run fails
+MINIMUM = {"quick": 503, "ci": 488}      # fewer checks than this in all, and the run fails
 
 
 start_seconds = fastff.start_seconds
