@@ -23,6 +23,7 @@ import launchtest as lt
 import library
 import safety
 import testkit
+import truth
 from footagetest import made_up_index, made_up_timeline, seg
 
 HERE = Path(__file__).resolve().parent
@@ -1167,6 +1168,96 @@ def posting_locks_the_footage_before_it_writes_the_topic():
         left = [p.name for p in Path(tmp).glob("posted_topics*")]
     return failed and nothing and refused and locked and untouched and done and left == ["posted_topics.json"], (
         failed, nothing, refused, locked, untouched, done, left)
+
+
+def unsure_crash():
+    """(recording, moment): mined as a crash; the peak's look ticks one and both lines say it, but nothing loud is heard."""
+    rec = made_up(lines={300.0: ("Player's car crashes into a wall", "driving")}, loud={303.0: 1.2})
+    m = labelled(rec, 301, [look(302, 306, "A car crashes into a wall", crash=True)])
+    return rec, m
+
+
+@check
+def an_unsure_crash_is_no_crash_to_the_picker_or_the_words():
+    """B3: a moment whose label is "unsure" kept the crash the safety answers saw at its peak: the evidence had a crash
+    event, the quality gate a crash payoff (tier 3) and the words "crash" passed. Now an unsure label keeps no impact: no
+    event, no payoff, the word refused; a sure crash is as it was"""
+    rec, m = unsure_crash()
+    sure = dict(m, label=dict(m["label"], kind="crash", sure=True))
+    out = []
+    for x in (m, sure):
+        c = dict(x, bank_id=x["id"], id="M1", terms=dict(x["terms"]), verified={"crash": [[302.0, 306.0]], "police": [[302.0, 306.0]]})
+        bank.keep_what_the_peak_shows(c)
+        launch.verify_terms(rec, c)
+        launch.story_gate(rec, c, "gta6", False)
+        items = launch.evidence(rec, c["start_s"], c["end_s"], verified=c["verified"])
+        out.append((m["label"]["kind"] == "unsure", "crash" in c["verified"], [e["value"] for e in items if e["kind"] == "event"],
+                    c["point"]["action_payoff"], launch.payoff_strength(c)[0], launch.moment_type(c) == "crash",
+                    bool(truth.word_problems("That crash was huge", items, False, "x")), "police" in c["verified"]))
+    unsure_, sure_ = out
+    return (unsure_[1:] == (False, [], [], unsure_[4], False, True, True) and unsure_[4] < 3
+            and sure_[1:] == (True, ["crash"], ["crash"], 3, True, False, True)), out
+
+
+@check
+def an_unsure_impact_is_not_on_the_action_shelf():
+    """B3: 8 of the 14 unsure moments on the real action shelf were impacts their own peak doesn't show (crash, explosion,
+    fall). An unsure impact is a list item; a sure one, an unsure chase and loud action stay action clips"""
+    _, m = unsure_crash()
+    sure = dict(m, label=dict(m["label"], kind="crash", sure=True))
+    chase = dict(m, main="chase", kinds=["chase"])
+    loud = dict(m, main="loud", kinds=["loud"])
+    both = dict(m, main="explosion", kinds=["explosion", "loud"])
+    shelves = [bank.shelf_of(dict(x, questions=[])) for x in (m, sure, chase, loud, both, dict(m, main="fall", kinds=["fall"]))]
+    return shelves == ["list", "action", "action", "action", "list", "list"], shelves
+
+
+GUN_LINE = "Player aims gun, shooting at a man near a bridge"
+
+
+@check
+def gun_words_need_shooting_the_frames_show():
+    """B4: launch.EVENTS has no shooting, so a line like "Player aims gun, shooting at a man" let a script say "shoot", "gun"
+    and "shootout" though the vision check saw no shooting. Now those words need shooting seen in the frames; a line that
+    only names a gun marks it not seen; where shooting is seen they are fine; without the vision check nothing changes"""
+    rec = made_up(lines={300.0: (GUN_LINE, "on_foot")}, segs=[seg(0, 600, "on_foot")])
+    unseen = launch.evidence(rec, 295.0, 310.0, verified={})
+    seen = launch.evidence(rec, 295.0, 310.0, verified={"shooting": [[301.0, 305.0]]})
+    plain = launch.evidence(rec, 295.0, 310.0)
+    said = ("Watch the shootout", "You shoot first", "A gun comes out", "They start firing")
+    blocked = [bool(truth.word_problems(s, unseen, False, "x")) for s in said]
+    free = [bool(truth.word_problems(s, e, False, "x")) for s in said[:3] for e in (seen, plain)]
+    marked = [e.get("not_seen") for e in unseen if e["kind"] == "seen" and "gun" in e["value"]]
+    return all(blocked) and not any(free) and marked == [["shootout"]], (blocked, free, marked)
+
+
+@check
+def words_nobody_verified_name_no_topic():
+    """B4: what a moment repeats, and the questions it answers, were read from lines the frames didn't confirm. A line that
+    names a crash, jump, explosion, shooting or police the safety answers (or, in the bank, the moment's own label) didn't
+    see is left out; the same line confirmed counts"""
+    rec = made_up(lines={300.0: ("Player's car crashes into a wall near an overpass", "driving"),
+                         306.0: ("Player drives past a beach", "driving")}, loud={303.0: 1.2})
+    base = {"start_s": 296.0, "end_s": 314.0, "video": rec["stem"]}
+    texts = [launch.moment_text(rec, dict(base, **x)) for x in (
+        {"verified": {}}, {"verified": {"crash": [[301.0, 305.0]]}}, {"label": {"kind": "unsure", "sure": False}},
+        {"label": {"kind": "crash", "sure": True}}, {})]
+    qs = [{"id": "f1-sports-car", "kind": "experiment", "question": "x", "rows": [(rec["stem"], 290.0, 320.0)]},
+          {"id": "f1-night-rain-drive", "kind": "experiment", "question": "x", "rows": [(rec["stem"], 290.0, 320.0)]}]
+    rec2, m = unsure_crash()
+    rec2["sheets"][51]["notable"] = "Car crashes in the rain at night"
+    ids = [[q["id"] for q in bank.answers_question(x, qs, rec2)] for x in (
+        m, dict(m, label=dict(m["label"], kind="crash", sure=True)))]
+    cop = made_up(lines={300.0: ("Police chase the player", "driving"), 306.0: ("Player drives past a beach", "driving")})
+    topics = []
+    for seen in ({}, {"police": [[300.0, 306.0]]}):
+        asked = []
+        launch.story_gate(cop, {"start_s": 296.0, "end_s": 326.0, "span": [0.0, 600.0], "terms": {}, "video": cop["stem"],
+                                "verified": seen}, "gta6", False, lambda t, labels, words: asked.append(t[0]))
+        topics.append(asked)
+    return (["overpass" in t for t in texts] == [False, True, False, True, True] and all("beach" in t for t in texts)
+            and [sorted(x) for x in ids] == [[], ["f1-night-rain-drive", "f1-sports-car"]]
+            and topics == [["the beach"], ["the beach", "police chases"]]), (texts, ids, topics)
 
 
 def main():

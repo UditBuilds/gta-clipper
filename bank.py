@@ -718,16 +718,20 @@ def questions(recs, shotlist=None):
 
 def answers_question(m, qs, rec):
     """The questions this moment answers on screen: the query matches its seconds (half of them, or 4 s), one of the
-    question's events (NEEDS) is in it, and the lines say what it asks for (MUST_SAY). Experiments first."""
+    question's events (NEEDS) is in it, and the lines say what it asks for (MUST_SAY). Experiments first. An impact or a
+    shooting counts only where the moment's own label is sure of it, and a line that names one it isn't sure of proves
+    nothing (PR 35): what it was mined as is a word nobody checked."""
     out = []
+    kinds = (set(m["kinds"]) - {*IMPACT, "fall", "shooting"}) | {m["label"]["kind"]}
     for q in qs:
         need = NEEDS.get(q["id"])
-        if not need or not need & (set(m["kinds"]) | {m["label"]["kind"]}):
+        if not need or not need & kinds:
             continue
         if q["id"] in MUST_SAY:
             rx, before = MUST_SAY[q["id"]]
             if not any(rx.search(library.positive_text(s["notable"])) for s in rec["sheets"]
-                       if launch.overlap(m["start_s"] - before, m["end_s"], s["t"], s["t"] + rec["every"]) > 0):
+                       if launch.overlap(m["start_s"] - before, m["end_s"], s["t"], s["t"] + rec["every"]) > 0
+                       and not launch.unverified_in(m, s, rec["every"])):
                 continue
         share = max((launch.overlap(m["start_s"], m["end_s"], a, b) for v, a, b in q["rows"] if v == m["video"]), default=0.0)
         if share >= min(4.0, 0.5 * (m["end_s"] - m["start_s"])):
@@ -748,6 +752,8 @@ def shelf_of(m):
         return "list"
     if long and m.get("questions") and m["family"] in ("main", "first look"):
         return "proof"
+    if not sure and m["main"] in (*IMPACT, "fall"):
+        return "list"                              # an impact its own peak doesn't show (PR 35): look before it is used
     if long and m["family"] == "main" and (kind in ("chase", "star rise", "stars lost", "heat icons", "star look")
                                            or "loud" in m["kinds"] or "shooting" in m["kinds"] or "chase" in m["kinds"]
                                            or set(m["kinds"]) & (set(IMPACT) | {"fall"})):
@@ -1009,12 +1015,13 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
 def keep_what_the_peak_shows(m):
     """After the safety checks of a candidate from the bank: an impact seen somewhere else in its footage (M24's parked
     pickup, hit 4 s before the jump) doesn't name it. Of m["verified"], only the impacts seen round the peak stay, with the
-    one its label is sure of."""
+    one its label is sure of; a moment whose label is unsure keeps none (PR 35): its own peak doesn't show one."""
     peak, v = m.get("peak_s"), m.get("verified")
     if peak is None or v is None:
         return m
+    unsure = "label" in m and not m["label"].get("sure")
     for k in IMPACT:
-        v[k] = [s for s in v.get(k, []) if s[0] < peak + AT_PEAK_S[1] and peak - AT_PEAK_S[0] < s[1]]
+        v[k] = [] if unsure else [s for s in v.get(k, []) if s[0] < peak + AT_PEAK_S[1] and peak - AT_PEAK_S[0] < s[1]]
         if not v[k]:
             v.pop(k)
     impact = impact_of(m)
