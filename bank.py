@@ -785,8 +785,8 @@ def shelf_of(m):
         return "list"
     if long and m.get("questions") and m["family"] in ("main", "first look"):
         return "proof"
-    if not sure and m["main"] in (*IMPACT, "fall"):
-        return "list"                              # an impact its own peak doesn't show (PR 35): look before it is used
+    if not sure and m["main"] in (*IMPACT, "fall", "shooting"):
+        return "list"                              # an impact or shooting its own peak doesn't show (PR 35): look first
     if long and m["family"] == "main" and (kind in ("chase", "star rise", "stars lost", "heat icons", "star look")
                                            or "loud" in m["kinds"] or "shooting" in m["kinds"] or "chase" in m["kinds"]
                                            or set(m["kinds"]) & (set(IMPACT) | {"fall"})):

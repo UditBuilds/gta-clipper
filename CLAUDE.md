@@ -33,6 +33,7 @@ README.md for how it works. This file is only what to run and what not to touch.
 - Footage is locked when it is **posted** (or rejected), never by a render. Only the owner posts: run `posted` or `rejected`
   only when they say so.
 - `_used_footage.json` and `posted_topics.json` are the owner's records: copy them before any change, never lose an entry.
+  A damaged one stops every program with an ERROR (`index.read_record`): never delete or empty it to get on, say so.
 
 ## Rules
 

@@ -1208,15 +1208,16 @@ def an_unsure_crash_is_no_crash_to_the_picker_or_the_words():
 
 @check
 def an_unsure_impact_is_not_on_the_action_shelf():
-    """B3: 8 of the 14 unsure moments on the real action shelf were impacts their own peak doesn't show (crash, explosion,
-    fall). An unsure impact is a list item; a sure one, an unsure chase and loud action stay action clips"""
+    """B3: 9 of the 14 unsure moments on the real action shelf were impacts their own peak doesn't show (crash, explosion,
+    fall). An unsure impact or shootout is a list item; a sure one, an unsure chase and loud action stay action clips"""
     _, m = unsure_crash()
     sure = dict(m, label=dict(m["label"], kind="crash", sure=True))
     chase = dict(m, main="chase", kinds=["chase"])
     loud = dict(m, main="loud", kinds=["loud"])
     both = dict(m, main="explosion", kinds=["explosion", "loud"])
-    shelves = [bank.shelf_of(dict(x, questions=[])) for x in (m, sure, chase, loud, both, dict(m, main="fall", kinds=["fall"]))]
-    return shelves == ["list", "action", "action", "action", "list", "list"], shelves
+    shelves = [bank.shelf_of(dict(x, questions=[])) for x in (m, sure, chase, loud, both, dict(m, main="fall", kinds=["fall"]),
+                                                              dict(m, main="shooting", kinds=["shooting"]))]
+    return shelves == ["list", "action", "action", "action", "list", "list", "list"], shelves
 
 
 GUN_LINE = "Player aims gun, shooting at a man near a bridge"
@@ -1254,7 +1255,8 @@ def words_nobody_verified_name_no_topic():
     rec2, m = unsure_crash()
     rec2["sheets"][51]["notable"] = "Car crashes in the rain at night"
     ids = [[q["id"] for q in bank.answers_question(x, qs, rec2)] for x in (
-        m, dict(m, label=dict(m["label"], kind="crash", sure=True)))]
+        m, dict(m, label=dict(m["label"], kind="crash", sure=True)),
+        dict(m, kinds=["crash", "star rise"], label={"kind": "star rise", "sure": True}))]   # (the rain is only in the crash's line)
     cop = made_up(lines={300.0: ("Police chase the player", "driving"), 306.0: ("Player drives past a beach", "driving")})
     topics = []
     for seen in ({}, {"police": [[300.0, 306.0]]}):
@@ -1263,7 +1265,7 @@ def words_nobody_verified_name_no_topic():
                                 "verified": seen}, "gta6", False, lambda t, labels, words: asked.append(t[0]))
         topics.append(asked)
     return (["overpass" in t for t in texts] == [False, True, False, True, True] and all("beach" in t for t in texts)
-            and [sorted(x) for x in ids] == [[], ["f1-night-rain-drive", "f1-sports-car"]]
+            and [sorted(x) for x in ids] == [[], ["f1-night-rain-drive", "f1-sports-car"], []]
             and topics == [["the beach"], ["the beach", "police chases"]]), (texts, ids, topics)
 
 
@@ -1344,19 +1346,22 @@ def ids_are_unique_and_stay_with_their_moment_on_a_rebuild():
         ids = [m["id"] for m in first["moments"]]
         m = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] > 200)
         other = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] < 200)
-        # the last build saw it start 1.4 s earlier, under another id; another moment, gone since, had today's id
+        # the last build saw it start 1.4 s earlier, under another id; the other crash's id was a moment's that is gone
         saved = bank.read_bank(bdir)
         for x in saved["moments"]:
             if x["id"] == m["id"]:
                 x.update(id="1119-120000-was", start_s=x["start_s"] - 1.4)
-        saved["moments"].append(dict(other, id=m["id"], start_s=550.0, end_s=560.0, video=stems[1], family="gone"))
+            elif x["id"] == other["id"]:
+                x.update(family="gone", start_s=550.0, end_s=560.0)
         index.write_json(bdir / bank.BANK_FILE, saved)
         second = build(lib, shorts, bdir, ai)
-        now = next(x for x in second["moments"] if x["video"] == stems[0] and x["start_s"] == m["start_s"] and x["main"] == "crash")
+        now, new = (next(x for x in second["moments"] if x["video"] == stems[0] and x["start_s"] == y["start_s"] and x["main"] == "crash")
+                    for y in (m, other))
         ids2 = [x["id"] for x in second["moments"]]
         third = build(lib, shorts, bdir, ai)
     return (len(set(ids)) == len(ids) and len(set(ids2)) == len(ids2) and now["id"] == "1119-120000-was" and m["id"] not in ids2
-            and [x["id"] for x in third["moments"]] == ids2), (now["id"], m["id"] in ids2)
+            and new["id"].startswith(other["id"]) and other["id"] not in ids2
+            and [x["id"] for x in third["moments"]] == ids2), (now["id"], new["id"], m["id"] in ids2)
 
 
 @check
