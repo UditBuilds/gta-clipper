@@ -151,6 +151,7 @@ NEEDS = {"wanted-system": {"star rise", "stars lost", "star look"}, "police-chas
 # ...and some ask for something the index's lines must say, in the moment or this many seconds before it: without it the
 # stars going away answers "lose the stars", not "does a new car (or an outfit) lose them?".
 MUST_SAY = {"f2-lose-stars-car-swap": (words(r"exits?|enters?|gets? (?:in|into|out)|hotwir\w*|steals?|stolen|another (?:car|truck)"), 45.0),
+            "f1-night-rain-drive": (words(r"night|nighttime|rain|rainy|raining"), 0.0),     # (not "train tracks")
             "f2-lose-stars-outfit": (words(r"outfits?|cloth\w*|wardrobe|changing room|mannequins?"), 60.0),
             "stealing-cars": (words(r"steals?|stolen|hotwir\w*|lockpick\w*|carjack\w*|pulls? .* out"), 20.0),
             "heist-robbery": (words(r"stores?|shops?|bank|counter|cashier|clerk|register|vault|robs?|robbery"), 20.0)}

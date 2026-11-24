@@ -412,12 +412,13 @@ def each_moment_is_on_one_shelf():
 def a_question_needs_what_it_asks_about_on_screen():
     """stars that all go after a chase answer "lose the stars"; they answer "does a new car lose them?" only where the
     index saw a car change in the 45 s before, and "does a new outfit?" only where it saw clothes; a star rise answers the
-    robbery topic only in a shop"""
+    robbery topic only in a shop, and the night drive only at night or in the rain (not next to train tracks)"""
     counts = [0] * 200 + [2] * 40 + [0] * 960
     segs = [seg(0, 100, "driving"), seg(100, 120, "chase", stars=2), seg(120, 600, "driving")]
     row = [("GTA_20261119120000", 60.0, 200.0)]
     qs = [{"id": i, "kind": "experiment", "question": "x", "rows": row}
-          for i in ("f1-losing-the-stars", "f2-lose-stars-car-swap", "f2-lose-stars-outfit", "heist-robbery")]
+          for i in ("f1-losing-the-stars", "f2-lose-stars-car-swap", "f2-lose-stars-outfit", "heist-robbery",
+                    "f1-night-rain-drive")]
 
     def ids(lines):
         rec = made_up(segs=segs, counts=counts, lines=lines)
@@ -428,7 +429,9 @@ def a_question_needs_what_it_asks_about_on_screen():
             and ids({90.0: ("Player exits the car and enters a van", "driving")}) == {"f1-losing-the-stars", "f2-lose-stars-car-swap"}
             and ids({90.0: ("Player browses outfits", "on_foot")}) == {"f1-losing-the-stars", "f2-lose-stars-outfit"}
             and ids({90.0: ("Clerk stands behind the counter of a store", "on_foot")}) == {"f1-losing-the-stars", "heist-robbery"}
-            and ids({30.0: ("Player exits the car and enters a van", "driving")}) == {"f1-losing-the-stars"})
+            and ids({30.0: ("Player exits the car and enters a van", "driving")}) == {"f1-losing-the-stars"}
+            and ids({120.0: ("Player drives SUV near train tracks at sunset", "driving")}) == {"f1-losing-the-stars"}
+            and ids({120.0: ("Player drives in the rain at night", "driving")}) == {"f1-losing-the-stars", "f1-night-rain-drive"})
 
 
 @check
