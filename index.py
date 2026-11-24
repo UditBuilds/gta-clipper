@@ -13,7 +13,8 @@ How it works, in three steps:
    every picture into the same number of tokens, so 4 frames cost the same time as 1, and a short event such as
    a shootout is much less likely to fall between two looks.)
 2. CODE reads the HUD first, with clip.py's own detectors and the HUD profile (--profile, default gta5): is the
-   minimap there, is the phone's call screen up, are wanted stars showing. New here: HOW MANY stars (count_stars).
+   minimap there, is the phone's call screen up, are wanted stars showing. New here: HOW MANY stars (count_stars), and
+   the second look of GTA 6's player arrow (light_arrow_seen).
    Then a local vision model (Ollama) looks at each sheet and answers in strict JSON: activity, vehicle,
    police_visible, one notable line, confidence. The model is told nothing about the HUD.
 3. CODE merges the two into segments (build_segments). The HUD rules are applied per half second and always win:
@@ -115,6 +116,16 @@ STAR_COUNT = {"fill_from": "right",   # which end of the row the first star appe
               # 0.44); an empty slot reads the same in both (1.0); ammo digits in the row reached 0.65.
               "max_ratio": 0.55,      # outline brightness / middle brightness of an earned star, at most
               "min_contrast": 30.0}   # and the middle is at least this much brighter (0-255) than the outline
+
+# --- GTA 6 draws the minimap's player arrow in two ways: a white pointer in a dark disc (clip.arrow_seen), or the other
+# way round, a dark pointer in a white disc with a dark outline (PR 36: minutes of driving, shooting and the gator attack
+# were "cutscenes"). The middle and the ring are the profile's. Measured on every half second of 23 recordings (Nov 24):
+# 1,131 light icons read 0.64-0.81 of the ring, 0.55-0.71 of the middle and 0.52-1.0 of the outline; of the 10,099 other
+# half seconds without a dark icon not one has over 0.5 of the ring and over 0.2 of the middle. ---
+LIGHT_ARROW = {"ring_min": 170.0, "ring_share": 0.55,   # the disc: this much of the ring is this bright...
+               "core_max": 95.0, "core_share": 0.4,     # ...the pointer: this much of the middle is this dark...
+               "edge": [7.8, 8.8], "edge_max": 150.0, "edge_share": 0.5}   # ...and the outline (px from the middle):
+                                                        # dark text on a white page has none
 
 
 class IndexError_(Exception):
@@ -224,7 +235,47 @@ def count_stars(slots, rule):
     return n
 
 
+# --- The minimap ---
+
+def reads_arrow(prof):
+    return getattr(prof, "minimap_method", "bars") == "arrow"
+
+
+def light_arrow_seen(raw, prof):
+    """GTA 6: the player arrow the other way round, a dark pointer in the middle of an outlined white disc."""
+    a = LIGHT_ARROW
+    core, ring = prof.arrow_pixels
+
+    def share(pixels, fits):
+        return sum(1 for p in pixels if fits(clip.lum_at(raw, p))) / max(1, len(pixels))
+    if (share(ring, lambda v: v >= a["ring_min"]) < a["ring_share"]
+            or share(core, lambda v: v <= a["core_max"]) < a["core_share"]):
+        return False
+    (cx, cy), (bx, by, bw, bh) = prof.arrow["centre"], prof.bar_box
+    off, (lo, hi) = prof.star_box[3] * prof.hud_w * 3, a["edge"]             # (clip.arrow_pixels' layout)
+    edge = [off + (y * prof.hud_w + x) * 3 for y in range(bh) for x in range(bw)
+            if lo <= math.hypot(bx + x + 0.5 - cx, by + y + 0.5 - cy) < hi]
+    return share(edge, lambda v: v <= a["edge_max"]) >= a["edge_share"]
+
+
+def minimap_seen(raw, prof):
+    """clip.minimap_seen, or GTA 6's player arrow in its light look. (clip.py's own runs still know the dark look only;
+    of those the bank and /launch read the sound and the picture changes, not the minimap.)"""
+    return clip.minimap_seen(raw, prof) or (reads_arrow(prof) and light_arrow_seen(raw, prof))
+
+
 # --- One pass over the video: HUD samples and frames ---
+
+def pass_fields_of(video, prof, every, width, limit_s):
+    """What the saved HUD samples and sheets (hud.json) were made with: anything else here means a new pass."""
+    fields = {"video": video.name, "video_bytes": video.stat().st_size, "profile_sha256": prof.sha256,
+              "star_count": star_count_rule(prof), "hud_fps": clip.HUD_FPS, "every_s": every,
+              "tile": list(TILE), "frame_width": width, "jpeg_q": JPEG_Q, "limit_s": limit_s,
+              "version": INDEX_VERSION}
+    if reads_arrow(prof):               # (only these: the other profiles' saved samples are still what they read)
+        fields["light_arrow"] = LIGHT_ARROW
+    return fields
+
 
 def frame_name(t):
     return f"f_{round(t * 1000):09d}.jpg"
@@ -268,7 +319,7 @@ def decode_pass(ffmpeg, video, info, range_fix, decoder, prof, frame_dir, every,
                 score = clip.star_score(raw, prof)
                 count = (int(score) if getattr(prof, "star_method", "outline") == "gta6"
                          else count_stars(star_slots(raw, prof, masks), rule))
-                hud.append((len(hud) * hud_step, score, clip.minimap_seen(raw, prof), clip.phone_seen(raw, prof), count))
+                hud.append((len(hud) * hud_step, score, minimap_seen(raw, prof), clip.phone_seen(raw, prof), count))
             proc.stdout.close()
             if proc.wait() != 0:
                 err.seek(0)
@@ -629,10 +680,7 @@ def index_video(video, profile=clip.DEFAULT_PROFILE, model=MODEL, every=EVERY_S,
         f"model {model}, one {TILE[0]}x{TILE[1]} sheet per {every:g} s")
 
     # Step 1: one decode for the HUD and the frames. Skipped when a run with the same settings already did it.
-    pass_fields = {"video": video.name, "video_bytes": video.stat().st_size, "profile_sha256": prof.sha256,
-                   "star_count": star_count_rule(prof), "hud_fps": clip.HUD_FPS, "every_s": every,
-                   "tile": list(TILE), "frame_width": width, "jpeg_q": JPEG_Q, "limit_s": limit_s,
-                   "version": INDEX_VERSION}
+    pass_fields = pass_fields_of(video, prof, every, width, limit_s)
     saved = read_json(out_dir / "hud.json") or {}
     t0 = time.perf_counter()
     if (saved.get("fields") == json.loads(json.dumps(pass_fields))

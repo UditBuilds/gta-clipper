@@ -12,11 +12,15 @@ function shows as a failure, not a crash. The last line is RESULT: PASS or FAIL;
 Usage:  python indextest.py
 """
 
+import base64
 import json
+import math
+import random
 import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +32,8 @@ import testkit
 HERE = Path(__file__).resolve().parent
 CHECKS = []
 PROF = clip.load_profile("gta5")
+GTA6 = clip.load_profile("gta6")
+CROPS = json.loads((HERE / "testdata" / "gta6_minimap_crops.json").read_text(encoding="utf-8"))
 STATE = {}   # what the end-to-end run made, shared by the checks that look at it
 
 
@@ -241,6 +247,172 @@ def no_minimap_and_phone_stretches_are_separate():
     tl = index.hud_timeline(samples(120, minimap=mm, phone=[(60, 68)]), 60.0, PROF)
     return (all(tl["no_minimap"][19:29]) and not tl["no_minimap"][17] and not tl["no_minimap"][30]
             and all(tl["phone"][59:69]) and not any(tl["no_minimap"][55:75]) and not any(tl["phone"][15:35]))
+
+
+# --- GTA 6's minimap: the player arrow in both its looks (PR 36), on 31 x 31 px of real frames ---
+
+def crop_of(c):
+    return zlib.decompress(base64.b64decode(c["rgb"]))
+
+
+def on_hud(rgb):
+    """One HUD frame (clip.hud_filter's layout, the gta6 profile) with this 31 x 31 minimap crop in it."""
+    raw, (w, h) = bytearray(GTA6.frame_bytes), GTA6.bar_box[2:]
+    off = GTA6.star_box[3] * GTA6.hud_w * 3
+    for y in range(h):
+        i = off + y * GTA6.hud_w * 3
+        raw[i:i + w * 3] = rgb[y * w * 3:(y + 1) * w * 3]
+    return bytes(raw)
+
+
+def crops(look):
+    return [c for c in CROPS["crops"] if c["look"] == look]
+
+
+def cutscene_crops():
+    return [c for c in crops(None) if c["what"].startswith("cutscene")]
+
+
+def seen6(rgb):
+    return index.minimap_seen(on_hud(rgb), GTA6)
+
+
+def drawn(back, disc=None, pointer=None, outline=None, heading=0.0, seed=1):
+    """A made-up minimap crop: a noisy background with an outlined disc and a pointer at some heading."""
+    rnd, (bx, by, w, h), (cx, cy) = random.Random(seed), GTA6.bar_box, GTA6.arrow["centre"]
+    out = bytearray()
+    for y in range(h):
+        for x in range(w):
+            px, py = bx + x + 0.5 - cx, by + y + 0.5 - cy
+            d = math.hypot(px, py)
+            u, v = px * math.cos(heading) + py * math.sin(heading), -px * math.sin(heading) + py * math.cos(heading)
+            col = tuple(c + rnd.randrange(-12, 13) for c in back)
+            if outline and d <= 9.2:
+                col = outline
+            if disc and d <= 7.8:
+                col = disc
+            if pointer and abs(u) <= 0.55 * (v + 5.0) and v <= 3.5:
+                col = pointer
+            out += bytes(max(0, min(255, c)) for c in col)
+    return bytes(out)
+
+
+def stretch_of(looks, sheets):
+    """The segments of a made-up recording: one real crop per half second (seen as the index sees it), one model
+    label per 6 s."""
+    seen = [seen6(crop_of(c)) for c in looks]
+    tl = index.hud_timeline(samples(len(seen), minimap=seen), len(seen) / 2, GTA6)
+    return index.build_segments([k * 6.0 for k in range(len(sheets))], [record(a) for a in sheets], 6.0, len(seen) / 2, tl)
+
+
+@check
+def the_minimap_is_seen_in_both_looks_of_its_arrow():
+    """real GTA 6 frames: the minimap with its arrow as a dark pointer in a white disc (the swamp before and in the
+    gator attack, driving, wanted with the map flashing red and blue, rings round it) is seen, which clip.py alone
+    doesn't; the white pointer in a dark disc is seen as before"""
+    light, dark = crops("light"), crops("dark")
+    return (len(light) == 12 and len(dark) == 3
+            and all(seen6(crop_of(c)) and not clip.minimap_seen(on_hud(crop_of(c)), GTA6) for c in light)
+            and all(seen6(crop_of(c)) and clip.minimap_seen(on_hud(crop_of(c)), GTA6) for c in dark))
+
+
+@check
+def real_cutscenes_menus_and_near_misses_show_no_minimap():
+    """real GTA 6 frames with no minimap: 11 cutscenes (talks, close-ups, black bars), the map, the pause menu, the
+    weapon wheel, binoculars, a black frame, the safe house with the HUD off, and the 6 real frames nearest to the
+    light look (signs, names, rocks, edges): none is seen as a minimap"""
+    none = crops(None)
+    near = [c for c in none if c["what"].startswith("near miss")]
+    return (len(cutscene_crops()), len(near), len(none)) == (11, 6, 23) and not any(seen6(crop_of(c)) for c in none)
+
+
+@check
+def the_swamp_is_gameplay_and_a_real_cutscene_is_still_a_cutscene():
+    """20 s of the swamp's light arrow between 8 s of the dark one is usable footage, not a cutscene; 20 s of real
+    cutscene frames in its place is a never_use cutscene, whatever the model called it, with the HUD's 0.5 s round it"""
+    dark, real = crops("dark")[:1] * 16, cutscene_crops()
+    swamp = [c for c in crops("light") if c["recording"] == "_143644"]
+    sheets = ["on_foot", "shootout", "shootout", "on_foot", "on_foot", "on_foot"]
+    play = stretch_of(dark + [swamp[k % len(swamp)] for k in range(40)] + dark, sheets)
+    cut = stretch_of(dark + [real[k % len(real)] for k in range(40)] + dark, sheets)
+    never = [(s["start_s"], s["end_s"], s["activity"], s["decided_by"]) for s in cut if s["never_use"]]
+    return (len(swamp) == 3 and not any(s["never_use"] for s in play) and play[0]["start_s"] == 0.0
+            and play[-1]["end_s"] == 36.0 and never == [(7.5, 28.5, "cutscene", "hud: no minimap")])
+
+
+@check
+def one_light_look_does_not_open_a_cutscene():
+    """a cutscene where one or two half seconds in a row look like the light arrow (a page, a sign) stays one whole
+    never_use stretch: the HUD's 0.5 s round each part closes the gap"""
+    dark, light, real = crops("dark")[:1] * 16, crops("light")[0], cutscene_crops()
+    ok = True
+    for wrong in ((20,), (20, 21)):
+        looks = dark + [light if k in wrong else real[k % len(real)] for k in range(40)] + dark
+        ok &= [(s["start_s"], s["end_s"]) for s in stretch_of(looks, ["on_foot"] * 6) if s["never_use"]] == [(7.5, 28.5)]
+    return ok
+
+
+@check
+def what_the_model_calls_a_cutscene_stays_one_with_the_minimap_there():
+    """the light arrow frees nothing the model itself calls a cutscene, a menu, the phone or loading: those sheets
+    stay never_use with the minimap seen all the way"""
+    segs = stretch_of(crops("light")[:1] * 48, ["cutscene", "menu_map", "phone", "loading"])
+    return [(s["activity"], s["never_use"]) for s in segs] == [("cutscene", True), ("menu_map", True), ("phone", True),
+                                                               ("loading", True)]
+
+
+@check
+def the_light_look_is_an_outlined_disc_with_a_pointer():
+    """made-up: a dark pointer in an outlined white disc is seen at 16 headings on 5 backgrounds; a white disc with no
+    pointer, a pointer on a white page with no outline, dark text on a white page, and 300 noisy backgrounds are not"""
+    white, black = (245, 245, 245), (45, 45, 48)
+    backs = [(90, 130, 100), (170, 160, 150), (20, 40, 110), (120, 25, 35), (235, 235, 235)]
+    ok = all(seen6(drawn(b, white, black, black, k * math.pi / 8, k)) for b in backs for k in range(16))
+    for seed in range(8):
+        page = bytearray(drawn((240, 240, 238), seed=seed))
+        for y in range(31):                                   # letters: strokes 3 px wide every 8 px, words 12 px high
+            for x in range(31):
+                if y % 18 < 12 and (x + seed) % 8 < 3:
+                    page[(y * 31 + x) * 3:(y * 31 + x) * 3 + 3] = bytes((25, 25, 25))
+        ok &= not (seen6(bytes(page)) or seen6(drawn((100, 120, 90), white, None, black, seed=seed))
+                   or seen6(drawn((240, 240, 240), None, black, None, seed * math.pi / 4, seed)))
+    rnd = random.Random(36)
+    return ok and not any(seen6(drawn([rnd.randrange(256) for _ in range(3)], seed=k)) for k in range(300))
+
+
+@check
+def only_an_arrow_profile_reads_the_light_look_and_old_readings_are_made_again():
+    """gta5 (bars) and the no-HUD profile read what clip.py reads and keep their saved HUD samples; gta6's saved samples
+    from before the light look are not taken again: the rule is part of what they were made with"""
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "x.webm"
+        video.write_bytes(b"12345")
+        fields = {n: index.pass_fields_of(video, clip.load_profile(n), 6.0, 640, None) for n in ("gta5", "gta6", "gta6_nohud")}
+    frame = bytes([240]) * PROF.frame_bytes
+    old = {k: v for k, v in fields["gta6"].items() if k != "light_arrow"}
+    return (fields["gta6"]["light_arrow"] == index.LIGHT_ARROW and old != fields["gta6"]
+            and "light_arrow" not in fields["gta5"] and "light_arrow" not in fields["gta6_nohud"]
+            and set(fields["gta5"]) == set(old) and index.minimap_seen(frame, PROF) == clip.minimap_seen(frame, PROF)
+            and not index.reads_arrow(PROF) and index.reads_arrow(GTA6))
+
+
+@check
+def a_pass_over_a_video_sees_the_light_arrow():
+    """index.py's own pass over a small made-up video: 3 s with the light arrow where gta6 expects it are read as
+    minimap seen, the 3 s after it, without, are not"""
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    x, y, w, h = GTA6.bar_box
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "arrow.rgb").write_bytes(crop_of(crops("light")[0]))
+        subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0x6a7a60:s=1920x1080:r=10:d=6",
+                        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", "1", "-i", str(tmp / "arrow.rgb"),
+                        "-filter_complex", f"[0:v]format=gbrp[b];[1:v]format=gbrp[a];[b][a]overlay={x}:{y}:format=gbrp:"
+                        "eof_action=repeat:enable='lt(t,2.9)',format=yuv444p", "-c:v", "libx264", "-qp", "0",
+                        "-preset", "ultrafast", str(tmp / "v.mp4")], check=True)
+        info = clip.probe(ffprobe, tmp / "v.mp4")
+        hud_, _, err = index.decode_pass(ffmpeg, tmp / "v.mp4", info, False, "cpu", GTA6, tmp / "frames", 6.0, 320)
+    return err is None and [s[2] for s in hud_] == [True] * 6 + [False] * 6
 
 
 # --- Merging into segments ---
