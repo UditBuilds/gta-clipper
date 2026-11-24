@@ -45,6 +45,7 @@ from datetime import date
 from pathlib import Path
 
 import facts as facts_file
+import fastff
 import picker
 import tag_media
 
@@ -403,6 +404,7 @@ def main():
                         help="the date in the Short's folder name, to render an existing Short's folder again "
                              "(default: today); facts are still judged stale against today")
     args = parser.parse_args()
+    fastff.use()
     if args.folder_date and facts_file.day_of(args.folder_date) is None:
         parser.error("--folder-date must be a day written as YYYY-MM-DD")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):

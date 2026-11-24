@@ -50,6 +50,7 @@ import time
 from pathlib import Path
 
 import explainer as ex
+import fastff
 from hooks import escape_ass
 
 W, H, FPS = ex.W, ex.H, ex.FPS
@@ -1169,6 +1170,7 @@ def main():
     ap.add_argument("--caption-style", choices=CAPTION_STYLES)
     ap.add_argument("--plan", action="store_true", help="make the voice and print the timeline; render nothing")
     args = ap.parse_args()
+    fastff.use()
     try:
         if args.plan:
             print_plan(plan(load(args.script, args.caption_style)))

@@ -52,6 +52,7 @@ from urllib.parse import quote
 
 import clip
 import facts as facts_file
+import fastff
 import index
 import library
 import make_short
@@ -771,6 +772,7 @@ def main():
                         help="the date in the Short's folder name (default: today)")
     parser.add_argument("--library", type=Path, default=index.LIBRARY, help=f"footage library (default {index.LIBRARY})")
     args = parser.parse_args()
+    fastff.use()
     if args.folder_date and facts_file.day_of(args.folder_date) is None:
         parser.error("--folder-date must be a day written as YYYY-MM-DD")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):

@@ -46,6 +46,7 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
+import fastff
 from clip import RANGE_FIX_ARGS, needs_range_fix
 from hooks import ass_time, escape_ass
 
@@ -3429,6 +3430,9 @@ def main():
     parser.add_argument("--pacing", action="store_true",
                         help="print the pacing check of a finished run again, without rendering anything")
     args = parser.parse_args()
+    global FFMPEG, FFPROBE
+    fastff.use()
+    FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
     try:
         if args.pacing:
             print_pacing(args.script)

@@ -49,6 +49,7 @@ import calibrate as cal
 import calibrate_guided as guided
 import clip
 import cutplan
+import fastff
 import footage_short
 import heavy
 import index
@@ -3784,6 +3785,7 @@ def main():
                         "v3: every Short the Step 0 sample's way (hook card, voice, captions, close-ups); "
                         "v2: PR 26's story layer (narrated only); v1: PR 25's explainer.py render")
     args = ap.parse_args()
+    fastff.use()
     try:
         if args.stage == "frame":
             folder = args.run or latest_run()

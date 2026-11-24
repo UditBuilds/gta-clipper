@@ -39,6 +39,7 @@ import urllib.error
 from datetime import date
 from pathlib import Path
 
+import fastff
 import vlm
 
 HERE = Path(__file__).resolve().parent
@@ -616,6 +617,7 @@ def main():
     parser.add_argument("--long-side", type=int, default=SEND_LONG_SIDE,
                         help=f"the size the model sees, in pixels on the longer side (default {SEND_LONG_SIDE})")
     args = parser.parse_args()
+    fastff.use()
     try:
         sys.exit(run(args))
     except TagError as e:
