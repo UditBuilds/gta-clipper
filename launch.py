@@ -2999,18 +2999,25 @@ def caption_checks(run_log, plan, script_lines, checker, hud_series, out_dir, lo
 
 
 CAPTION_LINE = re.compile(r"Dialogue: [^,]*,[^,]*,[^,]*,Caption,(?:[^,]*,){5}(.*)")   # a word caption in captions.ass
+CARD_LINE = re.compile(r"Dialogue: 1,0:00:00\.00,0:00:0([\d.]+),Title,(?:[^,]*,){5}(.*)")     # its open card
 
 
 def caption_coverage(run_log, plan, script_lines, ass_file, checks):
     """What caption_checks had to look at, so its empty list can't pass for a checked Short (PR 31: M24 showed 23
     captions, none is a word it knows, and nothing said so). Engine v4: (report, bad checks, flags). The captions
     burnt in (captions.ass) must be the lines' words, in order, and each must start over one of the Short's shots. The
-    report counts the captions, those over a shot and those tested against their frame; none tested is a flag."""
-    said = [t for ln in script_lines for t in word_tokens(ln["say"])]
+    report counts the captions, those over a shot and those tested against their frame; none tested is a flag. A word
+    said while the open card shows it must have no caption (PR 33: the same word twice split the eye)."""
     text = Path(ass_file).read_text(encoding="utf-8") if Path(ass_file).is_file() else ""
     burnt = [t for raw in text.splitlines() for m in [CAPTION_LINE.match(raw)] if m
              for t in word_tokens(re.sub(r"\{[^}]*\}", "", m.group(1)))]
-    words = [(t, w) for w in run_log.get("word_times") or [] for t in word_tokens(w["text"])]
+    card = CARD_LINE.search(text)
+    up = float(card.group(1)) if card else 0.0
+    on = set(word_tokens(re.sub(r"\{[^}]*\}|\\N", " ", card.group(2)))) if card else set()
+    every = [(t, w) for w in run_log.get("word_times") or [] for t in word_tokens(w["text"])]
+    twice = {k for k, (_, w) in enumerate(every) if w["start_s"] < up and set(word_tokens(w["text"])) <= on}
+    words = [tw for k, tw in enumerate(every) if k not in twice]
+    said = [t for k, t in enumerate(t for ln in script_lines for t in word_tokens(ln["say"])) if k not in twice]
     clips = {str(Path(e["clip"])) for lp in plan for e in lp}
     visuals = run_log.get("visuals") or []
 
@@ -3035,12 +3042,13 @@ def caption_coverage(run_log, plan, script_lines, ass_file, checks):
     bad += [row(k, "over a shot", "the caption shows over none of the Short's shots") for k in lost]
     tested = len({(c["word"], c["t"]) for c in checks})
     things = {t for terms in cutplan.SUBJECTS.values() for t in terms} - set(SEEN_WORDS)
-    unknown = list(dict.fromkeys(t.upper() for t, _ in words if t in things))
+    unknown = list(dict.fromkeys(t.upper() for t, _ in every if t in things))
     flags = [] if tested or not burnt else [
         f"CAPTIONS: none of the {len(burnt)} words shown is one the caption check knows, so none was checked against its "
         "frame: look yourself" + (f" ({', '.join(unknown)} names a thing the frame question has no field for)"
                                   if unknown else "")]
-    return {"shown": len(burnt), "over_a_shot": len(words) - len(lost), "tested": tested, "unknown_things": unknown}, bad, flags
+    report = {"shown": len(burnt), "over_a_shot": len(words) - len(lost), "tested": tested, "unknown_things": unknown}
+    return dict(report, **({"on_card": len(twice)} if twice else {})), bad, flags
 
 
 def full_screen_share(run_log):
@@ -3572,7 +3580,8 @@ def checks_block(checks):
     caps, seen = checks.get("caption_checks") or [], checks.get("captions")
     if seen:
         out.append(f"<p>Captions: {seen['shown']} words shown, {seen['over_a_shot']} over a shot, "
-                   f"<b>{seen['tested']}</b> checked against the picture</p>")
+                   f"<b>{seen['tested']}</b> checked against the picture"
+                   + (f", {seen['on_card']} on the open card instead" if seen.get("on_card") else "") + "</p>")
     if caps:
         rows = "".join(f'<li class="{"ok" if c["ok"] else "bad"}">{"&#10003;" if c["ok"] else "&#10007;"} '
                        f'{c["t"]:.1f} s "{esc(c["word"])}" (line {c["line"]}): {esc(c["rule"])}'

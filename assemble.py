@@ -137,6 +137,15 @@ def card_events(text):
     return ex.title_events(1, 0.0, ex.OPEN_CARD_S, text, CARD_Y, ex.OPEN_POP, CARD_SIZE, CARD_ROOM)
 
 
+def on_card(words, card, total_s):
+    """The spans of the words that get no caption (PR 33): said while the open card is up, and on it already. Every other
+    word keeps its own."""
+    shown = set(cutplan.words_of((card or "").lower()))
+    ends = [w["start"] for w in words[1:]] + [total_s]
+    return [(w["start"], end) for w, end in zip(words, ends) if round(w["start"], 3) < ex.OPEN_CARD_S
+            and set(cutplan.words_of(w["text"].lower())) <= shown]
+
+
 def visuals(shots, placed, total_s):
     """explainer-style visuals (what launch.caption_checks and full_screen_share read): one per shot and line, each
     with the line being said (or the one before), its clip and the clip's second where it starts."""
@@ -170,7 +179,8 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
     n = round(total_s * ex.RATE)
     v = np.pad(v, ((0, max(0, n - len(v))), (0, 0)))[:n]
 
-    events = (card_events(hook.upper()) if hook else []) + ex.word_events(words, total_s)
+    events = ((card_events(hook.upper()) if hook else [])
+              + ex.word_events(words, total_s, on_card(words, hook, total_s)))
     (out_dir / "captions.ass").write_text(ex.ass_document(events), encoding="utf-8")
     for font in ex.FONT_FILES:
         shutil.copy(font, work)

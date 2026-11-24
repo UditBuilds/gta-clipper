@@ -850,17 +850,106 @@ def captions_it_cannot_test_are_flagged_never_silent():
             and "23 words shown" in page and "<b>0</b> checked" in page)
 
 
+CARD_LINES = [{"say": "Can you survive this overpass jump or the overpass?"},       # 0.28 s a word: the last one at 2.24 s
+              {"say": "That overpass jump hurt."}]
+OPEN_CARD = "Survive this|overpass jump?"
+
+
+def built_captions(tmp):
+    """captions.ass as assemble.build writes it for CARD_LINES under OPEN_CARD (it is stopped right after), and what
+    the caption check needs to judge it: (ass, judge(ass) -> (report, the whys of its bad rows))."""
+    import assemble
+    import explainer as ex
+    tmp = Path(tmp)
+    spoken = fake_voice([])(CARD_LINES, 1.2)
+    placed = [{"line": 1, "start": 0.0, "end": 2.52}, {"line": 2, "start": 4.0, "end": 5.12}]
+    shots = [{"n": 1, "from": 0.0, "to": 8.0, "start": 0.0, "end": 8.0, "frames": 240, "clip": str(tmp / "shot1.mp4")}]
+
+    class Written(Exception):
+        pass
+
+    def stop(*a):
+        raise Written
+    real, ex.pick_music = ex.pick_music, stop
+    try:
+        assemble.build(tmp, "synth.mp4", shots, CARD_LINES, spoken, placed, OPEN_CARD, "action")
+    except Written:
+        pass
+    finally:
+        ex.pick_music = real
+    _, _, words = assemble.voice_track(spoken, placed, 8.0)
+    run_log = {"word_times": [{"text": w["text"], "start_s": w["start"], "end_s": w["end"]} for w in words],
+               "visuals": assemble.visuals(shots, placed, 8.0)}
+
+    def judge(ass):
+        (tmp / "captions.ass").write_text(ass, encoding="utf-8")
+        report, bad, _ = launch.caption_coverage(run_log, [[{"clip": shots[0]["clip"]}]], CARD_LINES,
+                                                 tmp / "captions.ass", [])
+        return report, [r["why"] for r in bad]
+    return (tmp / "captions.ass").read_text(encoding="utf-8"), judge
+
+
+def captions_in(ass):
+    """[(start, end, word)] of the word captions in an .ass file."""
+    def s(t):
+        h, m, x = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(x)
+    return [(s(f[1]), s(f[2]), re.sub(r"\{[^}]*\}", "", f[9])) for line in ass.splitlines() if ",Caption," in line
+            for f in [line.split(",", 9)] if line.startswith("Dialogue")]
+
+
+@check
+def no_caption_repeats_a_word_the_open_card_shows():
+    """PR 33 (the overpass Short said "...OVERPASS?" on the card and in the caption at 0:01): while the open card is up, a
+    caption shows only the words it doesn't: "Can you survive this overpass jump or the overpass?" under SURVIVE THIS /
+    OVERPASS JUMP? captions CAN YOU OR THE, each for its own time; the same words after the card are captioned as always"""
+    with tempfile.TemporaryDirectory() as tmp:
+        ass, judge = built_captions(tmp)
+        report, why = judge(ass)
+    caps = captions_in(ass)
+    under = [w for a, b, w in caps if a < 2.0]
+    return (under == ["CAN", "YOU", "OR", "THE"] and [w for a, b, w in caps if a >= 2.0] == ["OVERPASS", "THAT", "OVERPASS",
+                                                                                          "JUMP", "HURT"]
+            and caps[1][:2] == (0.28, 0.56) and not why
+            and report == {"shown": 9, "over_a_shot": 9, "tested": 0, "unknown_things": ["OVERPASS"], "on_card": 4})
+
+
+@check
+def the_caption_check_allows_only_what_the_card_shows():
+    """a word may lack its caption only while the open card shows it. Each of these fails: a word that isn't on the card
+    with no caption under it, a card word with none after the card is gone, a card word captioned under the card, and
+    the same captions with no card"""
+    with tempfile.TemporaryDirectory() as tmp:
+        ass, judge = built_captions(tmp)
+        lines = ass.splitlines()
+
+        def without(word, after):
+            k = next(k for k, x in enumerate(lines) if ",Caption," in x and x.endswith("}" + word)
+                     and captions_in(x)[0][0] >= after)
+            return "\n".join(lines[:k] + lines[k + 1:])
+        twice = next(x for x in lines if x.endswith("}THE")).replace("}THE", "}SURVIVE")
+        at = next(k for k, x in enumerate(lines) if x.endswith("}OR"))
+        both = judge("\n".join(lines[:at] + [twice] + lines[at:]))[1]
+        bare = judge("\n".join(x for x in lines if ",Title," not in x))[1]
+        or_gone, late_gone = judge(without("OR", 0.0))[1], judge(without("JUMP", 3.0))[1]
+    return (or_gone == ["the caption is 'the' where the line says 'or'"]
+            and late_gone == ["the caption is 'hurt' where the line says 'jump'"]
+            and both == ["the caption is 'survive' where the line says 'or'"]
+            and bare == ["the caption is 'or' where the line says 'survive'"])
+
+
 @check
 @testkit.full
 def a_real_v4_render_counts_its_captions():
-    """plain_render, a whole Short: render.json's checks say its 13 captions were seen, each over a shot, and the one the
-    check knows was asked about its frame and passed; the review page says so too"""
+    """plain_render, a whole Short: render.json's checks say its 11 captions were seen (of 13 words: WATCH THIS is on the
+    open card, PR 33), each over a shot, and the one the check knows was asked about its frame and passed; the review
+    page says so too"""
     made = plain_render()
     checks = made.entry["checks"]
-    return (checks["captions"] == {"shown": 13, "over_a_shot": 13, "tested": 1, "unknown_things": []}
+    return (checks["captions"] == {"shown": 11, "over_a_shot": 11, "tested": 1, "unknown_things": [], "on_card": 2}
             and len(made.log["word_times"]) == 13 and [c["word"] for c in checks["caption_checks"]] == ["CRASH"]
             and all(c["ok"] for c in checks["caption_checks"])
-            and "13 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
+            and "11 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
 
 
 @check
