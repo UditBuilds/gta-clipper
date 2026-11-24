@@ -89,12 +89,13 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    `"inset": {"zoom": "stars", "box": "icons", "start": 0.0, "length": 1.8}` on shot 1.
 4. **The voice goes into the picture.** Each line has `"at"`: the recording second where it starts. It must end
    before its shot's cut (code says by how much it runs over). In an action Short no line talks over the payoff:
-   say "Wait for it." before it and the reaction after it, and let the game's sound play the hit.
+   say a line that raises the tension before it and the answer after it, and let the game's sound play the hit.
 5. **Punchy, to the viewer, like a gamer friend**: lines of 5-9 words (never more than 9 a sentence), "you", one point
    then the payoff. No play-by-play ("Then the SUV pulls up ..."). `"claim"` is `on_screen` (cite `evidence` on
    screen while it is said, and `teaches`), `fact` (`facts` from facts.json), `ask` (a question with `answered_by`)
-   or **`hype`**: at most 5 words that claim nothing ("Watch this.", "Wait for it."). Anything a line names (a truck,
-   the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (the owner's pick; `"speed"` changes it).
+   or **`hype`**: at most 5 words that claim nothing but raise the tension ("Nowhere to go now."). Anything a line
+   names (a truck, the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (the owner's pick;
+   `"speed"` changes it).
 6. **One slow-mo replay, action Shorts only** (the only second shown twice): `"replay": {"from": s, "to": s}` names
    the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
    plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
@@ -122,6 +123,20 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
      action, for 2 s.
    - **The Short ends as the talking ends**: at most 0.5 s after the last word, unless its last shot is the slow-mo
      replay (rule 6). There is no subscribe pill.
+   - **The first 3 words are heard as you wrote them** (PR 34): the render transcribes the first 2 s with Whisper and
+     the Short FAILS when the first 3 words it hears are not line 1's ("Can you ..." comes out of Kokoro as "And you
+     ...", "Could you ..." as "You ..."). Then pick another opener: "Can anyone ...", "Will ...", "What ...".
+9. **Ask what nobody can answer, and say what the picture doesn't** (the owner, Nov 24: "Can anyone survive crashing this
+   bike?" has an obvious answer in GTA, and its lines only described the picture; "Can you SURVIVE this GTA 6 overpass
+   jump?" worked because nobody knew):
+   - **The hook is about a real unknown**: something a viewer can't already answer. Fall damage from a height, an
+     animal attacking you, what NPCs or the police actually do. Never something obvious (surviving a bike crash in GTA).
+     No real unknown in the footage, no Short: leave the pick out and say why.
+   - **Every line after the hook adds something the picture doesn't already show**: a fact the footage proves, a
+     specific detail (a count, the seconds between two things, what the HUD says), or tension. No filler: "Wait for it",
+     "That was close", "Ouch", "Let's see" are refused by code (truth.FILLER), and so is anything else like them by you.
+   - **The payoff line states the surprising answer in a few words.**
+   - **At most 4 spoken lines.**
 
 ```json
 {"shorts": [
@@ -136,7 +151,7 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    "lines": [
      {"say": "Watch this, you're flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
       "teaches": "the setup: a fast weave through traffic", "at": 265.0},
-     {"say": "Wait for it.", "claim": "hype", "at": 267.45},
+     {"say": "Nowhere to go now.", "claim": "hype", "at": 267.45},
      {"say": "And the truck didn't even notice.", "claim": "on_screen", "evidence": ["E3"],
       "teaches": "the truck keeps driving after the hit", "at": 270.15},
      {"...": "..."}]}

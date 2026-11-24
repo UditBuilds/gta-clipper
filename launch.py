@@ -3473,6 +3473,12 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
         if game_sound and not heard["later"]:
             flags.append(f"SOUND: the game's own sound is in; the speech check heard no swearing "
                          f"({heard['words']} words). Listen once anyway: it can miss mumbled words")
+    if engine == "v4":                        # PR 34: the hook's first words are heard as they were written
+        bad, note = first_words_check(out / "short.mp4", short["lines"][0].get("say"), log)
+        if bad:
+            entry["problems"] = [bad]
+            return entry
+        flags += [note] if note else []
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
@@ -3491,6 +3497,22 @@ def speech_check(path, log=print, check=None):
     except Exception as e:                      # a broken speech check must not stop the night
         log(f"  Note: the speech check failed ({e}); listen to this Short once")
         return None
+
+
+def first_words_check(path, say, log=print, listen=None):
+    """PR 34: (why the Short's first words are not its hook's, or None; a flag when that could not be checked, or None).
+    say: line 1; listen(path) -> the words heard in the first 2 s (speech.first_words, where faster-whisper is)."""
+    import speech
+    unchecked = "FIRST WORDS: not checked ({}): listen to the first second before uploading"
+    if listen is None:
+        if not speech.available():
+            return None, unchecked.format("no speech-to-text")
+        listen = speech.first_words
+    try:
+        return speech.first_words_problem(say, listen(path)), None
+    except Exception as e:                      # like the speech check: a broken one must not stop the night
+        log(f"  Note: the first-word check failed ({e})")
+        return None, unchecked.format("the check failed")
 
 
 def recs_stub(m):

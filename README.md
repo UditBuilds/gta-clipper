@@ -932,12 +932,16 @@ puts the voice into it:
   - Every cut lands on a sentence end or a footage event.
   - No line talks over an action payoff; the game's sound plays it, brought up to about -15 LUFS.
   - am_puck speaks at 1.2 (`cutplan.SPEED`). Lines are punchy: at most 9 words a sentence, talking to the viewer, and `"hype"` lines
-    like "Wait for it." claim nothing.
+    like "Nowhere to go now." claim nothing.
+  - No filler (PR 34, `truth.FILLER`): "Wait for it", "That was close", "Ouch" and "Let's see" are refused. The hook asks
+    something a viewer can't already answer, and every line adds what the picture doesn't show (`launch.md`, rule 9).
+  - The hook is heard as written (PR 34, `launch.first_words_check`): the render transcribes the first 2 s with Whisper and
+    the Short FAILS when the first 3 words are not line 1's. Kokoro's "Can you ..." is heard as "And you ...".
 
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 54 checks, 1.6 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 58 checks, 1.6 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1149,15 +1153,15 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 33): `--full` | 576 | 7.9 min |
-| now: `--quick` | 500 | 1.8 min |
-| now: `--ci`, on GitHub's Windows machine | 485 | about 2 min |
+| now (PR 34): `--full` | 580 | 8 min |
+| now: `--quick` | 503 | 1.9 min |
+| now: `--ci`, on GitHub's Windows machine | 488 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
 | explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 164 s |
 | hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 70 s |
-| editortest | `.venv-tts` | 54 | 47 | 47 | 715 s | 94 s |
+| editortest | `.venv-tts` | 58 | 50 | 50 | 715 s | 94 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
 | launchtest | `.venv-tts` | 48 | 47 | 47 | 196 s | 28 s |
