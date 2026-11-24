@@ -157,6 +157,7 @@ MUST_SAY = {"f2-lose-stars-car-swap": (words(r"exits?|enters?|gets? (?:in|into|o
             "heist-robbery": (words(r"stores?|shops?|bank|counter|cashier|clerk|register|vault|robs?|robbery"), 20.0)}
 FIRST = ("boat", "flying", "swimming", "chase", "driving", "beach")
 RENDERED_COST = 2.0      # picker: a moment a Short was already rendered from (not posted) is worth this much less
+TOUCH_S = 0.1            # picker: posted or rejected footage may reach this far into a moment (rounding); more keeps it out
 
 
 class BankError(Exception):
@@ -957,11 +958,30 @@ def index_new(input_dir=None, lib_dir=None, bank_dir=None, log=log_line, index_v
 
 # --- 7. The picker reads the bank (launch.prepare, launch.repick) ---
 
+def topic_of(m):
+    """The topic with facts a bank moment is proof of (its question's, or the HUD change it shows), or None."""
+    if m["shelf"] != "proof":
+        return None
+    hud = {"heat icons": "heat-icons", "star look": "star-looks"}
+    topic = next((q["id"] for q in m.get("questions", []) if q["id"] in launch.TOPIC_FACTS), None)
+    return next((hud[k] for k in ("heat icons", "star look") if k in m["kinds"]), topic)
+
+
+def type_of_moment(m):
+    """The type of a Short of a bank moment in the posted list's words, as the picker will compare it: its impact, else
+    the topic it is proof of (PR 35), else its category."""
+    topic = topic_of(m)
+    return launch.plain_type(launch.moment_type(dict(m, point=None, topic={"id": topic} if topic else None))
+                             or m["label"]["kind"])
+
+
 def candidates(moments, recs, spans=None, offered=("new", "rendered")):
     """The bank's action and proof moments /launch may pick from, as the picker's moments (launch.pick_step): those
     whose status is new or rendered (rendered ones cost RENDERED_COST points and rank after new ones of the same
-    payoff); posted and rejected ones are never offered. A proof moment of a topic with facts carries its topic. spans:
-    status_spans() (or the locked footage as of an older run)."""
+    payoff); posted and rejected ones are never offered, and neither is one that shares any second with posted or
+    rejected footage (PR 35: the page calls it new until half of it is rejected, so it failed late, at the render).
+    A proof moment of a topic with facts carries its topic. spans: status_spans() (or the locked footage as of an
+    older run)."""
     out = []
     for m in moments:
         rec = recs.get(m["video"])
@@ -970,9 +990,12 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
         status = status_of(m, spans)[0] if spans is not None else m.get("status", "new")
         if status not in offered:
             continue
+        locked = [(a, b) for v, a, b, _ in (spans or {}).get("posted", []) + (spans or {}).get("rejected", []) if v == m["video"]]
+        if any(launch.overlap(m["start_s"], m["end_s"], a, b) > TOUCH_S for a, b in locked):
+            continue
         lo, hi = m["span"]
-        for v, a, b, _ in ((spans or {}).get("posted", []) + (spans or {}).get("rejected", [])):
-            if v == m["video"] and lo < b and a < hi:         # a Short may not grow into locked footage
+        for a, b in locked:
+            if lo < b and a < hi:                             # a Short may not grow into locked footage
                 if b <= m["start_s"] + 0.5:
                     lo = max(lo, b)
                 elif a >= m["end_s"] - 0.5:
@@ -982,10 +1005,8 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
         p.update(bank_id=m["id"], status=status, span=[round(lo, 2), round(hi, 2)], terms=dict(m["terms"]), session_s=round(
             rec["offset_s"] + (m["start_s"] + m["end_s"]) / 2, 1), questions=m.get("questions", []))
         # (the HUD change nearest the peak is where a topic's proof is; launch.anchor reads topic["at_s"])
-        topic = next((q["id"] for q in m.get("questions", []) if q["id"] in launch.TOPIC_FACTS), None)
-        hud = {"heat icons": "heat-icons", "star look": "star-looks"}
-        topic = next((hud[k] for k in ("heat icons", "star look") if k in m["kinds"]), topic)
-        if m["shelf"] == "proof" and topic:
+        topic = topic_of(m)
+        if topic:
             at = min((e["t0"] for e in m["events"] if e["kind"] in HUD_KINDS), key=lambda t: abs(t - m["peak_s"]),
                      default=m["peak_s"])
             p["topic"] = {"id": topic, "shot": "bank", "why": m["label"]["why"], "at_s": round(at, 2),
@@ -1132,7 +1153,7 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
         made = shorts_of(shorts_dir, m["id"])
         locks = [(n, s) for n, s, _ in made] or [(f"{m['id']}@bank", [[m["video"], m["start_s"], m["end_s"]]])]
         text, title = m["label"]["text"], made[-1][2] if made else name
-        kind = kind or launch.plain_type(launch.moment_type(dict(m, point=None)) or m["label"]["kind"])
+        kind = kind or type_of_moment(m)
     else:
         folder = Path(what)
         log_ = index.read_json(folder.parent / launch.RENDER_LOG) or {}
@@ -1142,7 +1163,7 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
         locks = [(f"{folder.name}@{folder.parent.name}", [list(s) for s in e["shown"]])]
         title, text = e.get("title"), e.get("title") or ""
         m = next((x for x in bank["moments"] if x["id"] == e.get("bank_id")), None)
-        kind = kind or (launch.plain_type(launch.moment_type(dict(m, point=None))) if m else type_of_short(folder, e))
+        kind = kind or (type_of_moment(m) if m else type_of_short(folder, e))
         if not kind:
             raise BankError("say what kind of Short it was: --type crash (or stunt, star rise, discovery, chase ...): the "
                             "picker doesn't follow a Short with one of the same type")

@@ -507,7 +507,7 @@ def verify_terms(rec, m):
         terms["dialogue"] = round(-DIALOGUE_COST * share, 2)
     m["terms"], m["dropped_labels"] = terms, dropped
     m["score"] = round(sum(v for v in terms.values() if isinstance(v, (int, float))), 3)
-    m["category"] = category_of(terms)
+    m["category"] = f"topic: {m['topic']['id']}" if m.get("topic") else category_of(terms)      # (PR 35: a topic stays one)
     return dropped
 
 
@@ -574,6 +574,10 @@ TOPIC_FACTS = {"wanted-system": ["wanted-six-stars", "wanted-witness-or-alarm"],
                "big-chases": ["wanted-six-stars"],
                "heat-icons": ["wanted-heat-icons", "wanted-police-know-outfit-car", "evidence-masks-clothes"],
                "star-looks": ["wanted-hollow-star", "wanted-red-star", "wanted-solid-star", "wanted-six-stars"]}
+# A topic's type in posted_topics.json, as the owner's own entries name it ("wanted stars" and "crime reported", whose
+# rules are wanted-system and star-looks, are star rises; "cops forget you" is heat-icons): what moment_type compares.
+TOPIC_TYPE = {"wanted-system": "star rise", "star-looks": "star rise", "heat-icons": "heat-icons",
+              "cops-outfit-car-change": "heat-icons", "police-chase": "chase", "big-chases": "chase"}
 HUD6_TOPICS = {"heat": ("heat-icons", "the small icons under the wanted stars (what the police know) change"),
                "star look": ("star-looks", "the wanted stars change how they look (solid, outline)")}
 STAR_STRETCH_S = 10.0        # stars showing this long is worth reading with proof.hud6
@@ -844,10 +848,12 @@ def plain_type(label):
 
 def moment_type(m):
     """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt), from its
-    verified terms, its action payoff or its own label, or else its category (star rise, chase, heat-icons ...)."""
+    verified terms, its action payoff or its own label, or else the topic it teaches (TOPIC_TYPE, PR 35), or its category
+    (star rise, chase, heat-icons ...)."""
     terms, point = m.get("terms") or {}, (m.get("point") or {}).get("action_payoff") or []
     hits = [k for k in IMPACT_TERMS if terms.get(k) or any(plain_type(x) == k for x in point)]
-    return hits[0] if hits else plain_type(m.get("category", ""))
+    topic = (m.get("topic") or {}).get("id")
+    return hits[0] if hits else TOPIC_TYPE.get(topic, topic) if topic else plain_type(m.get("category", ""))
 
 
 def unverified_in(m, s, every):

@@ -55,7 +55,7 @@ SUITES = [
     suite("spreadtest", ".venv", 13),
     suite("vlmtest", ".venv", 39),
     suite("varietytest", ".venv", 14),
-    suite("banktest", ".venv", 41),
+    suite("banktest", ".venv", 43),
     suite("indextest", ".venv", 41),
     suite("shorttest", ".venv", 42),
     suite("calibtest", ".venv", 38),

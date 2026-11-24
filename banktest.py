@@ -1261,6 +1261,51 @@ def words_nobody_verified_name_no_topic():
             and topics == [["the beach"], ["the beach", "police chases"]]), (texts, ids, topics)
 
 
+@check
+def footage_that_overlaps_posted_or_rejected_is_never_offered():
+    """B8: a moment 27 % inside a rejected span, or with a third of a second of posted footage in its middle, was "new" and
+    was offered (its neighbours are only trimmed at the edges), so it failed late, at the render. Now any overlap of more
+    than a frame or two keeps it out; footage next to it still only shortens its stretch; a status on the page is as before"""
+    rec, m = unsure_crash()
+    m = dict(m, label=dict(m["label"], kind="crash", sure=True), shelf="action", id="x", status="new")
+    a, b = m["start_s"], m["end_s"]
+    def offered(**spans):
+        full = {"posted": [], "rendered": [], "rejected": [], **spans}
+        got = bank.candidates([m], {rec["stem"]: rec}, {k: [(rec["stem"], *s, "n") for s in v] for k, v in full.items()})
+        return got[0]["span"] if got else None
+    return (offered() == [0.0, 600.0] and offered(rejected=[(a + 4, a + 7)]) is None and offered(posted=[(a + 5, a + 5.3)]) is None
+            and offered(posted=[(a - 10, a + 0.4)]) is None and offered(rejected=[(b - 0.4, b + 9)]) is None
+            and offered(posted=[(a - 10, a)], rejected=[(b, b + 5)]) == [round(a, 2), round(b, 2)]
+            and offered(rendered=[(a, b)]) == [0.0, 600.0]
+            and bank.status_of(m, {"posted": [], "rendered": [], "rejected": [(rec["stem"], a + 4, a + 7, "n")]})[0] == "new")
+
+
+@check
+def a_proof_short_keeps_its_topic_as_its_type():
+    """B9: verify_terms rewrote a topic candidate's category ("topic: heat-icons") from its points, so "no Short of the same
+    type as one of the last 2 posted" never saw a heat-icons Short after a heat-icons Short. The category stays; the picker
+    takes the other type; a proof moment marked posted is written down as its topic"""
+    rec = made_up()
+    m = {"id": "A", "video": rec["stem"], "path": rec["path"], "start_s": 100.0, "end_s": 130.0, "span": [0.0, 600.0],
+         "session_s": 115.0, "score": 9.0, "terms": {"star_rise": 4.0, "police": 0.5, "topic": 1.5, "hud6": 1.0},
+         "category": "topic: heat-icons", "topic": {"id": "heat-icons", "why": "x", "at_s": 115.0, "facts": []},
+         "verified": {"police": [[100.0, 130.0]]}}
+    other = dict(m, id="B", category="star rise", score=2.0, terms={"star_rise": 2.5, "police": 0.5}, start_s=400.0, end_s=420.0,
+                 verified={"police": [[400.0, 420.0]]})
+    other.pop("topic")
+    for x in (m, other):
+        launch.verify_terms(rec, x)
+    posted = [{"name": "cops forget you", "type": "heat-icons", "posted": "2026-11-23", "rules": [{"words": ["zzz"]}]}]
+    stars = [{"name": "stars", "type": "star rise", "posted": "2026-11-23", "rules": [{"words": ["zzz"]}]}]
+    picks = [launch.pick_varied([dict(m, score=9.0), dict(other)], 1, p, lambda x: "", quiet)[0]["id"] for p in ([], posted, stars)]
+    wanted = launch.moment_type({"topic": {"id": "wanted-system"}, "terms": {"star_rise": 4.0}, "category": "topic: wanted-system"})
+    bank_m = {"label": {"kind": "star rise", "sure": True}, "kinds": ["heat icons", "star rise"], "shelf": "proof", "questions": [],
+              "category": "star rise", "terms": {"star_rise": 4.0}}
+    return (m["category"] == "topic: heat-icons" and launch.moment_type(m) == "heat-icons" and other["category"] == "star rise"
+            and picks == ["A", "B", "A"] and wanted == "star rise" and bank.type_of_moment(bank_m) == "heat-icons"
+            and bank.type_of_moment(dict(bank_m, shelf="action")) == "star rise"), (m["category"], picks)
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):
