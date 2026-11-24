@@ -28,6 +28,10 @@
   {"name": "tree effigy / passing out", "type": "discovery", "posted": "2026-11-21", "added": "2026-11-20T23:03:42",
    "rules": [{"words": ["effigy", "carved tree", "passes out", "passed out", "faint", "collapses"]}]},
   {"name": "crime needs a witness", "type": "star rise", "planned": "2026-11-21", "added": "2026-11-21T12:44:27",
-   "rules": [{"words": ["witness", "crime reported"]}, {"topic": ["wanted-system"]}]}
+   "rules": [{"words": ["witness", "crime reported"]}, {"topic": ["wanted-system"]}]},
+  {"name": "can you survive jumping off an overpass", "type": "stunt", "posted": "2026-11-23", "added": "2026-11-23T21:45:00",
+   "rules": [{"term": ["stunt"], "words": ["overpass", "bridge"]}, {"all_words": ["overpass", "jump"]},
+             {"all_words": ["overpass", "fall"]}, {"all_words": ["bridge", "jump"]},
+             {"all_words": ["bridge", "falls off"]}, {"all_words": ["bridge", "falls from"]}]}
  ]
 }

@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import clip
 import index
 import library
+import testkit
 
 HERE = Path(__file__).resolve().parent
 CHECKS = []
@@ -763,7 +764,7 @@ def main():
         sys.exit(1)
     ok = True
     try:
-        for fn in CHECKS:
+        for fn in testkit.selected(CHECKS):
             try:
                 good, err = bool(fn()), ""
             except Exception as e:  # a missing function or field is a failure of this check, not of the run

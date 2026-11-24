@@ -1,0 +1,72 @@
+# The quick checks that need no NVIDIA card, no voice or speech model, no Ollama and none of the owner's footage
+# (run_tests.py --ci). Windows, because the paths in this repo are Windows paths. Encoding falls back to libx264 by
+# itself where there is no NVIDIA card (explainer.pick_encoder).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        id: py314
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-python@v7
+        id: py313
+        with:
+          python-version: "3.13"
+
+      - name: Make the two Pythons (.venv is standard library only; .venv-tts here is numpy without the voice)
+        shell: pwsh
+        run: |
+          & "${{ steps.py314.outputs.python-path }}" -m venv .venv
+          & "${{ steps.py313.outputs.python-path }}" -m venv .venv-tts
+          .\.venv-tts\Scripts\python.exe -m pip install --quiet --disable-pip-version-check numpy==2.5.4
+
+      - name: Keep ffmpeg between runs
+        id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ffmpeg-9.0-full-windows
+
+      - name: Get ffmpeg 9.0 (the same build as on the owner's laptop, checked by its SHA-256)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "$env:RUNNER_TEMP\ffmpeg.7z"
+          gh release download 9.0 --repo GyanD/codexffmpeg --pattern ffmpeg-9.0-full_build.7z --output $zip
+          $want = "13f55932bed5b2c2e5706c91af8081f8e9ed76364f2f682de0ae22679bf26642"
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "ffmpeg's SHA-256 is $got, not $want" }
+          7z x $zip "-o$env:RUNNER_TEMP\ffmpeg" -y | Out-Null
+
+      - name: Put ffmpeg on the PATH
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP "ffmpeg\ffmpeg-9.0-full_build\bin"
+          & "$bin\ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Run the checks
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe run_tests.py --ci

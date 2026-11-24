@@ -9,6 +9,7 @@ Usage:  python evaltest.py
 import sys
 
 import eval as ev
+import testkit
 
 CHECKS = []
 
@@ -226,7 +227,7 @@ def unrated_is_never_postable():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run

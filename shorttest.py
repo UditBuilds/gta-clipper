@@ -22,6 +22,7 @@ import facts
 import make_short
 import picker
 import tag_media
+import testkit
 
 CHECKS = []
 
@@ -1090,7 +1091,7 @@ def the_next_short_avoids_the_last_ones_pictures():
 
 def main():
     ok = True
-    for fn in CHECKS:
+    for fn in testkit.selected(CHECKS):
         try:
             good, err = bool(fn()), ""
         except Exception as e:  # a missing function or field is a failure of this check, not of the run
