@@ -1066,6 +1066,109 @@ def the_saved_answers_are_read_from_the_index_cache():
     return [(s["from_s"], s["to_s"], s["answer"]["note"]) for s in got] == [(1.0, 5.0, "ok")] and none == []
 
 
+# --- PR 35: the outside review's findings (docs/breaks-pr35.md says which of these failed on main) ---
+
+def stops(act, *words_):
+    """Whether act() stops with one of the errors the programs print as a plain ERROR line, naming these words."""
+    try:
+        act()
+    except (bank.BankError, launch.LaunchError, index.IndexError_) as e:
+        return all(w in str(e) for w in words_)
+    return False
+
+
+@check
+def a_damaged_record_stops_everything_and_keeps_every_byte():
+    """B1: _used_footage.json cut short, locked (a folder in its place) or of the wrong shape was read as empty, and the
+    next save wrote that, unlocking every posted second. Reading it, adding a Short, marking one and listing what is
+    locked now stop with its name and change nothing; posted_topics.json and _launch_runs.json the same; only a file that
+    isn't there counts as empty"""
+    good = json.dumps({"shorts": [{"name": "p", "status": "posted", "spans": [["rec_a", 1.0, 2.0]]}]})
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        used, topics, runs = tmp / footage_short.USED_FOOTAGE, tmp / "posted_topics.json", tmp / launch.RUNS_LOG
+        acts = (lambda: footage_short.load_used(tmp), lambda: footage_short.save_used(tmp, "n", [["rec_a", 5.0, 6.0]], "rendered"),
+                lambda: footage_short.set_status(tmp, "n", [["rec_a", 5.0, 6.0]], "posted"), lambda: bank.status_spans(tmp),
+                lambda: launch.all_used_spans(tmp))
+        empty = footage_short.load_used(tmp) == {"shorts": []} and launch.load_posted(topics, log=quiet) == []
+        empty = empty and launch.load_runs(tmp) == {"runs": []}
+        for text in (good[:40], "", "[]", '{"shorts": {}}'):
+            used.write_text(text, encoding="utf-8")
+            out += [stops(act, footage_short.USED_FOOTAGE) for act in acts]
+            out.append(used.read_text(encoding="utf-8") == text)
+        for text in ('{"topics": [{', "[]", '{"topics": {}}', "{}"):
+            topics.write_text(text, encoding="utf-8")
+            out.append(stops(lambda: launch.load_posted(topics, log=quiet), "posted_topics.json"))
+        runs.write_text('{"runs": [', encoding="utf-8")
+        out.append(stops(lambda: launch.note_run(tmp, tmp / "x", [], "prepared"), launch.RUNS_LOG))
+        out.append(runs.read_text(encoding="utf-8") == '{"runs": [')
+        used.unlink()
+        used.mkdir()                                      # what can't be opened at all
+        out += [stops(act, footage_short.USED_FOOTAGE) for act in acts]
+    return empty and all(out), out
+
+
+@check
+def a_topic_is_checked_before_the_list_is_replaced():
+    """B2: add_topic put the new posted_topics.json in place and read it back afterwards, so a topic the picker can't read
+    (a rule it doesn't know, a day that isn't one) stopped every later /launch. Now it is refused before anything is
+    replaced: every byte stays, no temp file is left, and a good topic is still added"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, path)
+        before = path.read_bytes()
+        bad = [{"name": "a", "rules": [{"nope": ["x"]}]}, {"name": "b", "rules": "x"}, {"name": "c", "rules": [], "posted": "soon"}]
+        refused = [stops(lambda t=t: bank.add_topic(t, path), t["name"]) for t in bad]
+        same = path.read_bytes() == before and [p.name for p in Path(tmp).iterdir()] == ["posted_topics.json"]
+        bank.add_topic({"name": "d", "type": "crash", "posted": "2026-11-24", "rules": [{"words": ["x"]}]}, path)
+        added = launch.load_posted(path, log=quiet)[-1]["name"]
+    return refused == [True] * 3 and same and added == "d", (refused, same)
+
+
+@check
+def posting_locks_the_footage_before_it_writes_the_topic():
+    """B2: mark_posted wrote the topic first, so when locking the footage failed, the Short counted as posted and its
+    footage stayed free. Now the footage is locked first: when that fails nothing is added to posted_topics.json, and when
+    the topic can't be written the footage is locked already; run again, it finishes"""
+    import stat
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        posted = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, posted)
+        m = next(x for x in build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))["moments"]
+                 if x["main"] == "crash")
+        kw = {"shorts_dir": shorts, "bank_dir": bdir, "posted_file": posted, "log": quiet, "on": "2026-11-24"}
+        before, real = posted.read_bytes(), footage_short.set_status
+
+        def broken(*a, **k):
+            raise OSError("the disk is full")
+        footage_short.set_status = broken
+        try:
+            bank.mark_posted(m["id"], "car into a wall", **kw)
+            failed = False
+        except (OSError, bank.BankError):
+            failed = True
+        finally:
+            footage_short.set_status = real
+        nothing = posted.read_bytes() == before and launch.all_used_spans(shorts) == []
+        os.chmod(posted, stat.S_IREAD)                    # the topic can't be written now
+        try:
+            bank.mark_posted(m["id"], "car into a wall", **kw)
+            refused = False
+        except (OSError, bank.BankError):
+            refused = True
+        finally:
+            os.chmod(posted, stat.S_IWRITE | stat.S_IREAD)
+        locked = launch.all_used_spans(shorts) == [(m["video"], m["start_s"], m["end_s"])]
+        untouched = posted.read_bytes() == before
+        bank.mark_posted(m["id"], "car into a wall", **kw)
+        done = launch.load_posted(posted, log=quiet)[-1]["name"] == "car into a wall"
+        left = [p.name for p in Path(tmp).glob("posted_topics*")]
+    return failed and nothing and refused and locked and untouched and done and left == ["posted_topics.json"], (
+        failed, nothing, refused, locked, untouched, done, left)
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):

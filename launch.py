@@ -152,8 +152,7 @@ def recording_time(path):
 
 
 def load_runs(shorts_dir):
-    data = read_json(Path(shorts_dir) / RUNS_LOG)
-    return data if isinstance(data, dict) and isinstance(data.get("runs"), list) else {"runs": []}
+    return index.read_record(Path(shorts_dir) / RUNS_LOG, "runs") or {"runs": []}
 
 
 def find_recordings(input_dir, library_dir, runs, explicit=None):
@@ -794,12 +793,12 @@ def load_posted(path=POSTED_FILE, as_of=None, log=print):
     and a "posted" day after its day counts as not posted yet (a re-pick of an old run sees the list as it was then; a
     topic with no "added" was on the owner's first list). A missing file means no topic costs, said in the log."""
     path = Path(path)
-    if not path.is_file():
+    data = index.read_record(path, "topics")
+    if data is None:
         log(f"  No posted-topics list ({path}): no topic repeats are counted")
         return []
-    data = read_json(path) or {}
     out = []
-    for t in data.get("topics", []):
+    for t in data["topics"]:
         if not isinstance(t, dict) or not t.get("name") or not isinstance(t.get("rules"), list):
             raise LaunchError(f"{path}: every topic has a \"name\" and \"rules\" (a list): {t!r}")
         for r in t["rules"]:

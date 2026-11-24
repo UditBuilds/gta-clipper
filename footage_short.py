@@ -393,8 +393,9 @@ def for_explainer(resolved, script):
 # --- Earlier Shorts' footage ---
 
 def load_used(shorts_dir):
-    data = index.read_json(Path(shorts_dir) / USED_FOOTAGE)
-    return data if isinstance(data, dict) and isinstance(data.get("shorts"), list) else {"shorts": []}
+    """What every Short showed. A file that isn't there is an empty record; one that can't be read stops everything
+    (index.StateError): read as empty, the next save would unlock every posted second."""
+    return index.read_record(Path(shorts_dir) / USED_FOOTAGE, "shorts") or {"shorts": []}
 
 
 def recent_spans(used, name=None, last=RECENT_SHORTS):
@@ -808,7 +809,7 @@ def main():
     try:
         _, ready = footage_short(args.script, args.check, allow_stale=args.allow_stale, folder_date=args.folder_date,
                                  allow_weak=args.allow_weak, library_dir=args.library)
-    except FootageError as e:
+    except (FootageError, index.StateError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
     sys.exit(0 if ready else 1)

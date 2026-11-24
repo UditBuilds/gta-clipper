@@ -1040,9 +1040,10 @@ def backup(paths, bank_dir=None):
     return folder
 
 
-def add_topic(topic, path=None):
-    """Append one topic to posted_topics.json without touching a byte of the ones already there, and read it back: every
-    earlier topic must still be there, word for word."""
+def new_topics(topic, path=None):
+    """(a temp file next to posted_topics.json with one topic added, every topic in it): not a byte of the ones already
+    there is touched, every earlier topic must still be there word for word, and the picker must be able to read it
+    (launch.load_posted) before it may take the list's place. Otherwise BankError, and no temp file."""
     path = Path(path or launch.POSTED_FILE)
     text = path.read_text(encoding="utf-8")
     before = json.loads(text)
@@ -1056,9 +1057,20 @@ def add_topic(topic, path=None):
         raise BankError("posted_topics.json would not read back the same: nothing was written")
     tmp = path.with_suffix(".tmp")
     tmp.write_text(new, encoding="utf-8", newline="")
+    try:
+        launch.load_posted(tmp, log=lambda m: None)
+    except launch.LaunchError as e:
+        tmp.unlink()
+        raise BankError(f"the topic {topic['name']!r} can't be added, so nothing was written: {e}") from None
+    return tmp, after["topics"]
+
+
+def add_topic(topic, path=None):
+    """Append one topic to posted_topics.json (new_topics: checked before anything is replaced)."""
+    path = Path(path or launch.POSTED_FILE)
+    tmp, topics = new_topics(topic, path)
     tmp.replace(path)
-    launch.load_posted(path, log=lambda m: None)
-    return after["topics"]
+    return topics
 
 
 STOP = set("a an the and or of on in at to with near then past into over by from for is are his her their its player "
@@ -1140,10 +1152,18 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
              "rules": rules}
     used_file = shorts_dir / footage_short.USED_FOOTAGE
     saved = backup([used_file, posted_file], bank_dir)
-    add_topic(topic, posted_file)
-    for entry_name, spans in locks:
-        footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
-                                 note="posted by the owner" + (f": {url}" if url else ""))
+    # The topic is checked, then the footage locked, then the topic written: whatever fails, posted footage is never free.
+    tmp, _ = new_topics(topic, posted_file)
+    try:
+        for entry_name, spans in locks:
+            footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
+                                     note="posted by the owner" + (f": {url}" if url else ""))
+        tmp.replace(posted_file)
+    except OSError as e:
+        raise BankError(f"{name!r} is not all written down yet ({type(e).__name__}: {e}); run the same command again. Copies of "
+                        f"both files as they were: {saved}") from None
+    finally:
+        tmp.unlink(missing_ok=True)
     if bank["moments"]:
         write(refresh(bank, shorts_dir), bank_dir)
     spans = [s for _, sp in locks for s in sp]
