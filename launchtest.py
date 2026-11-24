@@ -1124,7 +1124,7 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
         for d in (inp, shorts, lib):
             d.mkdir(exist_ok=True)
         (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
-        for name in ("GTA_20261119000000.webm", "GTA_20261119010000.webm"):
+        for name in ("Grand Theft Auto VI_20261119000000.webm", "Grand Theft Auto VI_20261119010000.webm"):
             (inp / name).write_bytes(b"x")
         guided_run, _ = stand_in_guided(["FAIL"])
         asked = []
@@ -1171,6 +1171,47 @@ def a_failed_calibration_runs_the_whole_night_without_hud():
 # --- The whole prepare stage, with stand-ins ---
 
 @check
+def only_gta_6_recordings_are_taken_for_a_gta_6_night():
+    """PR 35: /launch took every video in the input folder, the GTA 5 ones too (test1.webm, Grand Theft Auto V_...), and
+    would have indexed them as GTA 6; the content bank never did. prepare() takes the same files as bank.new_recordings
+    and says why it left the others; --videos is still used as given"""
+    import bank
+    six, names = "Grand Theft Auto VI_20261119010000.webm", ("test1.webm", "Grand Theft Auto V_20261026160754.webm")
+
+    def run(tmp):
+        tmp = Path(tmp)
+        inp, shorts, lib = tmp / "input", tmp / "shorts", tmp / "library"
+        for d in (inp, shorts, lib):
+            d.mkdir(exist_ok=True)
+        (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
+        for name in (six, *names):
+            (inp / name).write_bytes(b"x")
+        guided_run, _ = stand_in_guided(["PASS"])
+        asked = []
+
+        def index_video(video, profile, every, library, cache_dir, log):
+            asked.append(Path(video).name)
+            return made_up_idx(Path(video).stem, video)
+        old, launch.probe_duration = launch.probe_duration, lambda v: DURATION
+        try:
+            folder = launch.prepare("gta6", input_dir=inp, shorts_dir=shorts, library_dir=lib, day="2026-11-19",
+                                    log=lambda m: None, index_video=index_video, guided_run=guided_run,
+                                    clip_runner=lambda v, p: None, check=False, sheets=False, safety=None,
+                                    posted_file=tmp / "posted_topics.json")
+        finally:
+            launch.probe_duration = old
+        data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
+        bank_takes = [v.name for v in bank.new_recordings(inp, lib)]
+        named, _ = launch.find_recordings(inp, lib, {"runs": []}, [str(inp / "test1.webm")])
+        stopped, _ = launch.find_recordings(inp, lib, {"runs": [{"folder": "x", "status": "preparing", "recordings": [
+            str(inp / n) for n in (six, *names)]}]}, None, "gta6")
+        return asked, data, bank_takes, [v.name for v in named], [v.name for v in stopped]
+    asked, data, bank_takes, named, stopped = with_profile_dirs(run)
+    return (asked == bank_takes == [six] == stopped and [r["name"] for r in data["recordings"]] == [six]
+            and all("GTA 6 recording" in data["skipped"][n] for n in names) and named == ["test1.webm"]), (asked, bank_takes, stopped)
+
+
+@check
 def a_recording_under_15_s_is_skipped_with_a_plain_line():
     """launch-fixes: launch night had a 14.9 s recording. prepare() leaves a recording under 15 s out before
     calibrating or indexing it, says so in one plain line and in candidates.json's "skipped", and goes on with the
@@ -1181,7 +1222,7 @@ def a_recording_under_15_s_is_skipped_with_a_plain_line():
         for d in (inp, shorts, lib):
             d.mkdir(exist_ok=True)
         (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
-        for name in ("GTA_20261119000000.webm", "GTA_20261119010000.webm"):
+        for name in ("Grand Theft Auto VI_20261119000000.webm", "Grand Theft Auto VI_20261119010000.webm"):
             (inp / name).write_bytes(b"x")
         guided_run, _ = stand_in_guided(["PASS"])
         asked, lines = [], []
@@ -1200,17 +1241,17 @@ def a_recording_under_15_s_is_skipped_with_a_plain_line():
             launch.probe_duration = old
         return json.loads((folder / "candidates.json").read_text(encoding="utf-8")), asked, lines
     with tempfile.TemporaryDirectory() as tmp:
-        data, asked, lines = run(tmp, {"GTA_20261119000000"})
+        data, asked, lines = run(tmp, {"Grand Theft Auto VI_20261119000000"})
     stopped = None
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            run(tmp, {"GTA_20261119000000", "GTA_20261119010000"})
+            run(tmp, {"Grand Theft Auto VI_20261119000000", "Grand Theft Auto VI_20261119010000"})
         except launch.LaunchError as e:
             stopped = str(e)
-    why = data["skipped"].get("GTA_20261119000000.webm", "")
-    return (asked == ["GTA_20261119010000"] and "14.9 s" in why and "15 s or more" in why
-            and any(l.strip().startswith("Skipped GTA_20261119000000.webm: only 14.9 s") for l in lines)
-            and [r["name"] for r in data["recordings"]] == ["GTA_20261119010000.webm"]
+    why = data["skipped"].get("Grand Theft Auto VI_20261119000000.webm", "")
+    return (asked == ["Grand Theft Auto VI_20261119010000"] and "14.9 s" in why and "15 s or more" in why
+            and any(l.strip().startswith("Skipped Grand Theft Auto VI_20261119000000.webm: only 14.9 s") for l in lines)
+            and [r["name"] for r in data["recordings"]] == ["Grand Theft Auto VI_20261119010000.webm"]
             and stopped and "under 15 s" in stopped)
 
 
@@ -1225,10 +1266,10 @@ def prepare_writes_candidates_with_evidence_and_logs_the_run():
         for d in (inp, shorts, lib):
             d.mkdir(exist_ok=True)
         (lib / "library.json").write_text(json.dumps({"videos": {}}), encoding="utf-8")
-        vids = [inp / "GTA_20261119000000.webm", inp / "GTA_20261119010000.webm"]
+        vids = [inp / "Grand Theft Auto VI_20261119000000.webm", inp / "Grand Theft Auto VI_20261119010000.webm"]
         for v in vids:
             v.write_bytes(b"x")
-        footage_short.save_used(shorts, "earlier", [["GTA_20261119000000", 90.0, 170.0]])
+        footage_short.save_used(shorts, "earlier", [["Grand Theft Auto VI_20261119000000", 90.0, 170.0]])
         guided_run, _ = stand_in_guided(["PASS"])
         asked = []
 
@@ -1273,15 +1314,15 @@ def prepare_writes_candidates_with_evidence_and_logs_the_run():
             launch.os.environ["GTA_CLIPPER_PROFILES"] = old_env
     modes = {r["stem"]: r["mode"] for r in data["recordings"]}
     picks = data["picks"]
-    first_used = [p for p in picks if p["video"] == "GTA_20261119000000" and p["window"][0] < 170
+    first_used = [p for p in picks if p["video"] == "Grand Theft Auto VI_20261119000000" and p["window"][0] < 170
                   and p["window"][1] > 90]
-    return (folder.name == "launch-2026-11-19" and modes == {"GTA_20261119000000": "hud", "GTA_20261119010000": "nohud"}
-            and ("GTA_20261119010000", "gta6_nohud") in asked and data["calibration"]["mode"] == "hud"
+    return (folder.name == "launch-2026-11-19" and modes == {"Grand Theft Auto VI_20261119000000": "hud", "Grand Theft Auto VI_20261119010000": "nohud"}
+            and ("Grand Theft Auto VI_20261119010000", "gta6_nohud") in asked and data["calibration"]["mode"] == "hud"
             and 1 <= len(picks) <= 3 and all(p["type"] in ("action", "narrated") and p["evidence"] for p in picks)
             and not first_used and runs[-1]["status"] == "prepared"
             and all("NO-HUD" in " ".join(p.get("flags", [])) for p in picks if p["mode"] == "nohud")
             and dfolder.name == "launch-2026-11-19-dryrun" and druns == [] and ddata["dry_run"]
-            and any(p["video"] == "GTA_20261119000000" and p["window"][0] < 170 and p["window"][1] > 90
+            and any(p["video"] == "Grand Theft Auto VI_20261119000000" and p["window"][0] < 170 and p["window"][1] > 90
                     for p in ddata["picks"]))
 
 
@@ -1438,8 +1479,9 @@ def main():
     ok = True
     for fn in testkit.selected(CHECKS):
         try:
-            got = fn()
-            good, err = bool(got), ""
+            got = fn()             # a check may return (ok, what it got): the tuple itself is always true (PR 35)
+            good, err = (bool(got[0]), f"  (got {got[1]})") if isinstance(got, tuple) else (bool(got), "")
+            err = err if not good else ""
         except Exception as e:
             good, err = False, f"  ({type(e).__name__}: {e})"
         ok &= good

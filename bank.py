@@ -157,6 +157,7 @@ MUST_SAY = {"f2-lose-stars-car-swap": (words(r"exits?|enters?|gets? (?:in|into|o
             "heist-robbery": (words(r"stores?|shops?|bank|counter|cashier|clerk|register|vault|robs?|robbery"), 20.0)}
 FIRST = ("boat", "flying", "swimming", "chase", "driving", "beach")
 RENDERED_COST = 2.0      # picker: a moment a Short was already rendered from (not posted) is worth this much less
+TOUCH_S = 0.1            # picker: posted or rejected footage may reach this far into a moment (rounding); more keeps it out
 
 
 class BankError(Exception):
@@ -453,6 +454,37 @@ def calm_windows(rec, taken):
     return sorted(out)
 
 
+def same_moment(m, o):
+    """How much of the longer of two moments they share, when they are of one recording and kind (family); else 0."""
+    if m["video"] != o.get("video") or m["family"] != o.get("family"):
+        return 0.0
+    longer = max(m["end_s"] - m["start_s"], o["end_s"] - o["start_s"], 1e-6)
+    return launch.overlap(m["start_s"], m["end_s"], o["start_s"], o["end_s"]) / longer
+
+
+def keep_ids(moments, old):
+    """Ids that stay (PR 35): a moment on the seconds of one of the last bank (half of the longer one, the same recording and
+    kind) has that one's id, whatever second it starts at now. Every other one gets its own, with a letter where another
+    moment has it or had it (two recordings of the same second, a moment that is gone), so no id is ever two moments."""
+    olds = [o for o in (old or {}).get("moments", []) if o.get("id")]
+    by_video = {}
+    for o in olds:
+        by_video.setdefault(o.get("video"), []).append(o)
+    pairs = sorted(((same_moment(m, o), k, o["id"]) for k, m in enumerate(moments) for o in by_video.get(m["video"], [])),
+                   key=lambda x: (-x[0], x[1], x[2]))
+    given, kept = {}, set()
+    for share, k, name in pairs:
+        if share >= 0.5 and k not in given and name not in kept:
+            given[k] = name
+            kept.add(name)
+    taken = kept | {o["id"] for o in olds}
+    letters = [""] + [a + b for a in ("", *"abcdefghijklmnopqrstuvwxyz") for b in "abcdefghijklmnopqrstuvwxyz"]
+    for k, m in enumerate(moments):
+        m["id"] = given[k] if k in given else next(m["id"] + x for x in letters if m["id"] + x not in taken)
+        taken.add(m["id"])
+    return moments
+
+
 def mine_all(rec, firsts=None):
     """(moments, what was left out) of one recording: every event in a moment, none dropped but those with under 4 s of
     clean footage, and the rest of the clean footage as calm windows. Moments of different families may overlap (a list
@@ -559,11 +591,13 @@ def label_of(m, rec, sheets):
       crash, explosion, a vehicle's jump, shooting: the safety question ticks it there AND a line says it (its own note,
       or the index's line at the peak): neither a word nor a tick alone is enough (a truck "parked in an alleyway" was
       ticked as a crash); several looks there: the ones with most of the frames; a crash and an explosion must also be
-      HEARD there (where the sound was measured);
+      HEARD there (PR 35: sound nobody measured is not heard);
       the stars, the heat icons: the HUD itself changes within 4 s of the peak (read by code);
       a fall, a reaction, a find, a mechanic: the safety note says it AND the index's own line there says it (two
       separate looks, different frames); a chase: the HUD shows stars at the peak while driving.
-    Where none of these holds, or the note says something the other look doesn't, the label is "unsure"."""
+    Where none of these holds, or the note says something the other look doesn't, the label is "unsure". A crash or an
+    explosion that isn't heard, or any impact that is only ticked, leaves the peak in doubt (PR 35): another impact, a fall,
+    shooting or a HUD change there may still name it, nothing softer may (someone reacts, a chase, a first look)."""
     peak = m["peak_s"]
     notes = [s["answer"]["note"] for s in sheets]
     # several looks at the same seconds may disagree: what the looks with most of the frames there say counts
@@ -588,20 +622,20 @@ def label_of(m, rec, sheets):
         ticked = [s["answer"]["note"] for s in sheets if s["answer"].get(SEEN_AS.get(k, ""))]
         return next((n for n in ticked + notes if k in kinds_in(n)),
                     next((x for x in lines if k in kinds_in(x)), text))
-    ticked_only, i = [], min(rec["n"] - 1, int(peak / STEP))
+    doubt, i = [], min(rec["n"] - 1, int(peak / STEP))
     loud = (rec.get("raw") or {}).get("loud") or []
     z = max(loud[max(0, i - 1):i + 2], default=0.0)
     for k in IMPACT:
-        if k in seen and (k in said or k in line_kinds) and k != "stunt" and any(loud) and z < HEARD:
-            return dict(out, kind="unsure", name="unsure", sure=False, confidence=0.4,
-                        why=f"the look at the peak and a line say {safety.SEEN[k]}, but nothing that loud is heard there "
-                            f"(loudness {z:.1f}, a real one {HEARD:g} or more): look")
-        if k in seen and (k in said or k in line_kinds):
+        if k in seen and (k in said or k in line_kinds) and k != "stunt" and z < HEARD:
+            doubt.append(f"the look at the peak and a line say {safety.SEEN[k]}, but "
+                         + (f"nothing that loud is heard there (loudness {z:.1f}, a real one {HEARD:g} or more): look" if any(loud)
+                            else "its sound was never measured (no clip.py run): look"))
+        elif k in seen and (k in said or k in line_kinds):
             both = k in said and k in line_kinds
             return dict(is_(k, 0.95 if both else 0.85, f"the peak's frames show {safety.SEEN[k]}"
                             + (" and both lines say so" if both else "")), text=telling(k))
-        if k in seen:
-            ticked_only.append(k)
+        elif k in seen:
+            doubt.append(f"the look at the peak ticks {safety.SEEN[k]}, but its own note doesn't say so: \"{text}\"")
     if "fall" in said and "fall" in line_kinds:
         return dict(is_("fall", 0.8, "both looks at the peak (the safety note and the index's line) see a fall or a jump; no "
                                      "crash, explosion or vehicle in the air is seen there"), text=telling("fall"))
@@ -611,6 +645,8 @@ def label_of(m, rec, sheets):
         if k in hud:
             got = is_(k, 1.0, f"the HUD changes at {launch.hms(hud[k]['t0'])} ({hud[k]['text']})")
             return dict(got, name=f"{NAMES[k]} ({hud[k]['text']})")
+    if doubt:
+        return dict(out, kind="unsure", name="unsure", sure=False, confidence=0.4, why=doubt[0])
     for k in ("reaction", "discovery", "mechanic"):
         if k in m["kinds"] and k in said and k in line_kinds:
             return is_(k, 0.7, "both looks at the peak say it")
@@ -622,9 +658,6 @@ def label_of(m, rec, sheets):
         ok = seg["activity"] in what or ("beach" in what and any("beach" in x.lower() for x in notes))
         if ok:
             return is_("first look", 0.7, what)
-    if ticked_only:
-        return dict(out, kind="unsure", name="unsure", sure=False, confidence=0.4,
-                    why=f"the look at the peak ticks {safety.SEEN[ticked_only[0]]}, but its own note doesn't say so: \"{text}\"")
     if m["main"] == "calm" and sheets and seg is not None:
         rx = ACTIVITY_WORDS.get(seg["activity"])
         if rx is not None and any(rx.search(library.positive_text(x)) for x in notes):
@@ -718,16 +751,20 @@ def questions(recs, shotlist=None):
 
 def answers_question(m, qs, rec):
     """The questions this moment answers on screen: the query matches its seconds (half of them, or 4 s), one of the
-    question's events (NEEDS) is in it, and the lines say what it asks for (MUST_SAY). Experiments first."""
+    question's events (NEEDS) is in it, and the lines say what it asks for (MUST_SAY). Experiments first. An impact or a
+    shooting counts only where the moment's own label is sure of it, and a line that names one it isn't sure of proves
+    nothing (PR 35): what it was mined as is a word nobody checked."""
     out = []
+    kinds = (set(m["kinds"]) - {*IMPACT, "fall", "shooting"}) | {m["label"]["kind"]}
     for q in qs:
         need = NEEDS.get(q["id"])
-        if not need or not need & (set(m["kinds"]) | {m["label"]["kind"]}):
+        if not need or not need & kinds:
             continue
         if q["id"] in MUST_SAY:
             rx, before = MUST_SAY[q["id"]]
             if not any(rx.search(library.positive_text(s["notable"])) for s in rec["sheets"]
-                       if launch.overlap(m["start_s"] - before, m["end_s"], s["t"], s["t"] + rec["every"]) > 0):
+                       if launch.overlap(m["start_s"] - before, m["end_s"], s["t"], s["t"] + rec["every"]) > 0
+                       and not launch.unverified_in(m, s, rec["every"])):
                 continue
         share = max((launch.overlap(m["start_s"], m["end_s"], a, b) for v, a, b in q["rows"] if v == m["video"]), default=0.0)
         if share >= min(4.0, 0.5 * (m["end_s"] - m["start_s"])):
@@ -748,6 +785,8 @@ def shelf_of(m):
         return "list"
     if long and m.get("questions") and m["family"] in ("main", "first look"):
         return "proof"
+    if not sure and m["main"] in (*IMPACT, "fall", "shooting"):
+        return "list"                              # an impact or shooting its own peak doesn't show (PR 35): look first
     if long and m["family"] == "main" and (kind in ("chase", "star rise", "stars lost", "heat icons", "star look")
                                            or "loud" in m["kinds"] or "shooting" in m["kinds"] or "chase" in m["kinds"]
                                            or set(m["kinds"]) & (set(IMPACT) | {"fall"})):
@@ -883,6 +922,12 @@ def build(lib_dir=None, shorts_dir=None, bank_dir=None, checker=None, shotlist=N
     bank_dir.mkdir(parents=True, exist_ok=True)
     recs = recs if recs is not None else load_recs(lib_dir, shorts_dir, bank_dir, stems, hud6, log)
     moments, dropped, left, calls = make_moments(recs, checker, lib_dir / "_cache", bank_dir / "peaks", shotlist, log)
+    old = read_bank(bank_dir)
+    if not moments and (old["moments"] if old else (bank_dir / BANK_FILE).exists()):
+        raise launch.LaunchError(f"no recording of the library gave any moments, so {bank_dir / BANK_FILE} was left as it is "
+                                 f"({len(old['moments']) if old else 'some'} moments). Are the recordings still where they were "
+                                 "indexed from?")
+    keep_ids(moments, old)
     posted = launch.load_posted(launch.POSTED_FILE, log=log)
     for m in moments:
         m["repeats"] = launch.topic_repeats(m, posted, launch.moment_text(recs[m["video"]], m))[1]
@@ -909,7 +954,7 @@ def new_recordings(input_dir=None, lib_dir=None):
     """The GTA 6 recordings in the input folder that have no index yet, oldest first."""
     lib = index.read_json(Path(lib_dir or index.LIBRARY) / "library.json") or {}
     out = []
-    for v in sorted(Path(input_dir or launch.INPUT).glob("Grand Theft Auto VI_*")):
+    for v in sorted(Path(input_dir or launch.INPUT).glob(launch.GAME_FILES[GAME] + "*")):
         if v.suffix.lower() in index.VIDEO_EXTS and v.stem not in (lib.get("videos") or {}) and not index.off_limits(v):
             out.append(v)
     return out
@@ -951,11 +996,30 @@ def index_new(input_dir=None, lib_dir=None, bank_dir=None, log=log_line, index_v
 
 # --- 7. The picker reads the bank (launch.prepare, launch.repick) ---
 
+def topic_of(m):
+    """The topic with facts a bank moment is proof of (its question's, or the HUD change it shows), or None."""
+    if m["shelf"] != "proof":
+        return None
+    hud = {"heat icons": "heat-icons", "star look": "star-looks"}
+    topic = next((q["id"] for q in m.get("questions", []) if q["id"] in launch.TOPIC_FACTS), None)
+    return next((hud[k] for k in ("heat icons", "star look") if k in m["kinds"]), topic)
+
+
+def type_of_moment(m):
+    """The type of a Short of a bank moment in the posted list's words, as the picker will compare it: its impact, else
+    the topic it is proof of (PR 35), else its category."""
+    topic = topic_of(m)
+    return launch.plain_type(launch.moment_type(dict(m, point=None, topic={"id": topic} if topic else None))
+                             or m["label"]["kind"])
+
+
 def candidates(moments, recs, spans=None, offered=("new", "rendered")):
     """The bank's action and proof moments /launch may pick from, as the picker's moments (launch.pick_step): those
     whose status is new or rendered (rendered ones cost RENDERED_COST points and rank after new ones of the same
-    payoff); posted and rejected ones are never offered. A proof moment of a topic with facts carries its topic. spans:
-    status_spans() (or the locked footage as of an older run)."""
+    payoff); posted and rejected ones are never offered, and neither is one that shares any second with posted or
+    rejected footage (PR 35: the page calls it new until half of it is rejected, so it failed late, at the render).
+    A proof moment of a topic with facts carries its topic. spans: status_spans() (or the locked footage as of an
+    older run)."""
     out = []
     for m in moments:
         rec = recs.get(m["video"])
@@ -964,9 +1028,12 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
         status = status_of(m, spans)[0] if spans is not None else m.get("status", "new")
         if status not in offered:
             continue
+        locked = [(a, b) for v, a, b, _ in (spans or {}).get("posted", []) + (spans or {}).get("rejected", []) if v == m["video"]]
+        if any(launch.overlap(m["start_s"], m["end_s"], a, b) > TOUCH_S for a, b in locked):
+            continue
         lo, hi = m["span"]
-        for v, a, b, _ in ((spans or {}).get("posted", []) + (spans or {}).get("rejected", [])):
-            if v == m["video"] and lo < b and a < hi:         # a Short may not grow into locked footage
+        for a, b in locked:
+            if lo < b and a < hi:                             # a Short may not grow into locked footage
                 if b <= m["start_s"] + 0.5:
                     lo = max(lo, b)
                 elif a >= m["end_s"] - 0.5:
@@ -976,10 +1043,8 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
         p.update(bank_id=m["id"], status=status, span=[round(lo, 2), round(hi, 2)], terms=dict(m["terms"]), session_s=round(
             rec["offset_s"] + (m["start_s"] + m["end_s"]) / 2, 1), questions=m.get("questions", []))
         # (the HUD change nearest the peak is where a topic's proof is; launch.anchor reads topic["at_s"])
-        topic = next((q["id"] for q in m.get("questions", []) if q["id"] in launch.TOPIC_FACTS), None)
-        hud = {"heat icons": "heat-icons", "star look": "star-looks"}
-        topic = next((hud[k] for k in ("heat icons", "star look") if k in m["kinds"]), topic)
-        if m["shelf"] == "proof" and topic:
+        topic = topic_of(m)
+        if topic:
             at = min((e["t0"] for e in m["events"] if e["kind"] in HUD_KINDS), key=lambda t: abs(t - m["peak_s"]),
                      default=m["peak_s"])
             p["topic"] = {"id": topic, "shot": "bank", "why": m["label"]["why"], "at_s": round(at, 2),
@@ -1009,12 +1074,13 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
 def keep_what_the_peak_shows(m):
     """After the safety checks of a candidate from the bank: an impact seen somewhere else in its footage (M24's parked
     pickup, hit 4 s before the jump) doesn't name it. Of m["verified"], only the impacts seen round the peak stay, with the
-    one its label is sure of."""
+    one its label is sure of; a moment whose label is unsure keeps none (PR 35): its own peak doesn't show one."""
     peak, v = m.get("peak_s"), m.get("verified")
     if peak is None or v is None:
         return m
+    unsure = "label" in m and not m["label"].get("sure")
     for k in IMPACT:
-        v[k] = [s for s in v.get(k, []) if s[0] < peak + AT_PEAK_S[1] and peak - AT_PEAK_S[0] < s[1]]
+        v[k] = [] if unsure else [s for s in v.get(k, []) if s[0] < peak + AT_PEAK_S[1] and peak - AT_PEAK_S[0] < s[1]]
         if not v[k]:
             v.pop(k)
     impact = impact_of(m)
@@ -1040,12 +1106,15 @@ def backup(paths, bank_dir=None):
     return folder
 
 
-def add_topic(topic, path=None):
-    """Append one topic to posted_topics.json without touching a byte of the ones already there, and read it back: every
-    earlier topic must still be there, word for word."""
+def new_topics(topic, path=None):
+    """(a temp file next to posted_topics.json with one topic added, every topic in it): not a byte of the ones already
+    there is touched, every earlier topic must still be there word for word, and the picker must be able to read it
+    (launch.load_posted) before it may take the list's place. Otherwise BankError, and no temp file."""
     path = Path(path or launch.POSTED_FILE)
+    before = index.read_record(path, "topics")             # (a damaged one stops here: index.StateError)
+    if before is None:
+        raise BankError(f"{path} isn't there: put back the copy in bank\\backups (or the repo's) and try again")
     text = path.read_text(encoding="utf-8")
-    before = json.loads(text)
     if any(t.get("name") == topic["name"] for t in before["topics"]):
         raise BankError(f"posted_topics.json already has a topic called {topic['name']!r}: give another --name")
     at = text.rstrip().rfind("]")
@@ -1056,9 +1125,20 @@ def add_topic(topic, path=None):
         raise BankError("posted_topics.json would not read back the same: nothing was written")
     tmp = path.with_suffix(".tmp")
     tmp.write_text(new, encoding="utf-8", newline="")
+    try:
+        launch.load_posted(tmp, log=lambda m: None)
+    except launch.LaunchError as e:
+        tmp.unlink()
+        raise BankError(f"the topic {topic['name']!r} can't be added, so nothing was written: {e}") from None
+    return tmp, after["topics"]
+
+
+def add_topic(topic, path=None):
+    """Append one topic to posted_topics.json (new_topics: checked before anything is replaced)."""
+    path = Path(path or launch.POSTED_FILE)
+    tmp, topics = new_topics(topic, path)
     tmp.replace(path)
-    launch.load_posted(path, log=lambda m: None)
-    return after["topics"]
+    return topics
 
 
 STOP = set("a an the and or of on in at to with near then past into over by from for is are his her their its player "
@@ -1075,14 +1155,20 @@ def topic_words(text, n=3):
     return out[:n]
 
 
-def shorts_of(shorts_dir, bank_id):
-    """The finished Shorts /launch made of a moment: [(entry name in _used_footage.json, what it showed, title)]."""
+def shows(m, shown):
+    """Whether a Short's footage (its "shown" spans) has any of a moment's seconds."""
+    return any(v == m["video"] and launch.overlap(m["start_s"], m["end_s"], a, b) > 0 for v, a, b in shown or [])
+
+
+def shorts_of(shorts_dir, m):
+    """The finished Shorts /launch made of a moment: [(entry name in _used_footage.json, what it showed, title)]. One with
+    the moment's id counts only when it shows the moment's footage (PR 35): an id may have been another moment's."""
     out = []
     for f in sorted(Path(shorts_dir).glob("*/" + launch.RENDER_LOG)):
         log_ = index.read_json(f) or {}
         out += [(f"{Path(e['folder']).name}@{f.parent.name}", [list(s) for s in e["shown"]], e.get("title"))
-                for e in log_.get("shorts", []) if e.get("bank_id") == bank_id and e.get("status") == "READY"
-                and e.get("shown") and e.get("folder") and not log_.get("dry_run")]
+                for e in log_.get("shorts", []) if e.get("bank_id") == m["id"] and e.get("status") == "READY"
+                and shows(m, e.get("shown")) and e.get("folder") and not log_.get("dry_run")]
     return out
 
 
@@ -1110,10 +1196,10 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
     m = next((x for x in bank["moments"] if x["id"] == what), None)
     text, title = "", None
     if m is not None:
-        made = shorts_of(shorts_dir, m["id"])
+        made = shorts_of(shorts_dir, m)
         locks = [(n, s) for n, s, _ in made] or [(f"{m['id']}@bank", [[m["video"], m["start_s"], m["end_s"]]])]
         text, title = m["label"]["text"], made[-1][2] if made else name
-        kind = kind or launch.plain_type(launch.moment_type(dict(m, point=None)) or m["label"]["kind"])
+        kind = kind or type_of_moment(m)
     else:
         folder = Path(what)
         log_ = index.read_json(folder.parent / launch.RENDER_LOG) or {}
@@ -1122,8 +1208,8 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
             raise BankError(f"no moment in the bank has the id {what!r}, and it is not a finished Short's folder")
         locks = [(f"{folder.name}@{folder.parent.name}", [list(s) for s in e["shown"]])]
         title, text = e.get("title"), e.get("title") or ""
-        m = next((x for x in bank["moments"] if x["id"] == e.get("bank_id")), None)
-        kind = kind or (launch.plain_type(launch.moment_type(dict(m, point=None))) if m else type_of_short(folder, e))
+        m = next((x for x in bank["moments"] if x["id"] == e.get("bank_id") and shows(x, e["shown"])), None)
+        kind = kind or (type_of_moment(m) if m else type_of_short(folder, e))
         if not kind:
             raise BankError("say what kind of Short it was: --type crash (or stunt, star rise, discovery, chase ...): the "
                             "picker doesn't follow a Short with one of the same type")
@@ -1140,10 +1226,18 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
              "rules": rules}
     used_file = shorts_dir / footage_short.USED_FOOTAGE
     saved = backup([used_file, posted_file], bank_dir)
-    add_topic(topic, posted_file)
-    for entry_name, spans in locks:
-        footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
-                                 note="posted by the owner" + (f": {url}" if url else ""))
+    # The topic is checked, then the footage locked, then the topic written: whatever fails, posted footage is never free.
+    tmp, _ = new_topics(topic, posted_file)
+    try:
+        for entry_name, spans in locks:
+            footage_short.set_status(shorts_dir, entry_name, spans, "posted", posted=on,
+                                     note="posted by the owner" + (f": {url}" if url else ""))
+        tmp.replace(posted_file)
+    except OSError as e:
+        raise BankError(f"{name!r} is not all written down yet ({type(e).__name__}: {e}); run the same command again. Copies of "
+                        f"both files as they were: {saved}") from None
+    finally:
+        tmp.unlink(missing_ok=True)
     if bank["moments"]:
         write(refresh(bank, shorts_dir), bank_dir)
     spans = [s for _, sp in locks for s in sp]
@@ -1163,8 +1257,9 @@ def mark_rejected(what, why=None, shorts_dir=None, bank_dir=None, log=log_line):
     used_file = shorts_dir / footage_short.USED_FOOTAGE
     saved = backup([used_file], bank_dir)
     used = footage_short.load_used(shorts_dir)
-    used["rejected"] = [r for r in used.get("rejected", []) if r.get("id") != what] + [
-        {"id": what, "spans": [[m["video"], m["start_s"], m["end_s"]]], "on": date.today().isoformat(),
+    spans = [[m["video"], m["start_s"], m["end_s"]]]
+    used["rejected"] = [r for r in used.get("rejected", []) if r.get("spans") != spans] + [       # (PR 35: by its footage)
+        {"id": what, "spans": spans, "on": date.today().isoformat(),
          "label": m["label"]["name"], **({"why": why} if why else {})}]
     index.write_json(used_file, used)
     write(refresh(bank, shorts_dir), bank_dir)

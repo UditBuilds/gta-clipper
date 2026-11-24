@@ -248,15 +248,16 @@ def why_text(cand, used_videos, start, seconds):
     return "; ".join(what)
 
 
-def pick_beats(beats, indexes, profile=None, avoid=(), shotlist=None):
+def pick_beats(beats, indexes, profile=None, avoid=(), shotlist=None, never=()):
     """Footage for every "shot" beat. beats: [{"line", "shot" (both from 0), "query": the beat's shot, "seconds",
     "lead", "tail"}] in the Short's order. avoid: (video, start, end) spans earlier Shorts showed; they are left
-    alone while anything else fits. Returns one pick per beat, in order:
+    alone while anything else fits. never: spans the owner rejected; they are never picked (PR 35). Returns one pick per
+    beat, in order:
       {"line", "shot", "found": True, "video", "path", "start_s", "end_s", "seconds", "kind": "segment" or "rise",
        "segment", "activity", "stars", "why", "reused": True if it had to take footage an earlier Short showed}
     or {"line", "shot", "found": False, "why": what was looked for and why nothing fitted}."""
     by_stem = {idx["video"]["stem"]: idx for idx in indexes}
-    taken, used_videos, used_segments, picks = [], {}, {}, []
+    taken, used_videos, used_segments, picks = [tuple(s) for s in never], {}, {}, []
     for beat in beats:
         where = {"line": beat["line"], "shot": beat["shot"]}
         query = shot_query(beat["query"], shotlist)
@@ -393,8 +394,9 @@ def for_explainer(resolved, script):
 # --- Earlier Shorts' footage ---
 
 def load_used(shorts_dir):
-    data = index.read_json(Path(shorts_dir) / USED_FOOTAGE)
-    return data if isinstance(data, dict) and isinstance(data.get("shorts"), list) else {"shorts": []}
+    """What every Short showed. A file that isn't there is an empty record; one that can't be read stops everything
+    (index.StateError): read as empty, the next save would unlock every posted second."""
+    return index.read_record(Path(shorts_dir) / USED_FOOTAGE, "shorts") or {"shorts": []}
 
 
 def recent_spans(used, name=None, last=RECENT_SHORTS):
@@ -402,6 +404,11 @@ def recent_spans(used, name=None, last=RECENT_SHORTS):
     out."""
     shorts = [s for s in used["shorts"] if s.get("name") != name][-last:]
     return [tuple(span) for s in shorts for span in s.get("spans", [])]
+
+
+def rejected_spans(used):
+    """(video, start, end) of everything the owner rejected (bank.py rejected): never shown, whatever else is left."""
+    return [tuple(span) for r in used.get("rejected", []) for span in r.get("spans", [])]
 
 
 def locked(entry):
@@ -704,7 +711,8 @@ def footage_short(script_path, check_only=False, shorts_dir=SHORTS_DIR, root=mak
               "tail": max(lengths[n][i], behind.get((n, i), 0.0))}
              for n, i, beat in shot_beats(script) if lengths[n][i] > 0]
     try:
-        picks = pick_beats(beats, pool, profile, recent_spans(load_used(shorts_dir), name), shotlist)
+        used = load_used(shorts_dir)
+        picks = pick_beats(beats, pool, profile, recent_spans(used, name), shotlist, rejected_spans(used))
     except FootageError as e:
         raise FootageError(f"the footage could not be picked: {e}") from None
     picks_by_beat = {(p["line"], p["shot"]): p for p in picks}
@@ -808,7 +816,7 @@ def main():
     try:
         _, ready = footage_short(args.script, args.check, allow_stale=args.allow_stale, folder_date=args.folder_date,
                                  allow_weak=args.allow_weak, library_dir=args.library)
-    except FootageError as e:
+    except (FootageError, index.StateError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
     sys.exit(0 if ready else 1)

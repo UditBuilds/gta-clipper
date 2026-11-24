@@ -33,7 +33,7 @@ those not indexed yet; none is fine), reads the HUD with `profiles/gta6.json` (e
 `<run folder>\logs\hud.txt`), indexes them, brings the **content bank** up to date (`bank.py`: every moment of every
 recording, each labelled from the frames at its loudest second; `C:\AI\gta\bank\bank.html`), then takes a **pool of 15-25
 candidates** from the bank's action and proof shelves, spread over all recordings: moments whose status is **new**, or
-**rendered** and not posted (ranked after new ones of the same payoff). **Posted and rejected footage is never offered.**
+**rendered** and not posted (ranked after new ones of the same payoff). **Posted and rejected footage is never offered**, nor a moment that shares any of its seconds.
 Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood in the first 7 s or
 swearing in the subtitles, and **never a child near guns, shooting, a body or blood, or a body with blood**, anywhere
 in it (the Nov 20 dock shootout); and its **labels are checked against what the vision model sees in its own frames** (a

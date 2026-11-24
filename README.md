@@ -681,7 +681,7 @@ The steps for the night, including the recommended split night, are in [LAUNCH_N
 .\.venv-tts\Scripts\python.exe launch.py render --short 2 --hook 1    # use another of the 3 hooks
 .\.venv-tts\Scripts\python.exe launch.py render --short 1 --no-cold-open
 .\.venv\Scripts\python.exe launch.py prepare --dry-run --game gta5 --profile gta5_dry --videos <files>   # a trial
-.\.venv-tts\Scripts\python.exe launchtest.py                          # 48 checks, half a minute, no Ollama
+.\.venv-tts\Scripts\python.exe launchtest.py                          # 49 checks, half a minute, no Ollama
 ```
 
 **What prepare does.**
@@ -1068,7 +1068,7 @@ moment of every GTA 6 recording**, and footage is locked only when I post it.
 .\.venv\Scripts\python.exe bank.py posted "C:\AI\gta\shorts\launch-2026-11-24\1-my-short"     # or a finished Short's folder
 .\.venv\Scripts\python.exe bank.py rejected 1121-164843-0312 --why "too dark"
 .\.venv\Scripts\python.exe bank.py page         # write bank.html again with today's statuses
-.\.venv\Scripts\python.exe banktest.py          # 34 checks, 8 s
+.\.venv\Scripts\python.exe banktest.py          # 50 checks, 9 s
 ```
 
 It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`, and `raw\<recording>.json` (below).
@@ -1127,6 +1127,25 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 - **What /launch would pick from the whole bank today:** the motorbike crash that throws both riders (_164843, 28:42-29:13, new
   footage), the truck crash (_135610, 7:17-7:37) and the boar attack (_143644, 6:52-7:12).
 
+**Hardened (PR 35, Nov 24)** after an outside read-only review; `docs/breaks-pr35.md` has each claim, its check and the 35
+deliberate breaks:
+
+- **A damaged record stops everything.** `_used_footage.json`, `posted_topics.json` and `_launch_runs.json`: only a file
+  that isn't there is empty. One that can't be read (cut short, locked, the wrong shape) stops with a plain ERROR and
+  nothing is written (`index.read_record`); put back the copy from `bankackups`.
+- **Posting locks first.** The topic is read back before it takes the list's place, then the footage is locked, then the
+  topic is written. Whatever fails, posted footage is never free; run the same command again.
+- **Unsure is unsure everywhere.** A moment whose label is unsure keeps no crash, explosion or jump of the safety answers, and
+  an unsure impact or shootout is a list item. Sound that was never measured is not heard. A crash that is only ticked, or
+  quiet, leaves the peak in doubt: another impact, a fall, shooting or a HUD change may name it, nothing softer may.
+- **Words need frames.** "shoot", "gun", "shootout" need shooting seen in the frames. A line that names an event nothing
+  confirms is left out of what a moment repeats, the questions it answers and the GTA 5 / GTA 6 topics.
+- **The picker.** Any overlap (over 0.1 s) with posted or rejected footage keeps a moment out. A proof Short keeps its topic
+  as its type, the one the owner's posted list uses. A GTA 6 night takes only files called `Grand Theft Auto VI_...`.
+- **Ids.** A rebuilt moment keeps the id of the old one on its seconds, no id is ever two moments, a rejection only replaces
+  the one of the same footage. An empty build never replaces a full bank.
+- `/footage-short` never picks rejected footage (what was only rendered is still left alone while other footage fits).
+
 ## No double text under the open card (PR 33, Nov 24)
 
 "Can you SURVIVE this GTA 6 overpass jump?" showed "...OVERPASS?" on the open card and in the caption at the same time
@@ -1164,16 +1183,16 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | editortest | `.venv-tts` | 58 | 50 | 50 | 715 s | 94 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
-| launchtest | `.venv-tts` | 48 | 47 | 47 | 196 s | 28 s |
-| footagetest | `.venv-tts` | 31 | 26 | 26 | 152 s | 18 s |
+| launchtest | `.venv-tts` | 49 | 48 | 48 | 196 s | 28 s |
+| footagetest | `.venv-tts` | 32 | 27 | 27 | 152 s | 18 s |
 | calibtest | `.venv` | 38 | 35 | 35 | 147 s | 24 s |
 | storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 22 s |
 | selftest | `.venv` | 3 | - | - | 33 s | 14 s |
 | hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
 | indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
-| runnertest | `.venv` | 10 | 10 | 10 | - | 0.5 s |
-| banktest (PR 32) | `.venv` | 34 | 34 | 33 | - | 8 s |
+| runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
+| banktest (PR 32, 35) | `.venv` | 50 | 50 | 49 | - | 9 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.

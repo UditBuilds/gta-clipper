@@ -121,6 +121,11 @@ class IndexError_(Exception):
     """The recording can't be indexed (off limits, no frames, Ollama gone): index.py stops with the reason."""
 
 
+class StateError(IndexError_):
+    """A record that must not be lost can't be read: whatever was going to be done with it stops (every program prints
+    an IndexError_ as a plain ERROR line)."""
+
+
 def hms(seconds):
     m, s = divmod(int(seconds), 60)
     return f"{m}:{s:02d}"
@@ -555,6 +560,23 @@ def read_json(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def read_record(path, key):
+    """A record of the owner's ({key: [...]}, what is posted, locked or taken), or None when the file isn't there. One
+    that is there and can't be read, or isn't that, is never an empty one: StateError, so nothing is written over it."""
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise StateError(f"{path} can't be read ({type(e).__name__}: {e}). Nothing was changed. Close what has it open, or "
+                         f"put back a copy of {path.name} (C:\\AI\\gta\\bank\\backups), and try again") from None
+    if not isinstance(data, dict) or not isinstance(data.get(key), list):
+        raise StateError(f"{path} isn't the record it should be (no \"{key}\" list). Nothing was changed. Put back a copy of "
+                         f"{path.name} (C:\\AI\\gta\\bank\\backups) and try again")
+    return data
 
 
 def update_library(library, index):

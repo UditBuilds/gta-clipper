@@ -286,6 +286,27 @@ def the_timings_file_keeps_the_other_tiers_part():
             and "11 checks" not in text and "one_check" in text)
 
 
+@check
+def a_check_that_returns_a_tuple_can_fail():
+    """PR 35: a check may return (ok, what it got), but in a suite whose main() asks bool(...) of what comes back that is
+    always true, so it can never fail (launchtest's swearing check couldn't). Every suite whose checks return one unpacks it"""
+    import ast
+    stuck, seen = [], 0
+    for f in sorted(run_tests.HERE.glob("*test.py")):
+        src = f.read_text(encoding="utf-8")
+        for fn in ast.parse(src).body:
+            if not isinstance(fn, ast.FunctionDef) or not any(getattr(d, "id", "") == "check" for d in fn.decorator_list):
+                continue
+            inner = {id(r) for g in ast.walk(fn) if isinstance(g, (ast.FunctionDef, ast.Lambda)) and g is not fn for r in ast.walk(g)}
+            if any(isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple) and id(r) not in inner for r in ast.walk(fn)):
+                seen += 1
+                if "isinstance(got, tuple)" not in src[src.index("\ndef main("):]:
+                    stuck.append(f"{f.name}: {fn.name}")
+    if stuck:
+        raise AssertionError("can never fail: " + ", ".join(stuck))
+    return seen > 20
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):

@@ -65,6 +65,8 @@ SHORTS_DIR = footage_short.SHORTS_DIR
 RUNS_LOG = "_launch_runs.json"           # in the shorts folder: every /launch run and the recordings it took
 GAMES = {"gta6": {"name": "GTA 6", "slots": 6, "hashtag": "#GTA6"},
          "gta5": {"name": "GTA V", "slots": 5, "hashtag": "#GTA5"}}
+GAME_FILES = {"gta6": "Grand Theft Auto VI_"}    # how the PS5 starts a recording's name: what isn't called that is not of
+                                                 # the game (the input folder also holds GTA 5 recordings)
 STEP = clip.BUCKET                       # 0.5 s: the HUD and the action score are per half second
 GUARD_S = footage_short.GUARD_S          # footage keeps this far from a never_use part
 LOOP_LEAD_S = 2.0                        # a narrated Short's loop ending replays this much from before its start
@@ -152,14 +154,14 @@ def recording_time(path):
 
 
 def load_runs(shorts_dir):
-    data = read_json(Path(shorts_dir) / RUNS_LOG)
-    return data if isinstance(data, dict) and isinstance(data.get("runs"), list) else {"runs": []}
+    return index.read_record(Path(shorts_dir) / RUNS_LOG, "runs") or {"runs": []}
 
 
-def find_recordings(input_dir, library_dir, runs, explicit=None):
+def find_recordings(input_dir, library_dir, runs, explicit=None, game=None):
     """(the recordings to use, in session order, {name: why it was skipped}). explicit: the --videos list, used as
-    given. Otherwise every video in input_dir that is not in the library yet and not part of an earlier run. A run
-    still "preparing" (it stopped) keeps its own recordings: they are taken again."""
+    given. Otherwise every video in input_dir that is not in the library yet and not part of an earlier run; with a
+    game of GAME_FILES, only that game's (PR 35: a GTA 5 file in the folder was taken for GTA 6). A run still
+    "preparing" (it stopped) keeps its own recordings: they are taken again."""
     skipped = {}
     if explicit:
         videos = [Path(v) for v in explicit]
@@ -188,7 +190,9 @@ def find_recordings(input_dir, library_dir, runs, explicit=None):
     out = []
     for v in videos:
         barred = index.off_limits(v)
-        if barred:
+        if not explicit and not v.name.startswith(GAME_FILES.get(game, "")):
+            skipped[v.name] = f"not a {GAMES[game]['name']} recording (its name doesn't start with {GAME_FILES[game]})"
+        elif barred:
             skipped[v.name] = f"held-out footage ({barred}) is never used"
         else:
             out.append(v)
@@ -415,6 +419,13 @@ def event_kinds(text):
     return kinds
 
 
+def names_shooting(text):
+    """Whether a line of the model's uses one of the words truth.py keeps for a shootout (shoot, gun, firing ...), read
+    where it isn't denied. EVENTS has no shooting (an index segment is one), so this is what the words are checked by."""
+    family = next(words for words, _ in truth.WORDS if "shootout" in words)
+    return any(truth.has_word(text or "", w) for w in family)
+
+
 def recording_data(stem, idx, act, mode, offset_s):
     """Everything mine() reads about one recording, in one place."""
     n = math.ceil(idx["video"]["duration_s"] / STEP)
@@ -496,7 +507,7 @@ def verify_terms(rec, m):
         terms["dialogue"] = round(-DIALOGUE_COST * share, 2)
     m["terms"], m["dropped_labels"] = terms, dropped
     m["score"] = round(sum(v for v in terms.values() if isinstance(v, (int, float))), 3)
-    m["category"] = category_of(terms)
+    m["category"] = f"topic: {m['topic']['id']}" if m.get("topic") else category_of(terms)      # (PR 35: a topic stays one)
     return dropped
 
 
@@ -563,6 +574,10 @@ TOPIC_FACTS = {"wanted-system": ["wanted-six-stars", "wanted-witness-or-alarm"],
                "big-chases": ["wanted-six-stars"],
                "heat-icons": ["wanted-heat-icons", "wanted-police-know-outfit-car", "evidence-masks-clothes"],
                "star-looks": ["wanted-hollow-star", "wanted-red-star", "wanted-solid-star", "wanted-six-stars"]}
+# A topic's type in posted_topics.json, as the owner's own entries name it ("wanted stars" and "crime reported", whose
+# rules are wanted-system and star-looks, are star rises; "cops forget you" is heat-icons): what moment_type compares.
+TOPIC_TYPE = {"wanted-system": "star rise", "star-looks": "star rise", "heat-icons": "heat-icons",
+              "cops-outfit-car-change": "heat-icons", "police-chase": "chase", "big-chases": "chase"}
 HUD6_TOPICS = {"heat": ("heat-icons", "the small icons under the wanted stars (what the police know) change"),
                "star look": ("star-looks", "the wanted stars change how they look (solid, outline)")}
 STAR_STRETCH_S = 10.0        # stars showing this long is worth reading with proof.hud6
@@ -794,12 +809,12 @@ def load_posted(path=POSTED_FILE, as_of=None, log=print):
     and a "posted" day after its day counts as not posted yet (a re-pick of an old run sees the list as it was then; a
     topic with no "added" was on the owner's first list). A missing file means no topic costs, said in the log."""
     path = Path(path)
-    if not path.is_file():
+    data = index.read_record(path, "topics")
+    if data is None:
         log(f"  No posted-topics list ({path}): no topic repeats are counted")
         return []
-    data = read_json(path) or {}
     out = []
-    for t in data.get("topics", []):
+    for t in data["topics"]:
         if not isinstance(t, dict) or not t.get("name") or not isinstance(t.get("rules"), list):
             raise LaunchError(f"{path}: every topic has a \"name\" and \"rules\" (a list): {t!r}")
         for r in t["rules"]:
@@ -833,16 +848,35 @@ def plain_type(label):
 
 def moment_type(m):
     """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt), from its
-    verified terms, its action payoff or its own label, or else its category (star rise, chase, heat-icons ...)."""
+    verified terms, its action payoff or its own label, or else the topic it teaches (TOPIC_TYPE, PR 35), or its category
+    (star rise, chase, heat-icons ...)."""
     terms, point = m.get("terms") or {}, (m.get("point") or {}).get("action_payoff") or []
     hits = [k for k in IMPACT_TERMS if terms.get(k) or any(plain_type(x) == k for x in point)]
-    return hits[0] if hits else plain_type(m.get("category", ""))
+    topic = (m.get("topic") or {}).get("id")
+    return hits[0] if hits else TOPIC_TYPE.get(topic, topic) if topic else plain_type(m.get("category", ""))
+
+
+def unverified_in(m, s, every):
+    """The events one sheet's line names (VERIFY: a crash, explosion, stunt, police, shooting) that nothing confirms for
+    this moment (PR 35): the safety answers didn't see them in its frames; or, for a bank moment nobody has put through
+    them yet, they are impacts or shooting its own label isn't sure of. [] where there is neither (older steps)."""
+    named = {k for k in [*event_kinds(s.get("notable")), *(["shootout"] if names_shooting(s.get("notable")) else [])]
+             if k in VERIFY}
+    if m.get("verified") is not None:
+        return sorted(k for k in named if not seen_near(m["verified"], VERIFY[k], s["t"], s["t"] + every))
+    label = m.get("label")
+    if label is None:
+        return []
+    sure = {"fall": "stunt", "shooting": "shootout"}.get(label.get("kind"), label.get("kind")) if label.get("sure") else None
+    return sorted(k for k in named if k != "police" and k != sure)
 
 
 def moment_text(rec, m):
-    """What the frames say about a moment: the vision model's notable lines over its seconds, and a topic's reason."""
+    """What the frames say about a moment: the vision model's notable lines over its seconds, and a topic's reason. A line
+    that names an event nothing confirms for this moment is left out (PR 35)."""
     a, b = m["start_s"], m["end_s"]
-    lines = [s.get("notable") or "" for s in rec.get("sheets", []) if overlap(a, b, s["t"], s["t"] + rec["every"]) > 0]
+    lines = [s.get("notable") or "" for s in rec.get("sheets", []) if overlap(a, b, s["t"], s["t"] + rec["every"]) > 0
+             and not unverified_in(m, s, rec["every"])]
     return " ".join(lines + [str((m.get("topic") or {}).get("why") or "")]).lower()
 
 
@@ -1108,7 +1142,8 @@ def evidence(rec, a, b, verified=None):
             continue
         pic = sheet_picture(rec, s["t"])
         t0, t1 = s["t"], s["t"] + rec["every"]
-        unseen = [k for k in s["kinds"] if check and k in VERIFY and not seen_near(verified, VERIFY[k], t0, t1)]
+        named = list(s["kinds"]) + (["shootout"] if names_shooting(s["notable"]) else [])       # (PR 35: no kind of its own)
+        unseen = [k for k in named if check and k in VERIFY and not seen_near(verified, VERIFY[k], t0, t1)]
         for k in s["kinds"]:
             if k in unseen:
                 continue
@@ -1503,7 +1538,7 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
     nar = opts.get("narrated")
     formats = []
     if nar:
-        words = " ".join(str(e["value"]).lower() for e in nar["evidence"])
+        words = " ".join(str(e["value"]).lower() for e in nar["evidence"] if not e.get("not_seen"))    # (PR 35)
         labels = {e["value"] for e in nar["evidence"] if e["kind"] == "activity"}
         compare = None
         for topic in COMPARE_TOPICS:
@@ -1729,7 +1764,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         preflight(index.MODEL, log)
     recordings, skipped = find_recordings(input_dir, library_dir, runs,
                                           videos or ([str(v) for v in sorted(Path(input_dir).iterdir())
-                                                      if v.suffix.lower() in index.VIDEO_EXTS] if dry_run else None))
+                                                      if v.suffix.lower() in index.VIDEO_EXTS] if dry_run else None), game)
     # launch-fixes: a recording too short for a Short (launch night had a 14.9 s one) is left out with a plain line,
     # before anything else looks at it.
     durations = {v.stem: probe_duration(v) for v in recordings}

@@ -23,6 +23,7 @@ import launchtest as lt
 import library
 import safety
 import testkit
+import truth
 from footagetest import made_up_index, made_up_timeline, seg
 
 HERE = Path(__file__).resolve().parent
@@ -328,7 +329,7 @@ def when_looks_disagree_the_ones_with_most_frames_count():
 def a_crash_must_be_heard_and_a_wreck_is_not_one():
     """wrong crashes of the first real build (looked at by hand): a truck that turns round (tick and line, but loudness
     1.8), a drift (1.1) and burnt cars after a fight ("wreckage", 0.1) are unsure and no impact; the same tick and
-    line with a real crash's sound (2.0) is a crash; where no sound was measured the sound can't speak against it"""
+    line with a real crash's sound (2.0) is a crash; where no sound was measured it is unsure too (PR 35: it was a crash)"""
     look_ = [look(302.0, 306.0, "Red Mustang drives and crashes on highway.", crash=True)]
     lines = {300.0: ("Red sports car stuck on road after crash with barrier", "driving")}
     turn = labelled(made_up(lines=lines, loud={303.0: 1.812}), 301, look_)
@@ -341,7 +342,7 @@ def a_crash_must_be_heard_and_a_wreck_is_not_one():
     bank.set_label(m, wreck, [look(302.0, 306.0, "Player exits vehicle near wreckage in rural setting.", crash=True)])
     return (all(x["label"]["kind"] == "unsure" and x["payoff"]["tier"] < 3 and "crash" not in x["terms"] for x in (turn, drift, m))
             and "nothing that loud" in turn["label"]["why"] and heard["label"]["kind"] == "crash" and heard["payoff"]["tier"] == 3
-            and unmeasured["label"]["kind"] == "crash" and bank.kinds_in("Diver searches wreck, finds treasure") == {"discovery"})
+            and unmeasured["label"]["kind"] == "unsure" and bank.kinds_in("Diver searches wreck, finds treasure") == {"discovery"})
 
 
 @check
@@ -460,6 +461,15 @@ def a_moment_that_may_not_be_shown_never_reaches_a_shelf():
 
 # --- 4a. Raw data, and no second look ---
 
+def clip_run(shorts, stem):
+    """What clip.py leaves for a recording: a run folder whose sound has a loud half second every 100 s (3.5, 103.5 ...)."""
+    run = Path(shorts) / "launch-2026-11-19" / "clip_runs" / stem / "20261119-120000"
+    run.mkdir(parents=True)
+    rows = ["time_s,audio_z,visual_z"] + [f"{i * 0.5},{2.0 if (i * 0.5) % 100 == 3.5 else 0.0},0.0" for i in range(1200)]
+    (run / "timeline.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return run
+
+
 def bank_of(tmp, recs_lines, used=None, counts=None):
     """A library, shorts folder and bank folder in tmp with these recordings ({stem: lines})."""
     tmp = Path(tmp)
@@ -477,10 +487,7 @@ def bank_of(tmp, recs_lines, used=None, counts=None):
         (lib / stem).mkdir()
         (lib / stem / "index.json").write_text(json.dumps(idx), encoding="utf-8")
         videos[stem] = {"index": f"{stem}/index.json", "duration_s": 600.0}
-        run = shorts / "launch-2026-11-19" / "clip_runs" / stem / "20261119-120000"
-        run.mkdir(parents=True)
-        rows = ["time_s,audio_z,visual_z"] + [f"{i * 0.5},{2.0 if (i * 0.5) % 100 == 3.5 else 0.0},0.0" for i in range(1200)]
-        (run / "timeline.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        clip_run(shorts, stem)
     (lib / "library.json").write_text(json.dumps({"videos": videos}), encoding="utf-8")
     if used is not None:
         (shorts / footage_short.USED_FOOTAGE).write_text(json.dumps(used), encoding="utf-8")
@@ -866,7 +873,7 @@ def a_short_may_not_grow_into_locked_footage():
         free = next(c for c in bank.candidates(b["moments"], recs, {"posted": [], "rendered": [], "rejected": []}) if c["kinds"] == ["crash"])
     windows = [o["window"] for k, o in w.items() if isinstance(o, dict)]
     return (c["span"] == [290.0, 330.0] and windows and all(290.0 <= a and b <= 330.0 for a, b in windows)
-            and free["span"] == [0, 600.0] or free["span"] == [0.0, 600.0]) and c["span"] == [290.0, 330.0]
+            and free["span"] == [0.0, 600.0]), (c["span"], windows, free["span"])
 
 
 @check
@@ -902,7 +909,7 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
         lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(102, 300)})
         inp = tmp / "input"
         inp.mkdir()
-        new = inp / "GTA_20261121010000.webm"
+        new = inp / "Grand Theft Auto VI_20261121010000.webm"
         new.write_bytes(b"x")
         footage_short.set_status(shorts, "p", [["GTA_20261119120000", 95.0, 115.0]], "posted", posted="2026-11-20")
 
@@ -926,7 +933,7 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
         launch.choose_profile = lambda *a, **k: {"profile": "gta6", "mode": "hud", "stars": True, "why": "x", "attempts": []}
         launch.POSTED_FILE = tmp / "none.json"
         kw = {"input_dir": inp, "shorts_dir": shorts, "library_dir": lib, "log": quiet, "index_video": index_video,
-              "clip_runner": lambda v, p: None, "check": False, "sheets": False, "posted_file": tmp / "none.json",
+              "clip_runner": lambda v, p: clip_run(shorts, v.stem), "check": False, "sheets": False, "posted_file": tmp / "none.json",
               "safety": Safe("Player's car crashes into a wall", only=CRASHES, crash=True), "hud6": lambda *a, **k: []}
         try:
             folder = launch.prepare("gta6", day="2026-11-24", bank_dir=bdir, **kw)
@@ -940,25 +947,26 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
             except launch.LaunchError as e:
                 stopped = str(e)
             # a night on which nothing passes says so and is not carried on by the next one
-            (inp / "GTA_20261127010000.webm").write_bytes(b"x")
-            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in ("GTA_20261119120000", "GTA_20261121010000",
-                                                                               "GTA_20261127010000")], "posted", posted="2026-11-24")
+            (inp / "Grand Theft Auto VI_20261127010000.webm").write_bytes(b"x")
+            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in (
+                "GTA_20261119120000", "Grand Theft Auto VI_20261121010000", "Grand Theft Auto VI_20261127010000")], "posted",
+                posted="2026-11-24")
             nothing = None
             try:
                 launch.prepare("gta6", day="2026-11-27", bank_dir=bdir, **kw)
             except launch.LaunchError as e:
                 nothing = str(e)
-            (inp / "GTA_20261128010000.webm").write_bytes(b"x")
+            (inp / "Grand Theft Auto VI_20261128010000.webm").write_bytes(b"x")
             left, _ = launch.find_recordings(inp, lib, launch.load_runs(shorts))
         finally:
             launch.probe_duration, launch.choose_profile, launch.POSTED_FILE = keep
     picks = data["picks"]
     hit = [p for p in picks if p["video"] == "GTA_20261119120000" and launch.overlap(p["window"][0], p["window"][1], 95.0, 115.0) > 0]
-    return (in_bank == {"GTA_20261119120000", "GTA_20261121010000"} and {p["video"] for p in picks} == in_bank and not hit
+    return (in_bank == {"GTA_20261119120000", "Grand Theft Auto VI_20261121010000"} and {p["video"] for p in picks} == in_bank and not hit
             and all(p["bank_id"] and p["label"]["kind"] == "crash" for p in picks)
             and {r["stem"] for r in data["recordings"]} == in_bank and data2["picks"] and folder != again
             and stopped and "no new recordings" in stopped and nothing and "no moment passed" in nothing
-            and [v.name for v in left] == ["GTA_20261128010000.webm"]), ([(p["video"], p["window"]) for p in picks], stopped)
+            and [v.name for v in left] == ["Grand Theft Auto VI_20261128010000.webm"]), ([(p["video"], p["window"]) for p in picks], stopped)
 
 
 @check
@@ -1064,6 +1072,393 @@ def the_saved_answers_are_read_from_the_index_cache():
         got = bank.saved_answers(tmp, "rec")
         none = bank.saved_answers(tmp, "other")
     return [(s["from_s"], s["to_s"], s["answer"]["note"]) for s in got] == [(1.0, 5.0, "ok")] and none == []
+
+
+# --- PR 35: the outside review's findings (docs/breaks-pr35.md says which of these failed on main) ---
+
+def stops(act, *words_):
+    """Whether act() stops with one of the errors the programs print as a plain ERROR line, naming these words."""
+    try:
+        act()
+    except (bank.BankError, launch.LaunchError, index.IndexError_) as e:
+        return all(w in str(e) for w in words_)
+    return False
+
+
+@check
+def a_damaged_record_stops_everything_and_keeps_every_byte():
+    """B1: _used_footage.json cut short, locked (a folder in its place) or of the wrong shape was read as empty, and the
+    next save wrote that, unlocking every posted second. Reading it, adding a Short, marking one and listing what is
+    locked now stop with its name and change nothing; posted_topics.json and _launch_runs.json the same; only a file that
+    isn't there counts as empty"""
+    good = json.dumps({"shorts": [{"name": "p", "status": "posted", "spans": [["rec_a", 1.0, 2.0]]}]})
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        used, topics, runs = tmp / footage_short.USED_FOOTAGE, tmp / "posted_topics.json", tmp / launch.RUNS_LOG
+        acts = (lambda: footage_short.load_used(tmp), lambda: footage_short.save_used(tmp, "n", [["rec_a", 5.0, 6.0]], "rendered"),
+                lambda: footage_short.set_status(tmp, "n", [["rec_a", 5.0, 6.0]], "posted"), lambda: bank.status_spans(tmp),
+                lambda: launch.all_used_spans(tmp))
+        empty = footage_short.load_used(tmp) == {"shorts": []} and launch.load_posted(topics, log=quiet) == []
+        empty = empty and launch.load_runs(tmp) == {"runs": []} and stops(lambda: bank.add_topic({"name": "n"}, topics), "isn't there")
+        for text in (good[:40], "", "[]", '{"shorts": {}}'):
+            used.write_text(text, encoding="utf-8")
+            out += [stops(act, footage_short.USED_FOOTAGE) for act in acts]
+            out.append(used.read_text(encoding="utf-8") == text)
+        for text in ('{"topics": [{', "[]", '{"topics": {}}', "{}"):
+            topics.write_text(text, encoding="utf-8")
+            out.append(stops(lambda: launch.load_posted(topics, log=quiet), "posted_topics.json"))
+            out.append(stops(lambda: bank.add_topic({"name": "n", "rules": []}, topics), "posted_topics.json"))
+            out.append(topics.read_text(encoding="utf-8") == text)
+        runs.write_text('{"runs": [', encoding="utf-8")
+        out.append(stops(lambda: launch.note_run(tmp, tmp / "x", [], "prepared"), launch.RUNS_LOG))
+        out.append(runs.read_text(encoding="utf-8") == '{"runs": [')
+        used.unlink()
+        used.mkdir()                                      # what can't be opened at all
+        out += [stops(act, footage_short.USED_FOOTAGE) for act in acts]
+    return empty and all(out), out
+
+
+@check
+def a_topic_is_checked_before_the_list_is_replaced():
+    """B2: add_topic put the new posted_topics.json in place and read it back afterwards, so a topic the picker can't read
+    (a rule it doesn't know, a day that isn't one) stopped every later /launch. Now it is refused before anything is
+    replaced: every byte stays, no temp file is left, and a good topic is still added"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, path)
+        before = path.read_bytes()
+        bad = [{"name": "a", "rules": [{"nope": ["x"]}]}, {"name": "b", "rules": "x"}, {"name": "c", "rules": [], "posted": "soon"}]
+        refused = [stops(lambda t=t: bank.add_topic(t, path), t["name"]) for t in bad]
+        same = path.read_bytes() == before and [p.name for p in Path(tmp).iterdir()] == ["posted_topics.json"]
+        bank.add_topic({"name": "d", "type": "crash", "posted": "2026-11-24", "rules": [{"words": ["x"]}]}, path)
+        added = launch.load_posted(path, log=quiet)[-1]["name"]
+    return refused == [True] * 3 and same and added == "d", (refused, same)
+
+
+@check
+def posting_locks_the_footage_before_it_writes_the_topic():
+    """B2: mark_posted wrote the topic first, so when locking the footage failed, the Short counted as posted and its
+    footage stayed free. Now the footage is locked first: when that fails nothing is added to posted_topics.json, and when
+    the topic can't be written the footage is locked already; run again, it finishes"""
+    import stat
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        posted = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, posted)
+        m = next(x for x in build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))["moments"]
+                 if x["main"] == "crash")
+        kw = {"shorts_dir": shorts, "bank_dir": bdir, "posted_file": posted, "log": quiet, "on": "2026-11-24"}
+        before, real = posted.read_bytes(), footage_short.set_status
+
+        def broken(*a, **k):
+            raise OSError("the disk is full")
+        footage_short.set_status = broken
+        try:
+            bank.mark_posted(m["id"], "car into a wall", **kw)
+            failed = False
+        except (OSError, bank.BankError):
+            failed = True
+        finally:
+            footage_short.set_status = real
+        nothing = posted.read_bytes() == before and launch.all_used_spans(shorts) == []
+        os.chmod(posted, stat.S_IREAD)                    # the topic can't be written now
+        try:
+            bank.mark_posted(m["id"], "car into a wall", **kw)
+            refused = False
+        except (OSError, bank.BankError):
+            refused = True
+        finally:
+            os.chmod(posted, stat.S_IWRITE | stat.S_IREAD)
+        locked = launch.all_used_spans(shorts) == [(m["video"], m["start_s"], m["end_s"])]
+        untouched = posted.read_bytes() == before
+        bank.mark_posted(m["id"], "car into a wall", **kw)
+        done = launch.load_posted(posted, log=quiet)[-1]["name"] == "car into a wall"
+        left = [p.name for p in Path(tmp).glob("posted_topics*")]
+    return failed and nothing and refused and locked and untouched and done and left == ["posted_topics.json"], (
+        failed, nothing, refused, locked, untouched, done, left)
+
+
+def unsure_crash():
+    """(recording, moment): mined as a crash; the peak's look ticks one and both lines say it, but nothing loud is heard."""
+    rec = made_up(lines={300.0: ("Player's car crashes into a wall", "driving")}, loud={303.0: 1.2})
+    m = labelled(rec, 301, [look(302, 306, "A car crashes into a wall", crash=True)])
+    return rec, m
+
+
+@check
+def an_unsure_crash_is_no_crash_to_the_picker_or_the_words():
+    """B3: a moment whose label is "unsure" kept the crash the safety answers saw at its peak: the evidence had a crash
+    event, the quality gate a crash payoff (tier 3) and the words "crash" passed. Now an unsure label keeps no impact: no
+    event, no payoff, the word refused; a sure crash is as it was"""
+    rec, m = unsure_crash()
+    sure = dict(m, label=dict(m["label"], kind="crash", sure=True))
+    out = []
+    for x in (m, sure):
+        c = dict(x, bank_id=x["id"], id="M1", terms=dict(x["terms"]), verified={"crash": [[302.0, 306.0]], "police": [[302.0, 306.0]]})
+        bank.keep_what_the_peak_shows(c)
+        launch.verify_terms(rec, c)
+        launch.story_gate(rec, c, "gta6", False)
+        items = launch.evidence(rec, c["start_s"], c["end_s"], verified=c["verified"])
+        out.append((m["label"]["kind"] == "unsure", "crash" in c["verified"], [e["value"] for e in items if e["kind"] == "event"],
+                    c["point"]["action_payoff"], launch.payoff_strength(c)[0], launch.moment_type(c) == "crash",
+                    bool(truth.word_problems("That crash was huge", items, False, "x")), "police" in c["verified"]))
+    unsure_, sure_ = out
+    return (unsure_[1:] == (False, [], [], unsure_[4], False, True, True) and unsure_[4] < 3
+            and sure_[1:] == (True, ["crash"], ["crash"], 3, True, False, True)), out
+
+
+@check
+def an_unsure_impact_is_not_on_the_action_shelf():
+    """B3: 9 of the 14 unsure moments on the real action shelf were impacts their own peak doesn't show (crash, explosion,
+    fall). An unsure impact or shootout is a list item; a sure one, an unsure chase and loud action stay action clips"""
+    _, m = unsure_crash()
+    sure = dict(m, label=dict(m["label"], kind="crash", sure=True))
+    chase = dict(m, main="chase", kinds=["chase"])
+    loud = dict(m, main="loud", kinds=["loud"])
+    both = dict(m, main="explosion", kinds=["explosion", "loud"])
+    shelves = [bank.shelf_of(dict(x, questions=[])) for x in (m, sure, chase, loud, both, dict(m, main="fall", kinds=["fall"]),
+                                                              dict(m, main="shooting", kinds=["shooting"]))]
+    return shelves == ["list", "action", "action", "action", "list", "list", "list"], shelves
+
+
+GUN_LINE = "Player aims gun, shooting at a man near a bridge"
+
+
+@check
+def gun_words_need_shooting_the_frames_show():
+    """B4: launch.EVENTS has no shooting, so a line like "Player aims gun, shooting at a man" let a script say "shoot", "gun"
+    and "shootout" though the vision check saw no shooting. Now those words need shooting seen in the frames; a line that
+    only names a gun marks it not seen; where shooting is seen they are fine; without the vision check nothing changes"""
+    rec = made_up(lines={300.0: (GUN_LINE, "on_foot")}, segs=[seg(0, 600, "on_foot")])
+    unseen = launch.evidence(rec, 295.0, 310.0, verified={})
+    seen = launch.evidence(rec, 295.0, 310.0, verified={"shooting": [[301.0, 305.0]]})
+    plain = launch.evidence(rec, 295.0, 310.0)
+    said = ("Watch the shootout", "You shoot first", "A gun comes out", "They start firing")
+    blocked = [bool(truth.word_problems(s, unseen, False, "x")) for s in said]
+    free = [bool(truth.word_problems(s, e, False, "x")) for s in said[:3] for e in (seen, plain)]
+    marked = [e.get("not_seen") for e in unseen if e["kind"] == "seen" and "gun" in e["value"]]
+    return all(blocked) and not any(free) and marked == [["shootout"]], (blocked, free, marked)
+
+
+@check
+def words_nobody_verified_name_no_topic():
+    """B4: what a moment repeats, and the questions it answers, were read from lines the frames didn't confirm. A line that
+    names a crash, jump, explosion, shooting or police the safety answers (or, in the bank, the moment's own label) didn't
+    see is left out; the same line confirmed counts"""
+    rec = made_up(lines={300.0: ("Player's car crashes into a wall near an overpass", "driving"),
+                         306.0: ("Player drives past a beach", "driving")}, loud={303.0: 1.2})
+    base = {"start_s": 296.0, "end_s": 314.0, "video": rec["stem"]}
+    texts = [launch.moment_text(rec, dict(base, **x)) for x in (
+        {"verified": {}}, {"verified": {"crash": [[301.0, 305.0]]}}, {"label": {"kind": "unsure", "sure": False}},
+        {"label": {"kind": "crash", "sure": True}}, {})]
+    qs = [{"id": "f1-sports-car", "kind": "experiment", "question": "x", "rows": [(rec["stem"], 290.0, 320.0)]},
+          {"id": "f1-night-rain-drive", "kind": "experiment", "question": "x", "rows": [(rec["stem"], 290.0, 320.0)]}]
+    rec2, m = unsure_crash()
+    rec2["sheets"][51]["notable"] = "Car crashes in the rain at night"
+    ids = [[q["id"] for q in bank.answers_question(x, qs, rec2)] for x in (
+        m, dict(m, label=dict(m["label"], kind="crash", sure=True)),
+        dict(m, kinds=["crash", "star rise"], label={"kind": "star rise", "sure": True}))]   # (the rain is only in the crash's line)
+    cop = made_up(lines={300.0: ("Police chase the player", "driving"), 306.0: ("Player drives past a beach", "driving")})
+    topics = []
+    for seen in ({}, {"police": [[300.0, 306.0]]}):
+        asked = []
+        launch.story_gate(cop, {"start_s": 296.0, "end_s": 326.0, "span": [0.0, 600.0], "terms": {}, "video": cop["stem"],
+                                "verified": seen}, "gta6", False, lambda t, labels, words: asked.append(t[0]))
+        topics.append(asked)
+    return (["overpass" in t for t in texts] == [False, True, False, True, True] and all("beach" in t for t in texts)
+            and [sorted(x) for x in ids] == [[], ["f1-night-rain-drive", "f1-sports-car"], []]
+            and topics == [["the beach"], ["the beach", "police chases"]]), (texts, ids, topics)
+
+
+@check
+def footage_that_overlaps_posted_or_rejected_is_never_offered():
+    """B8: a moment 27 % inside a rejected span, or with a third of a second of posted footage in its middle, was "new" and
+    was offered (its neighbours are only trimmed at the edges), so it failed late, at the render. Now any overlap of more
+    than a frame or two keeps it out; footage next to it still only shortens its stretch; a status on the page is as before"""
+    rec, m = unsure_crash()
+    m = dict(m, label=dict(m["label"], kind="crash", sure=True), shelf="action", id="x", status="new")
+    a, b = m["start_s"], m["end_s"]
+    def offered(**spans):
+        full = {"posted": [], "rendered": [], "rejected": [], **spans}
+        got = bank.candidates([m], {rec["stem"]: rec}, {k: [(rec["stem"], *s, "n") for s in v] for k, v in full.items()})
+        return got[0]["span"] if got else None
+    return (offered() == [0.0, 600.0] and offered(rejected=[(a + 4, a + 7)]) is None and offered(posted=[(a + 5, a + 5.3)]) is None
+            and offered(posted=[(a - 10, a + 0.4)]) is None and offered(rejected=[(b - 0.4, b + 9)]) is None
+            and offered(posted=[(a - 10, a)], rejected=[(b, b + 5)]) == [round(a, 2), round(b, 2)]
+            and offered(rendered=[(a, b)]) == [0.0, 600.0]
+            and bank.status_of(m, {"posted": [], "rendered": [], "rejected": [(rec["stem"], a + 4, a + 7, "n")]})[0] == "new")
+
+
+@check
+def a_proof_short_keeps_its_topic_as_its_type():
+    """B9: verify_terms rewrote a topic candidate's category ("topic: heat-icons") from its points, so "no Short of the same
+    type as one of the last 2 posted" never saw a heat-icons Short after a heat-icons Short. The category stays; the picker
+    takes the other type; a proof moment marked posted is written down as its topic"""
+    rec = made_up()
+    m = {"id": "A", "video": rec["stem"], "path": rec["path"], "start_s": 100.0, "end_s": 130.0, "span": [0.0, 600.0],
+         "session_s": 115.0, "score": 9.0, "terms": {"star_rise": 4.0, "police": 0.5, "topic": 1.5, "hud6": 1.0},
+         "category": "topic: heat-icons", "topic": {"id": "heat-icons", "why": "x", "at_s": 115.0, "facts": []},
+         "verified": {"police": [[100.0, 130.0]]}}
+    other = dict(m, id="B", category="star rise", score=2.0, terms={"star_rise": 2.5, "police": 0.5}, start_s=400.0, end_s=420.0,
+                 verified={"police": [[400.0, 420.0]]})
+    other.pop("topic")
+    for x in (m, other):
+        launch.verify_terms(rec, x)
+    posted = [{"name": "cops forget you", "type": "heat-icons", "posted": "2026-11-23", "rules": [{"words": ["zzz"]}]}]
+    stars = [{"name": "stars", "type": "star rise", "posted": "2026-11-23", "rules": [{"words": ["zzz"]}]}]
+    picks = [launch.pick_varied([dict(m, score=9.0), dict(other)], 1, p, lambda x: "", quiet)[0]["id"] for p in ([], posted, stars)]
+    wanted = launch.moment_type({"topic": {"id": "wanted-system"}, "terms": {"star_rise": 4.0}, "category": "topic: wanted-system"})
+    bank_m = {"label": {"kind": "star rise", "sure": True}, "kinds": ["heat icons", "star rise"], "shelf": "proof", "questions": [],
+              "category": "star rise", "terms": {"star_rise": 4.0}}
+    return (m["category"] == "topic: heat-icons" and launch.moment_type(m) == "heat-icons" and other["category"] == "star rise"
+            and picks == ["A", "B", "A"] and wanted == "star rise" and bank.type_of_moment(bank_m) == "heat-icons"
+            and bank.type_of_moment(dict(bank_m, shelf="action")) == "star rise"), (m["category"], picks)
+
+
+@check
+def rejecting_a_moment_keeps_every_earlier_rejection():
+    """B10: mark_rejected threw out an earlier rejection that had the same id, though it was another recording's or, after a
+    rebuild, another moment's: that footage was offered again. Both stay; the same moment rejected twice is one entry"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        b = build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        m = next(x for x in b["moments"] if x["main"] == "crash")
+        old = [{"id": m["id"], "spans": [["rec_other", 10.0, 20.0]], "on": "2026-11-20", "label": "crash"},
+               {"id": m["id"], "spans": [[m["video"], 500.0, 510.0]], "on": "2026-11-21", "label": "crash"}]
+        (shorts / footage_short.USED_FOOTAGE).write_text(json.dumps({"shorts": [], "rejected": old}), encoding="utf-8")
+        for why in ("dull", "still dull"):
+            bank.mark_rejected(m["id"], why, shorts, bdir, quiet)
+        rows = footage_short.load_used(shorts)["rejected"]
+        locked = launch.all_used_spans(shorts)
+    return (rows[:2] == old and len(rows) == 3 and rows[2]["why"] == "still dull" and ("rec_other", 10.0, 20.0) in locked
+            and (m["video"], m["start_s"], m["end_s"]) in locked), rows
+
+
+@check
+def ids_are_unique_and_stay_with_their_moment_on_a_rebuild():
+    """B10: an id is the second a moment starts, so a rebuild whose moment starts a little earlier gave it another id (its
+    rendered Short was lost to it), a new moment could take an old one's id, and two recordings of the same second shared
+    theirs. Rebuilt, a moment keeps the id of the old one on its seconds; every id in the bank is one of a kind"""
+    stems = ("GTA_20261119120000", "PS5_20261119120000")
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {s: crash_at(102, 300) for s in stems}, used={"shorts": []})
+        ai = StandIn("Player's car crashes into a wall", only=CRASHES, crash=True)
+        first = build(lib, shorts, bdir, ai)
+        ids = [m["id"] for m in first["moments"]]
+        m = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] > 200)
+        other = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] < 200)
+        # the last build saw it start 1.4 s earlier, under another id; the other crash's id was a moment's that is gone
+        saved = bank.read_bank(bdir)
+        for x in saved["moments"]:
+            if x["id"] == m["id"]:
+                x.update(id="1119-120000-was", start_s=x["start_s"] - 1.4)
+            elif x["id"] == other["id"]:
+                x.update(family="gone", start_s=550.0, end_s=560.0)
+        index.write_json(bdir / bank.BANK_FILE, saved)
+        second = build(lib, shorts, bdir, ai)
+        now, new = (next(x for x in second["moments"] if x["video"] == stems[0] and x["start_s"] == y["start_s"] and x["main"] == "crash")
+                    for y in (m, other))
+        ids2 = [x["id"] for x in second["moments"]]
+        third = build(lib, shorts, bdir, ai)
+    return (len(set(ids)) == len(ids) and len(set(ids2)) == len(ids2) and now["id"] == "1119-120000-was" and m["id"] not in ids2
+            and new["id"].startswith(other["id"]) and other["id"] not in ids2
+            and [x["id"] for x in third["moments"]] == ids2), (now["id"], new["id"], m["id"] in ids2)
+
+
+@check
+def a_rendered_short_belongs_to_the_moment_it_shows():
+    """B10: a Short's bank_id was trusted on its own, so after a rebuild that gave the id to another moment, marking that
+    moment posted locked the wrong footage. A Short counts for a moment only when it shows some of its seconds"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        m = next(x for x in build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))["moments"]
+                 if x["main"] == "crash")
+        for run, span in (("launch-a", [["GTA_20261119120000", 20.0, 35.0]]), ("launch-b", [["GTA_20261119120000", 296.0, 312.0]])):
+            (shorts / run).mkdir()
+            (shorts / run / "render.json").write_text(json.dumps({"shorts": [
+                {"short": 1, "status": "READY", "bank_id": m["id"], "folder": str(shorts / run / "1-x"), "title": "x", "shown": span}]}),
+                encoding="utf-8")
+        got = [name for name, _, _ in bank.shorts_of(shorts, m)]
+    return got == ["1-x@launch-b"], got
+
+
+@check
+def a_crash_nobody_measured_the_sound_of_is_unsure():
+    """B11: with no loudness (an empty list, or all zeros: clip.py never ran on it) the loudness check was skipped, so a tick
+    and a line were a sure crash. Not measured is not heard: unsure, and it says so; an explosion the same"""
+    say = [look(302.0, 306.0, "A car crashes on highway, then an explosion.", crash=True, explosion=True)]
+    out = []
+    for loud in ([], [0.0] * 1200):
+        rec = made_up(lines={300.0: ("Red car crashes, then an explosion", "driving")}, loud={303.0: 3.0})
+        m = one(rec, 301)
+        rec["raw"]["loud"] = list(loud)
+        out.append(bank.label_of(m, rec, say))
+    rec = made_up(lines={300.0: ("Red car crashes, then an explosion", "driving")}, loud={303.0: 3.0})
+    heard = bank.label_of(one(rec, 301), rec, say)
+    return (all(x["kind"] == "unsure" and "sound" in x["why"] and "measured" in x["why"] for x in out)
+            and heard["kind"] == "crash" and heard["sure"]), [(x["kind"], x["why"]) for x in out + [heard]]
+
+
+@check
+def a_quiet_crash_does_not_hide_what_else_the_peak_shows():
+    """B11: a crash nothing loud is heard of was "unsure" at once, before the jump, the fall, the shooting or the HUD change
+    at the same peak was looked at. Those are the label where they hold; with nothing else there it stays unsure, with why"""
+    def label(note, line, counts=None, **yes):
+        rec = made_up(lines={300.0: (line, "driving")}, loud={303.0: 1.2}, counts=counts)
+        return bank.label_of(one(rec, 301), rec, [look(302.0, 306.0, note, crash=True, **yes)])
+    quiet_ = label("A car crashes", "Player's car crashes")
+    jump = label("A car crashes after a jump off a ramp", "Car jumps off a ramp and crashes", stunt=True)
+    fall = label("A man falls as a car crashes", "A car crashes and a man falls")
+    shots = label("A car crashes, man shooting", "Car crashes while shooting", shooting=True)
+    stars = label("A car crashes", "Player's car crashes", counts=[0] * 606 + [2] * 60 + [0] * 534)
+    kinds = [x["kind"] for x in (quiet_, jump, fall, shots, stars)]
+    return (kinds == ["unsure", "stunt", "fall", "shooting", "star rise"] and "loud" in quiet_["why"]
+            and all(x["sure"] for x in (jump, fall, shots, stars))), kinds
+
+
+@check
+def a_crash_that_is_only_ticked_names_nothing_else():
+    """B11: a crash the look ticks but no line says fell through to softer labels: "someone reacts", "police chase", "first
+    look" or "driving", sure. It is unsure: nobody knows what that peak shows; a HUD change there is still the HUD's"""
+    def label(line, note, t=301, segs=None, counts=None, kinds=None, main=None):
+        rec = made_up(lines={300.0: (line, "driving")}, loud={303.0: 2.5}, segs=segs, counts=counts)
+        ms = bank.mine_all(rec)[0]
+        m = next(x for x in ms if x["start_s"] <= 303 <= x["end_s"] and (kinds is None or x["family"] in kinds))
+        m["peak_s"] = 303.0
+        return bank.label_of(m, rec, [look(302.0, 306.0, note, crash=True)])
+    reaction = label("A man argues with the player", "A man argues with the player", kinds=("reaction",))
+    chase = label("Player drives fast", "Player drives fast in traffic", segs=[seg(0, 290, "driving"), seg(290, 320, "chase", stars=2),
+                                                                                seg(320, 600, "driving")], counts=[2] * 1200)
+    calm = label("Player drives down a street", "Player drives a car down a street", kinds=("calm",))
+    hud = label("Player drives", "Player drives a car", counts=[0] * 606 + [2] * 60 + [0] * 534)
+    return ([x["kind"] for x in (reaction, chase, calm)] == ["unsure"] * 3 and all("ticks a crash" in x["why"] for x in (reaction, chase, calm))
+            and hud["kind"] == "star rise"), [x["kind"] for x in (reaction, chase, calm, hud)]
+
+
+@check
+def an_empty_build_never_replaces_a_full_bank():
+    """B12: with every recording of the library gone (a drive not plugged in), prepare built a bank of nothing and wrote it
+    over the real one. It stops with a plain error and content_bank.json and bank.html keep every byte; a first, empty bank
+    may be written"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        before = [(bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)]
+        (tmp / "GTA_20261119120000.webm").unlink()
+        inp = tmp / "input"
+        inp.mkdir()
+        keep, launch.POSTED_FILE = launch.POSTED_FILE, tmp / "none.json"
+        try:
+            stopped = stops(lambda: launch.prepare("gta6", day="2026-11-24", bank_dir=bdir, input_dir=inp, shorts_dir=shorts,
+                                                   library_dir=lib, log=quiet, check=False, sheets=False, safety=None,
+                                                   posted_file=tmp / "none.json"), "moments")
+        finally:
+            launch.POSTED_FILE = keep
+        same = [(bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)] == before
+        fresh = bank.build(lib, shorts, tmp / "new", None, {"topics": []}, hud6=lambda *a, **k: [], log=quiet)
+    return stopped and same and fresh["moments"] == [], (stopped, same)
 
 
 def main():
