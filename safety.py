@@ -13,8 +13,9 @@
    sound is NOT checked: there is no speech-to-text here, and every Short says so.
    Anywhere in the footage (the owner, Nov 21): a child together with guns, shooting, a body or blood, or a body
    together with blood, drops that type (never_shown).
-3. Footage an earlier Short showed (_used_footage.json, pinned footage too) is never used: launch.mine() leaves it
-   out and check_moment() checks again.
+3. Footage a posted Short showed, or the owner rejected (_used_footage.json), is never used: the content bank doesn't
+   offer it (bank.candidates), launch.mine() leaves it out, and render_v4 refuses it. Footage a Short was only rendered
+   from is free (PR 32).
 4. Audio true peak below -1.0 dBTP on every render: guard_true_peak() measures with ffmpeg's EBU R128 meter
    (ebur128=peak=true), and when the peak is higher, re-encodes only the audio through a true-peak limiter and
    measures again, lower each time, and fails if it never gets there.

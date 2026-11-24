@@ -85,7 +85,7 @@ GROUP_MAX_S = 20.0                       # ...up to this long; a longer chase is
 LOUD_ACT = 3.0                           # clip.py's action score at a peak that stands out on its own
 SOUND_STANDS_OUT = 0.5                   # the loudest half second counts as a peak when its z-score reaches this
 HEARD = 2.0                              # a crash or an explosion is loud: its peak's loudness z-score is this or more (Nov
-                                         # 24, looked at by hand: the 10 real crashes 2.0-3.5, 3 wrong ones 0.1-1.8)
+                                         # 24, looked at by hand: the 9 real crashes 2.0-3.5, 4 wrong ones 0.1-1.8)
 PEAK_ROOM_S = 1.0                        # the peak is looked for in the main event's own seconds, this much wider (the
                                          # small kinds: exactly in them)
 HUD_ROOM_S = 3.0                         # ...and this far from a HUD change

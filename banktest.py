@@ -324,8 +324,8 @@ def when_looks_disagree_the_ones_with_most_frames_count():
 
 @check
 def a_crash_must_be_heard_and_a_wreck_is_not_one():
-    """the three wrong crashes of the first real build (looked at by hand): a truck that turns round (tick and line, but
-    loudness 1.8), a drift (1.1) and burnt cars after a fight ("wreckage", 0.1) are unsure and no impact; the same tick and
+    """wrong crashes of the first real build (looked at by hand): a truck that turns round (tick and line, but loudness
+    1.8), a drift (1.1) and burnt cars after a fight ("wreckage", 0.1) are unsure and no impact; the same tick and
     line with a real crash's sound (2.0) is a crash; where no sound was measured the sound can't speak against it"""
     look_ = [look(302.0, 306.0, "Red Mustang drives and crashes on highway.", crash=True)]
     lines = {300.0: ("Red sports car stuck on road after crash with barrier", "driving")}

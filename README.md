@@ -1002,7 +1002,7 @@ Shorts instead, take that exception out of `pick_varied`'s `blocked()`.
 
 ```powershell
 .\.venv\Scripts\python.exe launch.py repick --run "C:\AI\gta\shorts\launch-2026-11-20"   # old picks vs new picks
-.\.venv\Scripts\python.exe varietytest.py                                                 # 13 checks, 1 s
+.\.venv\Scripts\python.exe varietytest.py                                                 # 14 checks, 1 s
 ```
 
 ## The first seconds (PR 30, Nov 22)
@@ -1052,6 +1052,73 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
   - The report counts the captions shown, over a shot, and tested against their frame. None tested is a flag (M24:
     "none of the 23 words ... OVERPASS names a thing the frame question has no field for"), and the review page shows it.
 
+## Content bank (PR 32, Nov 24)
+
+Until now a night's footage was looked at once. The miner kept about 3 windows of 15 s or more per 10 minutes, with four
+kinds of event, and a READY render marked its footage as used even when I never posted it. The bank keeps **every usable
+moment of every GTA 6 recording**, and footage is locked only when I post it.
+
+```powershell
+.\.venv\Scripts\python.exe bank.py build        # index what is new (the Ollama app must be open), mine, label, write the bank
+.\.venv\Scripts\python.exe bank.py posted 1121-164843-0312 --name "can you swim to the island" --words swim island
+.\.venv\Scripts\python.exe bank.py posted "C:\AI\gta\shorts\launch-2026-11-24\1-my-short"     # or a finished Short's folder
+.\.venv\Scripts\python.exe bank.py rejected 1121-164843-0312 --why "too dark"
+.\.venv\Scripts\python.exe bank.py page         # write bank.html again with today's statuses
+.\.venv\Scripts\python.exe banktest.py          # 32 checks, 7 s
+```
+
+It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`, and `raw\<recording>.json` (below).
+
+- **Indexing** is `/launch prepare`'s own (`launch.index_recording`): only recordings with no index, the HUD checked
+  against the model, NO-HUD where it can't be trusted.
+- **Raw data.** The model's answers were never thrown away: `index.json` has one per 6 s sheet, the library's `_cache` the
+  raw replies and every safety answer. What was thrown away is kept now in `raw`: clip.py's loudness and picture
+  change per half second, and the GTA 6 HUD twice a second. Mining again asks the model nothing.
+- **Mining** (`bank.mine_all`). Events with their own seconds, from what the saved data shows: a crash, explosion, jump or
+  fall; the wanted stars going up or all going; the heat icons or the stars' look changing; a chase, a shootout, a loud
+  peak; people reacting or fighting; an animal or a find; a mechanic the HUD shows ("crime reported", "fuel low", a
+  workout ...); the first boat, flight, swim, chase and beach. Neighbours become one moment: 10-30 s for an action or
+  proof moment, 4-10 s for a list item. What is left of the clean footage is cut into the miner's own windows
+  (`launch.score_window`, unchanged), all of them; the calm ones are folded away at the bottom of the page. **Not
+  detectable, so not invented:** a character switch, a robbery that works, a laugh.
+- **The label comes from the peak** (`bank.label_of`): the loudest second round the main event (the picture's biggest
+  change where no sound stands out). Its frames, from 0.75 s before it to 2 s after it, are looked at by the safety
+  question (`safety_v3`, unchanged): a saved answer where there is one, else one new look. A crash, explosion, jump or
+  shooting needs the question's tick **and** a line that says it; a fall, a reaction, a find or a mechanic needs two
+  separate looks to say it (the safety note and the index's line); stars and icons are read by code. Otherwise the label is
+  **unsure**, and an impact it names counts for nothing. M24 (_135610, 469-489 s) was a "crash" because a car hit the
+  parked pickup at 472.5 s; its peak is the landing at 476.5 s: now "jump or fall (stunt)".
+- **Shelves.** `action` (an impact its peak shows, a shootout, a chase), `proof` (it answers an experiment or a shot-list
+  question with something on screen: `bank.NEEDS`), `list` (one short fact for a "5 things" Short; not rendered yet).
+- **Statuses** come from `_used_footage.json`'s spans: `new`; `rendered` (a Short was made, not posted: still offered,
+  ranked after new ones of the same payoff); `posted` (locked); `rejected` (never offered). An entry with no status is
+  locked. A READY render writes `rendered`. `bank.py posted` locks the footage and adds the topic to
+  `posted_topics.json`; both files are copied to `bank\backups` first.
+- **The migration** (`bank.py migrate`, done on Nov 24): 11 entries before, 11 after, every span, day and note kept. 8 are
+  posted, 3 were rendered and never posted (six wanted stars, the bridge jam, the witness) and are free.
+- **The picker reads the bank.** `/launch` offers the action and proof shelves' new and rendered moments of every
+  recording; the 2/3 payoff bar and the variety rules are the same. It works with no new recordings. After a candidate's
+  safety checks, an impact seen elsewhere in its footage no longer names it (`bank.keep_what_the_peak_shows`). A Short
+  may not grow into locked footage, and no two candidates show the same seconds. `launch.py repick --bank` picks an old
+  run's recordings this way. A dry run and `--videos` mine their own recordings as before.
+
+- **Nov 24, all my GTA 6 recordings** (23, 230 minutes; the six recordings with no index were the ones copied in on Nov 20
+  and 23: 60 minutes, 603 vision calls, 41 minutes): **419 moments, 132 of 230 minutes** (154 are clean footage); without
+  the 283 calm stretches 136 moments and 24 minutes. 34 action clips (14 unsure), 34 proofs (7 unsure), 351 list items (283 of
+  them calm stretches). 376 new, 4 rendered, 39 posted. Labelling took 344 new looks, once, 29 minutes; a rebuild now takes 16 s and
+  asks nothing. 28 moments may never be shown (a body with blood, a child near a gun, a cutscene, the phone).
+- **The labels, looked at by hand** (frames of every one). The first build had 13 crashes: 9 real (one only a scrape
+  through bushes), 4 not (a truck that turns round, a drift, burnt cars after a fight, a carjacking). Since then a crash
+  must also be heard, a wreck is not one, and most of the looks at the same seconds decide. All 11 action clips with a
+  payoff of 3/3 now show what they say: 9 crashes, M24's jump, and a wild boar that knocks the player over.
+- **Re-pick of the last real run** (launch-2026-11-20-part2), the old miner and then the bank:
+  - as of that night: the motorbike crash, and nothing else (its next crash was M27, M24's footage under "truck crash");
+    the bank: the motorbike crash **and the boar attack** (its next crash is a real one, 7:31);
+  - today: one narrated Short whose 35 s are a drive with the crash in the last 4 (_135610, 7:00-7:35); the bank: **that
+    crash with 14 s before it and 5 after (7:17-7:37), and the boar attack**.
+- **What /launch would pick from the whole bank today:** the motorbike crash that throws both riders (_164843, 28:42-29:13, new
+  footage), the truck crash (_135610, 7:17-7:37) and the boar attack (_143644, 6:52-7:12).
+
 ## Tests (PR 31, Nov 23)
 
 ```powershell
@@ -1064,9 +1131,10 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 | | checks | time |
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
-| `--full` | 536 | 8.2 min |
-| `--quick` | 460 | 1.7 min |
-| `--ci`, on GitHub's Windows machine | 446 | 1.6-2.6 min |
+| PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
+| now (PR 32): `--full` | 572 | 7.9 min |
+| now: `--quick` | 496 | 1.7 min |
+| now: `--ci`, on GitHub's Windows machine | 481 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1082,18 +1150,24 @@ decided in the first 2-3 s. The flop's hook "This GTA 6 motorbike ride ends BADL
 | selftest | `.venv` | 3 | - | - | 33 s | 14 s |
 | hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
 | indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
-| varietytest, vlmtest, spreadtest, evaltest | `.venv` | 86 | 86 | 86 | 2 s | 2 s |
-| runnertest (new) | `.venv` | 7 | 7 | 7 | - | 0.4 s |
+| varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
+| runnertest | `.venv` | 10 | 10 | 10 | - | 0.5 s |
+| banktest (PR 32) | `.venv` | 32 | 32 | 31 | - | 8 s |
 
-Every check before PR 31 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
+Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
 
 - **Why it was slow: ffmpeg's start.** The suites start ffmpeg about 2300 times. On this laptop the installed ffmpeg.exe
-  takes 1.9 s to start, even for `ffmpeg -version`, most likely because the virus scanner reads its 211 MB again every
-  time; a byte-identical copy takes 0.03 s from its second start on. That was 91 % of the 75 minutes. The runner
-  therefore keeps a copy in `C:\AI\gta\test\_cache` and puts it first on the suites' own PATH (`--installed-ffmpeg`
-  doesn't). Nothing else uses it: a real render still pays about 2 s per ffmpeg call, 2 minutes a Short, until the
-  installed file starts fast again.
+  takes 1.9 s to start, even for `ffmpeg -version`. It is the real program (no shortcut or shim), Windows holds the new
+  process for 1.88 s before ffmpeg runs, and its own work is 0.08 s; a byte-identical copy takes 0.03 s, and ffprobe.exe in
+  the same folder 0.02 s. So something looks through that one file at every start (the virus scanner, most likely). That
+  was 91 % of the 75 minutes.
+- **One fast ffmpeg for production and the tests (PR 32, `fastff.py`).** Both use the same copy in `C:\AI\tools\ffmpeg`,
+  checked by its SHA-256 at every start of a program, first on that program's own PATH: the commands are the same, only
+  which ffmpeg.exe answers differs. The runner makes the copy when it is missing or the installed file changed
+  (`fastff.py --make` does it by hand); production never makes one. A missing copy or a wrong hash falls back to the
+  installed ffmpeg with a warning. `--installed-ffmpeg` runs the suites without it. M24, the same Short rendered twice on
+  Nov 24 (no vision calls in either): **206 s before, 72 s after**, and the picture is byte-identical.
 - **Renders are shared, not repeated.** editortest's three checks that look at a plain v4 Short look at the same one.
 - **The production defaults are pinned.** `editortest.v4_runs_the_same_commands_as_before_the_speed_work` compares all 172
   ffmpeg and ffprobe commands that engine v4 runs for the fixture, plain and with its replay, with the ones main ran
