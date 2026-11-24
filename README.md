@@ -937,7 +937,7 @@ puts the voice into it:
 ```powershell
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>"                 # engine v4
 .\.venv-tts\Scripts\python.exe launch.py render --run "<run folder>" --engine v3     # the old way, to compare
-.\.venv-tts\Scripts\python.exe editortest.py                                          # 52 checks, 1.6 min
+.\.venv-tts\Scripts\python.exe editortest.py                                          # 54 checks, 1.6 min
 ```
 
 ## Picker variety and one replay (PR 29, Nov 20)
@@ -1123,6 +1123,19 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 - **What /launch would pick from the whole bank today:** the motorbike crash that throws both riders (_164843, 28:42-29:13, new
   footage), the truck crash (_135610, 7:17-7:37) and the boar attack (_143644, 6:52-7:12).
 
+## No double text under the open card (PR 33, Nov 24)
+
+"Can you SURVIVE this GTA 6 overpass jump?" showed "...OVERPASS?" on the open card and in the caption at the same time
+(0:01). While the open card is up (2 s), a word the card already shows now gets no caption (`assemble.on_card`); every other
+word keeps its own. "Can anyone survive crashing this bike?" under SURVIVE CRASHING THIS BIKE? captions CAN ANYONE. The
+caption check (`launch.caption_coverage`) reads the card from the finished captions.ass and holds both ways: such a word
+must have no caption, any other word without one still fails the Short. The report and the review page count them
+(`on_card`). Only captions.ass changes: the ffmpeg commands are the ones pinned in `testdata/v4_commands.json`.
+
+**Whisper on the first 2 s** (a check by hand so far): am_puck's "Can you ..." is heard as "And you ...", and "Could you
+survive ..." as "You survived ...". "Can anyone ..." is heard as it is said. What else was looked at by hand, the duplicate
+check and the jet ski: `docs/short-nov24-notes.md`.
+
 ## Tests (PR 31, Nov 23)
 
 ```powershell
@@ -1136,15 +1149,15 @@ It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 32): `--full` | 574 | 7.9 min |
-| now: `--quick` | 498 | 1.8 min |
-| now: `--ci`, on GitHub's Windows machine | 483 | about 2 min |
+| now (PR 33): `--full` | 576 | 7.9 min |
+| now: `--quick` | 500 | 1.8 min |
+| now: `--ci`, on GitHub's Windows machine | 485 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
 | explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 164 s |
 | hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 70 s |
-| editortest | `.venv-tts` | 52 | 45 | 45 | 715 s | 94 s |
+| editortest | `.venv-tts` | 54 | 47 | 47 | 715 s | 94 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
 | launchtest | `.venv-tts` | 48 | 47 | 47 | 196 s | 28 s |
