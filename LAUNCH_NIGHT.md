@@ -85,8 +85,10 @@ action clips get a short voice too. A pick that can only be a plain clip is left
 it is done it prints the review page: `C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).
 
 **Every night after launch:** copy the new recordings to `C:\AI\gta\input` and type `/launch` again. Only the new
-recordings are indexed (the old ones stay in the library), and footage a Short already showed, the posted ones
-included, is never picked again (`C:\AI\gta\shorts\_used_footage.json`).
+recordings are indexed (the old ones stay in the library), and the picks come from the **content bank**: every moment of
+every recording (`C:\AI\gta\bank\bank.html`), so it works with no new recordings too. Footage of a Short you **posted**
+is never picked again; footage of one you only rendered may come back, after the new ones. So **after posting a Short, run
+the line under "Posted it?"** on the review page.
 
 The index stays at one sheet every 6 s. One every 12 s was measured on Nov 17: about 40 % faster, but it found
 only 3 of the 5 answer-key moments of test1 (6 s: 5 of 5), so it is not used.

@@ -15,11 +15,12 @@ prepare, stopping only when nothing at all can be done:
   4. checks the HUD against the model per recording (hud_check). A recording whose HUD reading can't be trusted is
      indexed again with profiles/<game>_nohud.json (a profile that matches no HUD on purpose): its labels then come
      from the model alone and it has no wanted-star counts. The model's answers are cached, so that costs one decode.
-  5. mines moments (mine): every 30 s window of clean footage gets points for action, star rises, wanted stars, what
-     the player is doing, crashes, explosions and stunts the model saw, police and the model's confidence. The best
-     windows that don't overlap become moments.
-  6. picks 3 (pick_three): the best moment in each third of the session, a moment that fails the safety checks or
-     shows footage an earlier Short showed never counts, a category already picked costs a point.
+  5. brings the content bank up to date (bank.py, PR 32): every moment of every recording, labelled from its peak. Only
+     moments that are new, or rendered and not posted, may be picked. (A dry run, or --videos, mines the recordings
+     themselves instead: mine, every 30 s window of clean footage with points for action, star rises, wanted stars,
+     what the player is doing, crashes, explosions and stunts the model saw, police and the model's confidence.)
+  6. picks 3 (pick_varied): the clearest payoff first, then points; a moment that fails the safety checks or shows
+     posted or rejected footage never counts, a category already picked costs a point.
   7. decides each one's type (choose_types): ACTION CLIP or NARRATED, and writes candidates.json with every piece of
      evidence (E1, E2 ...) that the narration and hooks may point to, and a sheet of frames per moment.
 Then Claude writes shorts.json (hooks, script) and runs render (see .claude/commands/launch.md).
@@ -166,7 +167,8 @@ def find_recordings(input_dir, library_dir, runs, explicit=None):
         if missing:
             raise LaunchError("not found: " + ", ".join(missing))
     else:
-        unfinished = [r for r in runs["runs"] if r.get("status") == "preparing"]
+        # (a run that only read the content bank has no recordings to carry on with)
+        unfinished = [r for r in runs["runs"] if r.get("status") == "preparing" and r.get("recordings")]
         if unfinished:
             videos = [Path(p) for p in unfinished[-1]["recordings"] if Path(p).is_file()]
         else:
@@ -931,7 +933,8 @@ def pick_varied(passed, count, posted=(), text_of=None, log=print):
         return m["score"] - m["repeat_cost"] - CATEGORY_COST * sum(1 for p in picked if p["category"] == m["category"])
 
     def key(m, picked):
-        return (m["payoff_strength"]["tier"], round(value(m, picked), 3), -m["session_s"])
+        # a moment a Short was already rendered from (and not posted) ranks after a new one of the same payoff
+        return (m["payoff_strength"]["tier"], m.get("status") != "rendered", round(value(m, picked), 3), -m["session_s"])
 
     def held_back(m, picked, cap):
         for p in picked:
@@ -1193,11 +1196,13 @@ def distinct_items(items):
 
 
 def anchor(rec, m):
-    """The moment's main instant: a topic candidate's match (launch-fixes), else a star rise, else a
-    crash/explosion/stunt sheet's middle, else its best action."""
+    """The moment's main instant: a topic candidate's match (launch-fixes), else the peak the content bank found, else a
+    star rise, else a crash/explosion/stunt sheet's middle, else its best action."""
     a, b = m["start_s"], m["end_s"]
     if m.get("topic") and a <= m["topic"]["at_s"] <= b:
         return m["topic"]["at_s"]
+    if m.get("peak_s") is not None and a <= m["peak_s"] <= b:
+        return m["peak_s"]
     rises = [r["change_s"] for r in rec["rises"] if a <= r["change_s"] <= b]
     if rises:
         return rises[0]
@@ -1555,6 +1560,32 @@ def hud_status(choice, modes, checks, hud_log):
                                  for stem in nohud}}
 
 
+def index_recording(v, choice, game, every, lib_dir, cache_dir, do_index, log=print, hlog=print):
+    """One recording indexed with the chosen profile (choose_profile), its HUD reading checked against the model
+    (hud_check); one whose HUD can't be trusted is indexed again with the NO-HUD profile. Returns (index, "hud" or
+    "nohud", the HUD check or None). Shared by prepare and the content bank (bank.py)."""
+    idx = do_index(v, profile=choice["profile"], every=every, library=lib_dir, cache_dir=cache_dir,
+                   log=lambda m: log("  " + m))
+    idx["_dir"] = str(Path(lib_dir) / v.stem)
+    mode, checked = choice["mode"], None
+    if mode == "hud":
+        try:
+            tl = library.timeline_of(idx)
+            ok, reasons, numbers = hud_check(idx, tl)
+        except library.LibraryError as e:
+            ok, reasons, numbers = False, [str(e)], {}
+        checked = {"ok": ok, "reasons": reasons, "numbers": numbers}
+        hlog(f"  {v.name}: HUD check {'passed' if ok else 'FAILED'} {numbers}"
+             + (f": {'; '.join(reasons)}" if reasons else ""))
+        if not ok:
+            hlog(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
+            mode = "nohud"
+            idx = do_index(v, profile=f"{game}_nohud", every=every, library=lib_dir, cache_dir=cache_dir,
+                           log=lambda m: log("  " + m))
+            idx["_dir"] = str(Path(lib_dir) / v.stem)
+    return idx, mode, checked
+
+
 # --- The whole prepare stage ---
 
 def preflight(model, log=print):
@@ -1605,15 +1636,19 @@ def failed_before(m, failed):
 
 
 def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_run, topics=True, log=print,
-              hud6=None, failed=()):
+              hud6=None, failed=(), moments=None):
     """prepare's step 5, shared with repick: mine every recording's moments and the topic candidates (leaving out
     used footage), check a pool of them (safety, labels against the frames, the quality gate) and pick `count`
     (pick_varied), then give each pick its type and the GTA 6 HUD's close look. Returns (moments, picks, rejected,
     pool). safety: a callable (m, rec, folder) -> (passes, why), or None to skip it. hud6: the GTA 6 HUD reader
     (proof.hud6 by default; tests pass a stand-in). failed: failed_renders(); a moment that mostly repeats one is left
-    out before the pool, with why."""
-    moments = [m for rec in recs.values() for m in mine(rec, used)]
-    moments += topic_candidates(recs, used, hud6=hud6, log=log) if topics else []
+    out before the pool, with why. moments: the content bank's candidates (bank.candidates, PR 32) instead of mining
+    here: only new and rendered ones, labelled from their peaks."""
+    if moments is None:
+        moments = [m for rec in recs.values() for m in mine(rec, used)]
+        moments += topic_candidates(recs, used, hud6=hud6, log=log) if topics else []
+    else:
+        moments = list(moments)
     moments.sort(key=lambda m: -m["score"])
     for k, m in enumerate(moments, 1):
         m["id"] = f"M{k}"
@@ -1651,6 +1686,9 @@ def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_r
         passes, why = safe(m)
         if not passes:
             return passes, why
+        if m.get("bank_id"):                    # an impact counts only where the moment's peak shows it
+            import bank
+            bank.keep_what_the_peak_shows(m)
         verify_terms(recs[m["video"]], m)
         return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
     log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)"
@@ -1670,10 +1708,14 @@ def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_r
 def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run=False, input_dir=INPUT, count=3,
             topics=True,
             shorts_dir=SHORTS_DIR, library_dir=index.LIBRARY, day=None, slots=None, safety="auto", log=print,
-            index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True, posted_file=POSTED_FILE):
+            index_video=None, guided_run=None, clip_runner=None, check=True, sheets=True, posted_file=POSTED_FILE,
+            bank_dir=None, hud6=None):
     """The prepare stage; returns the run folder (with candidates.json). safety "auto" asks the safety question
     through Ollama (safety.Checker), None skips it. index_video, guided_run, clip_runner and safety are swapped for
-    stand-ins by the tests; check=False skips the Ollama/memory pre-flight."""
+    stand-ins by the tests; check=False skips the Ollama/memory pre-flight. bank_dir (PR 32): the picks come from the
+    content bank there, brought up to date with the new recordings: every recording's moments, new and rendered ones
+    (never posted or rejected ones); no new recording is no reason to stop then. Without it (a dry run) the new
+    recordings alone are mined, as before."""
     t_start = time.perf_counter()
     timing = {}
     if game not in GAMES:
@@ -1696,10 +1738,13 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     recordings = [v for v in recordings if durations[v.stem] >= MIN_RECORDING_S]
     for name, why in skipped.items():
         log(f"  Skipped {name}: {why}")
-    if not recordings:
+    use_bank = bank_dir is not None and not dry_run
+    if not recordings and not (use_bank and load_indexed(library_dir)):
         raise LaunchError(f"no new recordings in {input_dir}. Copy the PS5 files there first (every file already "
                           "in the library or taken by an earlier /launch run is skipped, and so is one under "
                           f"{MIN_RECORDING_S:g} s)")
+    if not recordings:
+        log("No new recordings: the picks come from the content bank (every recording so far)")
     folder = run_folder(shorts_dir, day, runs, dry_run)
     resumed = not dry_run and any(Path(r["folder"]) == folder and r.get("status") == "preparing" for r in runs["runs"])
     folder.mkdir(parents=True, exist_ok=True)
@@ -1732,7 +1777,9 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
         with open(hud_log, "a", encoding="utf-8") as fh:
             fh.write(m + "\n")
     hlog(f"--- {datetime.now():%Y-%m-%d %H:%M:%S}: HUD for {len(recordings)} recording(s), profile {profile} ---")
-    choice = choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], hlog, guided_run)
+    choice = (choose_profile(profile, game, recordings, durations, slots or GAMES[game]["slots"], hlog, guided_run)
+              if recordings else {"profile": profile, "mode": "hud", "stars": True, "attempts": [],
+                                  "why": "no new recordings to read"})
     timing["calibration"] = round(time.perf_counter() - t, 1)
     hlog(f"Profile: {choice['profile']} ({'HUD rules on' if choice['mode'] == 'hud' else 'NO-HUD MODE'}): "
          f"{choice['why']}")
@@ -1748,26 +1795,10 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     try:
         for v in recordings:
             log(f"Indexing {v.name} with {choice['profile']}...")
-            idx = do_index(v, profile=choice["profile"], every=every, library=lib_dir, cache_dir=cache_dir,
-                           log=lambda m: log("  " + m))
-            idx["_dir"] = str(lib_dir / v.stem)
-            mode = choice["mode"]
-            if mode == "hud":
-                try:
-                    tl = library.timeline_of(idx)
-                    ok, reasons, numbers = hud_check(idx, tl)
-                except library.LibraryError as e:
-                    ok, reasons, numbers = False, [str(e)], {}
-                checks[v.stem] = {"ok": ok, "reasons": reasons, "numbers": numbers}
-                hlog(f"  {v.name}: HUD check {'passed' if ok else 'FAILED'} {numbers}"
-                     + (f": {'; '.join(reasons)}" if reasons else ""))
-                if not ok:
-                    hlog(f"  The HUD reading of {v.name} can't be trusted ({'; '.join(reasons)}): NO-HUD MODE for it.")
-                    mode = "nohud"
-                    idx = do_index(v, profile=f"{game}_nohud", every=every, library=lib_dir, cache_dir=cache_dir,
-                                   log=lambda m: log("  " + m))
-                    idx["_dir"] = str(lib_dir / v.stem)
-            indexes[v.stem], modes[v.stem] = idx, mode
+            indexes[v.stem], modes[v.stem], check_ = index_recording(v, choice, game, every, lib_dir, cache_dir, do_index,
+                                                                     log, hlog)
+            if check_ is not None:
+                checks[v.stem] = check_
         timing["index"] = round(time.perf_counter() - t, 1)
         t = time.perf_counter()
         clip_runs = {stem: job.result() for stem, job in clip_jobs.items()}
@@ -1784,15 +1815,31 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
     posted = load_posted(posted_file, log=log)
     recs, offset = {}, 0.0
-    for v in recordings:
+    for v in recordings if not use_bank else []:
         idx = indexes[v.stem]
         act = action_series(clip_runs.get(v.stem), math.ceil(idx["video"]["duration_s"] / STEP))
         recs[v.stem] = recording_data(v.stem, idx, act, modes[v.stem], offset)
         offset += idx["video"]["duration_s"]
     if safety == "auto":
         safety = safety_checks.Checker(GAMES[game]["name"], Path(library_dir) / "_cache", log=log)
-    moments, picks, rejected, pool = pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_run,
-                                               topics, log, failed=[] if dry_run else failed_renders(shorts_dir))
+    from_bank, session, banked = None, list(recordings), None
+    if use_bank:
+        import bank
+        recs = bank.load_recs(lib_dir, shorts_dir, bank_dir, hud6=hud6, log=log, game=game)
+        banked = bank.build(lib_dir, shorts_dir, bank_dir, safety if hasattr(safety, "look") else None, recs=recs, log=log)
+        from_bank = bank.candidates(banked["moments"], recs, bank.status_spans(shorts_dir))
+        session = [Path(r["path"]) for r in recs.values()]
+        log(f"Content bank: {len(from_bank)} of {len(banked['moments'])} moments may be picked (not posted or rejected)")
+    moments, picks, rejected, pool = pick_step(recs, session, used, posted, safety, folder, game, count, dry_run,
+                                               topics, log, hud6, [] if dry_run else failed_renders(shorts_dir), from_bank)
+    if use_bank:                                 # the run's recordings: the new ones, and those its picks come from
+        recordings = recordings + [v for v in session if v.stem in {m["video"] for m in picks}
+                                   and v.stem not in {r.stem for r in recordings}]
+        for v in recordings:
+            if v.stem not in indexes:
+                indexes[v.stem], modes[v.stem] = recs[v.stem]["idx"], recs[v.stem]["mode"]
+                durations[v.stem] = recs[v.stem]["duration_s"]
+                clip_runs[v.stem] = bank.newest_clip_run(v.stem, shorts_dir, bank_dir)
     timing["mine_and_safety"] = round(time.perf_counter() - t, 1)
     if isinstance(safety, safety_checks.Checker):
         timing["safety_model"] = round(safety.seconds, 1)
@@ -1800,6 +1847,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
             + (f", the model unloaded {safety.reloads} time(s) for memory" if safety.reloads else ""))
         safety_checks.vlm.unload(safety.model)
     if not picks:
+        if use_bank:                     # the recordings are in the bank now: the next run needn't carry this one on
+            note_run(shorts_dir, folder, recordings, "nothing picked", dry_run)
         raise LaunchError(f"no moment passed the checks with a payoff of {PAYOFF_BAR}/3 or more: nothing to make a "
                           "Short from (candidates.json's pool says why each was left out)")
     if sheets:
@@ -1823,7 +1872,7 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                             "profile": indexes[v.stem]["profile"]["name"], "hud_check": checks.get(v.stem),
                             "clip_run": str(clip_runs.get(v.stem)) if clip_runs.get(v.stem) else None}
                            for v in recordings],
-            "session_s": round(offset, 2), "skipped": skipped, "calibration": choice,
+            "session_s": round(offset or sum(r["duration_s"] for r in recs.values()), 2), "skipped": skipped, "calibration": choice,
             "hud": hud_status(choice, modes, checks, hud_log),
             "settings": {"every_s": every, "window_s": WINDOW_S, "library": str(lib_dir)},
             "moments_found": len(moments),
@@ -1831,8 +1880,9 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
                                                "terms")} for m in moments[:10]],
             "rejected": rejected,
             "count": count,
-            "pool": [{"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
-                      "score": m["score"], "category": m.get("category"), "terms": m.get("terms"),
+            "pool": [{"id": m.get("id"), "bank_id": m.get("bank_id"), "status": m.get("status"),
+                      "label": (m.get("label") or {}).get("name"), "video": m["video"], "start_s": m["start_s"],
+                      "end_s": m["end_s"], "score": m["score"], "category": m.get("category"), "terms": m.get("terms"),
                       "dropped_labels": m.get("dropped_labels", []), "checked": m.get("checked"),
                       "payoff_strength": m.get("payoff_strength"), "repeats": m.get("repeats", [])} for m in pool],
             "picks": [{k: v for k, v in m.items() if k not in ("options",)} | {
@@ -1848,6 +1898,11 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     return folder
 
 
+def load_indexed(library_dir):
+    """The recordings the library has an index of."""
+    return list((read_json(Path(library_dir) / "library.json") or {}).get("videos") or {})
+
+
 # --- repick (PR 29): the picking step again on an old run's cached data ---
 
 def used_as_of(shorts_dir, run_name):
@@ -1858,7 +1913,8 @@ def used_as_of(shorts_dir, run_name):
     for s in footage_short.load_used(shorts_dir)["shorts"]:
         if f"@{base}" in str(s.get("name", "")):
             break
-        out += [tuple(span) for span in s.get("spans", [])]
+        if footage_short.locked(s):
+            out += [tuple(span) for span in s.get("spans", [])]
     return out
 
 
@@ -1868,12 +1924,15 @@ def pick_line(m):
             f"(score {m['score']:.2f}, payoff {ps['tier'] if isinstance(ps, dict) else ps[0]}/3)")
 
 
-def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="auto", out=None, log=print, hud6=None):
+def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="auto", out=None, log=print, hud6=None,
+           bank_dir=None):
     """The picking step of `run` again, with today's rules, on its cached data: each recording's index.json from the
     library and its clip.py run (nothing is indexed again), the used footage and the posted topics as they were when
     the run was prepared (posted_now: today's topics and all the footage used since). The safety answers come from the model's cache where it has
     them. Writes repick.json and repick.txt (old picks against new ones) in `out` (default <run>-repick next to it);
-    the run folder, _used_footage.json and _launch_runs.json are left alone. Returns the data."""
+    the run folder, _used_footage.json and _launch_runs.json are left alone. bank_dir (PR 32): the candidates are the
+    content bank's moments of the run's recordings, labelled from their peaks (with the footage locked then). Returns the
+    data."""
     run = Path(run)
     cand = read_json(run / "candidates.json")
     if not cand:
@@ -1900,8 +1959,17 @@ def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="aut
     if safety == "auto":
         safety = safety_checks.Checker(GAMES[game]["name"], lib / "_cache", log=log)
     failed = failed_renders(shorts_dir)
+    from_bank = None
+    if bank_dir is not None:
+        import bank
+        stems = {r["stem"] for r in cand["recordings"]}
+        recs = bank.load_recs(lib, shorts_dir, bank_dir, stems, hud6, log, game)
+        found, _, _, _ = bank.make_moments(recs, safety if hasattr(safety, "look") else None, lib / "_cache", out / "peaks",
+                                           log=log)
+        spans = {"posted": [(*u, "") for u in used], "rendered": [], "rejected": []}
+        from_bank = bank.candidates(found, recs, bank.status_spans(shorts_dir) if posted_now else spans)
     _, picks, rejected, pool = pick_step(recs, recordings, used, posted, safety, out, game, count,
-                                         cand.get("dry_run", False), True, log, hud6, failed)
+                                         cand.get("dry_run", False), True, log, hud6, failed, from_bank)
     calls = {}
     if isinstance(safety, safety_checks.Checker):
         calls = {"model_calls": safety.calls, "cached": safety.cached, "seconds": round(safety.seconds, 1)}
@@ -1913,7 +1981,8 @@ def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="aut
             "old_picks": [{k: m.get(k) for k in ("id", "video", "start_s", "end_s", "score", "category", "type")}
                           for m in old],
             "new_picks": [{k: m.get(k) for k in ("id", "video", "start_s", "end_s", "score", "category", "type",
-                                                 "payoff_strength", "repeats", "pick_why", "window")} for m in picks],
+                                                 "payoff_strength", "repeats", "pick_why", "window", "bank_id",
+                                                 "label")} for m in picks],
             "pool": [{"id": m.get("id"), "video": m["video"], "start_s": m["start_s"], "score": m["score"],
                       "category": m.get("category"), "payoff_strength": m.get("payoff_strength"),
                       "repeats": m.get("repeats", []), "checked": m.get("checked")} for m in pool],
@@ -3315,6 +3384,8 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
     entry = {"short": n, "moment": m["id"], "type": m["type"], "status": "FAILED", "problems": [],
              "flags": list(m.get("flags", [])), "hooks": hooks_list, "star": star, "title": short.get("title"),
              "video": m["video"], "window": m["window"]}
+    if m.get("bank_id"):
+        entry["bank_id"] = m["bank_id"]
     out = short_folder(folder, n, short.get("title"))
     entry["folder"] = str(out)
     problems = []
@@ -3418,9 +3489,10 @@ def recs_stub(m):
     return {"sheets": seen, "every": (seen[1]["t"] - seen[0]["t"]) if len(seen) > 1 else index.EVERY_S}
 
 
-def commands(folder, n):
+def commands(folder, n, out=None):
     py = r".\.venv-tts\Scripts\python.exe launch.py render"
     return {"no_cold_open": f'{py} --run "{folder}" --short {n} --no-cold-open',
+            "posted": rf'.\.venv\Scripts\python.exe bank.py posted "{out}"' if out else None,
             "hook": [f'{py} --run "{folder}" --short {n} --hook {k}' for k in (1, 2, 3)]}
 
 
@@ -3460,20 +3532,21 @@ def render(folder=None, only=None, hook_choice=None, no_cold_open=False, shorts_
         log(f"Short {short.get('short')}: {short.get('title')}")
         try:
             mine_name = Path(short_folder(folder, short.get("short"), short.get("title"))).name + "@" + folder.name
-            used = [] if cand.get("dry_run") else [tuple(sp) for s2 in footage_short.load_used(shorts_dir)["shorts"]
-                                                   if s2.get("name") != mine_name for sp in s2.get("spans", [])]
+            used = [] if cand.get("dry_run") else used_by_others(shorts_dir, mine_name, folder.name)
             entry = render_one(short, cand, folder, facts, today, indexes, hook_choice if only else None,
                                no_cold_open and only is not None, log, checker, timing, narrated_render, action_render,
                                engine, synth, v2_render, v3_render, used, v4_parts=v4_parts)
         except RenderProblem as e:
             entry = {"short": short.get("short"), "status": "FAILED", "problems": [str(e)], "flags": []}
-        entry["commands"] = commands(folder, entry["short"])
+        entry["commands"] = commands(folder, entry["short"], entry.get("folder"))
         results[entry["short"]] = entry
         if entry["status"] == "READY":
             log(f"  READY: {entry['files']['short.mp4']}  ({entry['length_s']:.1f} s, true peak "
                 f"{entry['true_peak']['after']:+.1f} dBTP)")
             if not cand.get("dry_run"):
-                footage_short.save_used(shorts_dir, Path(entry["folder"]).name + "@" + folder.name, entry["shown"])
+                # made, not posted: free again, ranked lower; "bank.py posted" locks it once the owner has posted it
+                footage_short.save_used(shorts_dir, Path(entry["folder"]).name + "@" + folder.name, entry["shown"],
+                                        "rendered")
         else:
             log("  FAILED:\n    " + "\n    ".join(entry["problems"]))
     data = {"folder": str(folder), "rendered": datetime.now().isoformat(timespec="seconds"),
@@ -3539,6 +3612,14 @@ def evidence_picture(folder, e):
     if not out.exists():
         shutil.copyfile(src, out)
     return rel(folder, out)
+
+
+def posted_it(entry):
+    """The line to run once this Short is on YouTube (bank.py posted): only then is its footage locked."""
+    cmd = (entry.get("commands") or {}).get("posted")
+    return (f'<h3>Posted it?</h3><p class="meta">Run this once it is on YouTube. It locks the footage, so it never comes '
+            f'back, and adds its topic to your posted list. Until then the footage stays free.</p>'
+            f'<code class="cmd">{esc(cmd)}</code><button data-copy="{esc(cmd)}">Copy</button>') if cmd else ""
 
 
 def write_review(folder, cand, written, data):
@@ -3636,6 +3717,7 @@ def write_review(folder, cand, written, data):
    <h3>Hooks (&#11088; = on the Short)</h3><ul class="hooks">{hooks_html}</ul>
    {'<h3>Script and its evidence</h3><ol class="lines">' + ''.join(lines) + '</ol>' if lines else ''}
    {f'<h3>Upload text</h3><pre class="upload">{esc(upload)}</pre><button data-copy="{esc(upload)}">Copy upload text</button>' if upload else ''}
+   {posted_it(entry) if ok else ''}
    {f'<h3>Cold open wrong?</h3><code class="cmd">{esc(entry["commands"]["no_cold_open"])}</code>' if entry.get('peak_s') is not None else ''}
   </div>
  </div>
@@ -3725,6 +3807,8 @@ a {{ color:#93c5fd; }}
 <li>Wrong hook or cold open? Copy the command under it, paste it in PowerShell in C:\\AI\\gta-clipper, press Enter, then
 reload this page.</li>
 <li>Upload it yourself with the upload text (Copy button). Nothing is uploaded automatically.</li>
+<li>When it is on YouTube: copy the line under "Posted it?", paste it in PowerShell and press Enter. Its footage is then
+locked. A Short you don't post locks nothing.</li>
 </ol></div>
 <p class="meta">Profile {calibration}. Recordings:</p><ul class="meta">{recordings}</ul>
 <p class="meta">Time: {timing}</p>
@@ -3740,9 +3824,19 @@ document.querySelectorAll("button[data-copy]").forEach(b => b.addEventListener("
 
 
 def all_used_spans(shorts_dir):
-    """Every (video, start, end) any earlier Short showed (all of them, not only the last few: /launch never shows
-    footage twice)."""
-    return [tuple(span) for s in footage_short.load_used(shorts_dir)["shorts"] for span in s.get("spans", [])]
+    """Every locked (video, start, end): what a posted Short showed (all of them, not only the last few: /launch never
+    shows posted footage twice) and what the owner rejected. Footage a Short was only rendered from is free (PR 32)."""
+    used = footage_short.load_used(shorts_dir)
+    return [tuple(span) for s in used["shorts"] if footage_short.locked(s) for span in s.get("spans", [])] + [
+        tuple(span) for r in used.get("rejected", []) for span in r.get("spans", [])]
+
+
+def used_by_others(shorts_dir, mine_name, folder_name):
+    """What one Short of a run may not show: all locked footage but its own, and what the run's other Shorts showed."""
+    used = footage_short.load_used(shorts_dir)
+    return [tuple(span) for s in used["shorts"] if s.get("name") != mine_name
+            and (footage_short.locked(s) or str(s.get("name", "")).endswith("@" + folder_name))
+            for span in s.get("spans", [])] + [tuple(sp) for r in used.get("rejected", []) for sp in r.get("spans", [])]
 
 
 def main():
@@ -3775,6 +3869,8 @@ def main():
                    help="today's view: today's posted topics and all the footage used since (default: both as they "
                         "were when the run was prepared)")
     q.add_argument("--out", type=Path, help="where to write repick.json and repick.txt (default: <run>-repick)")
+    q.add_argument("--bank", action="store_true",
+                   help="pick from the content bank's moments of that run's recordings (labels from their peaks)")
     f = sub.add_parser("frame", help="a gridded frame of a pick's recording, to read a circle's box from")
     f.add_argument("--run", type=Path, help="the run folder (default: the newest /launch run)")
     f.add_argument("--short", type=int, required=True, help="the pick's number")
@@ -3799,12 +3895,16 @@ def main():
                 print(out if grid_frame(m["path"], at, out) else f"ERROR: no frame at {at} s")
         elif args.stage == "repick":
             with heavy.job("launch.py repick", log=lambda m: print(m, flush=True)):
-                repick(args.run, args.count, args.posted_now, out=args.out, log=lambda m: print(m, flush=True))
+                import bank
+                repick(args.run, args.count, args.posted_now, out=args.out, log=lambda m: print(m, flush=True),
+                       bank_dir=bank.BANK if args.bank else None)
         elif args.stage == "prepare":
             with heavy.job("launch.py prepare", log=lambda m: print(m, flush=True)):
+                import bank
                 prepare(args.game, args.profile, args.videos, args.every, args.dry_run, args.input,
                         count=max(1, args.count), day=args.date, slots=args.star_slots,
-                        log=lambda m: print(m, flush=True))
+                        log=lambda m: print(m, flush=True),
+                        bank_dir=bank.BANK if args.game == bank.GAME and not args.dry_run and not args.videos else None)
         else:
             if (args.hook or args.no_cold_open) and args.short is None:
                 ap.error("--hook and --no-cold-open need --short N")
