@@ -84,6 +84,8 @@ MAIN_GAP_S = 8.0                         # ...for the big kinds, whose footage r
 GROUP_MAX_S = 20.0                       # ...up to this long; a longer chase is cut into parts
 LOUD_ACT = 3.0                           # clip.py's action score at a peak that stands out on its own
 SOUND_STANDS_OUT = 0.5                   # the loudest half second counts as a peak when its z-score reaches this
+HEARD = 2.0                              # a crash or an explosion is loud: its peak's loudness z-score is this or more (Nov
+                                         # 24, looked at by hand: the 10 real crashes 2.0-3.5, 3 wrong ones 0.1-1.8)
 PEAK_ROOM_S = 1.0                        # the peak is looked for in the main event's own seconds, this much wider (the
                                          # small kinds: exactly in them)
 HUD_ROOM_S = 3.0                         # ...and this far from a HUD change
@@ -199,6 +201,8 @@ def raw_of(idx, rec, shorts_dir, bank_dir, hud6=None, log=log_line):
     saved = index.read_json(path)
     if saved and saved.get("key") == key:
         return saved
+    if saved and run is None and dict(saved.get("key") or {}, clip_run=None) == key:
+        return saved                       # the run folder it came from is gone: what was measured stays
     act, loud, change = series_of(run, n)
     stretches, series, events = [], [], []
     if rec["mode"] == "hud":
@@ -273,8 +277,9 @@ def kinds_in(text):
     """The kinds a line of the model's shows."""
     low = library.positive_text(text or "")
     kinds = {k for k, rx in KIND_WORDS.items() if rx.search(low)}
-    bumped = re.sub(r"avoid\w*\s+(?:a\s+|the\s+)?(?:collisions?|crash\w*)", " ", text or "", flags=re.I)
-    kinds |= launch.event_kinds(bumped) & set(IMPACT)
+    # "avoids collision" is none; a wreck or wreckage is there before or after one (a diver's, burnt cars after a fight)
+    hit = re.sub(r"avoid\w*\s+(?:a\s+|the\s+)?(?:collisions?|crash\w*)|wreck\w*", " ", text or "", flags=re.I)
+    kinds |= launch.event_kinds(hit) & set(IMPACT)
     return kinds
 
 
@@ -302,9 +307,6 @@ def events_of(rec, firsts=None):
         out.append({"t0": round(t0, 2), "t1": round(t1, 2), "kind": kind, "src": src, "text": text})
     for s in rec["sheets"]:
         for k in sorted(kinds_in(s.get("notable")) - {"shooting"}):     # (a shootout is an index segment, below)
-            if k == "crash" and s.get("activity") in ("swimming", "boat") and "crash" not in kinds_in(
-                    re.sub(r"wreck\w*", " ", s["notable"], flags=re.I)):
-                continue                                     # "near the wreck": a diver's wreck is not a crash
             add(s["t"], min(rec["duration_s"], s["t"] + rec["every"]), k, "index line", s["notable"])
     if rec["mode"] == "hud":
         for r in rec["rises"]:
@@ -470,6 +472,12 @@ def mine_all(rec, firsts=None):
         if win is None:
             left["under 4 s of clean footage"] += 1
             continue
+        twin = next((m for m in moments if family in SMALL and m["family"] in SMALL and "first look" not in
+                     (family, m["family"]) and (m["start_s"], m["end_s"]) == win), None)
+        if twin is not None:                # a reaction and a find on the very same seconds: one list item, both kinds
+            twin["kinds"] = sorted(set(twin["kinds"]) | {e["kind"] for e in group})
+            twin["events"] += [{k: e[k] for k in ("t0", "t1", "kind", "src", "text")} for e in group]
+            continue
         put(family, main["kind"], sorted({e["kind"] for e in group}), *win, peak, how, group[0]["span"][2], group)
     apart(moments)
     for a, b, span in calm_windows(rec, [(m["start_s"], m["end_s"]) for m in moments if m["family"] == "main"]):
@@ -549,14 +557,17 @@ def label_of(m, rec, sheets):
     from what the moment was mined as:
       crash, explosion, a vehicle's jump, shooting: the safety question ticks it there AND a line says it (its own note,
       or the index's line at the peak): neither a word nor a tick alone is enough (a truck "parked in an alleyway" was
-      ticked as a crash);
+      ticked as a crash); several looks there: the ones with most of the frames; a crash and an explosion must also be
+      HEARD there (where the sound was measured);
       the stars, the heat icons: the HUD itself changes within 4 s of the peak (read by code);
       a fall, a reaction, a find, a mechanic: the safety note says it AND the index's own line there says it (two
       separate looks, different frames); a chase: the HUD shows stars at the peak while driving.
     Where none of these holds, or the note says something the other look doesn't, the label is "unsure"."""
     peak = m["peak_s"]
     notes = [s["answer"]["note"] for s in sheets]
-    seen = {k for s in sheets for k, q in SEEN_AS.items() if s["answer"].get(q)}
+    # several looks at the same seconds may disagree: what the looks with most of the frames there say counts
+    weight = [(max(1, frames_at(s, peak)), s["answer"]) for s in sheets]
+    seen = {k for k, q in SEEN_AS.items() if sum(w for w, a in weight if a.get(q)) * 2 >= sum(w for w, _ in weight) > 0}
     said = set().union(*[kinds_in(n) for n in notes]) if notes else set()
     lines = [s["notable"] for s in rec["sheets"] if s["t"] - 1.0 <= peak < s["t"] + rec["every"] + 1.0]
     line_kinds = set().union(*[kinds_in(x) for x in lines]) if lines else set()
@@ -576,8 +587,14 @@ def label_of(m, rec, sheets):
         ticked = [s["answer"]["note"] for s in sheets if s["answer"].get(SEEN_AS.get(k, ""))]
         return next((n for n in ticked + notes if k in kinds_in(n)),
                     next((x for x in lines if k in kinds_in(x)), text))
-    ticked_only = []
+    ticked_only, i = [], min(rec["n"] - 1, int(peak / STEP))
+    loud = (rec.get("raw") or {}).get("loud") or []
+    z = max(loud[max(0, i - 1):i + 2], default=0.0)
     for k in IMPACT:
+        if k in seen and (k in said or k in line_kinds) and k != "stunt" and any(loud) and z < HEARD:
+            return dict(out, kind="unsure", name="unsure", sure=False, confidence=0.4,
+                        why=f"the look at the peak and a line say {safety.SEEN[k]}, but nothing that loud is heard there "
+                            f"(loudness {z:.1f}, a real one {HEARD:g} or more): look")
         if k in seen and (k in said or k in line_kinds):
             both = k in said and k in line_kinds
             return dict(is_(k, 0.95 if both else 0.85, f"the peak's frames show {safety.SEEN[k]}"
@@ -596,7 +613,6 @@ def label_of(m, rec, sheets):
     for k in ("reaction", "discovery", "mechanic"):
         if k in m["kinds"] and k in said and k in line_kinds:
             return is_(k, 0.7, "both looks at the peak say it")
-    i = min(rec["n"] - 1, int(peak / STEP))
     seg = next((s for s in rec["idx"]["segments"] if s["start_s"] <= peak < s["end_s"]), None)
     if seg is not None and seg["activity"] == "chase" and rec["count"][i]:
         return is_("chase", 0.9, f"the HUD shows {rec['count'][i]} star(s) at the peak while driving")
@@ -624,6 +640,13 @@ def label_of(m, rec, sheets):
     return dict(out, kind="unsure", name="unsure", sure=False, confidence=0.3 if sheets else 0.0, why=why)
 
 
+def impact_of(m):
+    """The impact a moment's sure label names, in the picker's words (a fall counts as a stunt), or None."""
+    label = m.get("label") or {}
+    kind = "stunt" if label.get("kind") == "fall" else label.get("kind")
+    return kind if label.get("sure") and kind in IMPACT else None
+
+
 def set_label(m, rec, sheets):
     """The moment's label from its peak, its points and its payoff with it: an impact counts only where the peak's
     frames show it; a fall both looks see counts as a stunt (as the owner posted M24)."""
@@ -631,10 +654,9 @@ def set_label(m, rec, sheets):
     terms = dict(m["terms"])
     for k in IMPACT:
         terms.pop(k, None)
-    if label["sure"] and label["kind"] in IMPACT:
-        terms[label["kind"]] = launch.EVENTS[label["kind"]][0]
-    if label["sure"] and label["kind"] == "fall":
-        terms["stunt"] = launch.EVENTS["stunt"][0]
+    impact = impact_of({"label": label})
+    if impact:
+        terms[impact] = launch.EVENTS[impact][0]
     if label["sure"] and label["kind"] in ("stars lost", "heat icons", "star look"):
         terms["hud6"] = 1.0                        # a HUD change, as the topic candidates count it
     if terms.get("activity_label") == "shootout" and not (label["sure"] and label["kind"] == "shooting"):
@@ -644,7 +666,7 @@ def set_label(m, rec, sheets):
         terms.pop("police")
     m["label"], m["terms"] = label, terms
     m["score"] = round(sum(v for v in terms.values() if isinstance(v, (int, float))), 3)
-    m["category"] = launch.category_of(terms) if m["family"] in ("main", "calm") else m["main"]
+    m["category"] = impact or (launch.category_of(terms) if m["family"] in ("main", "calm") else m["main"])
     tier, name, why = launch.payoff_strength(dict(m, point=None))
     m["payoff"] = {"tier": tier, "label": name, "why": why}
     m["subtitles"] = any(s["answer"].get("subtitles") for s in sheets)
@@ -968,10 +990,11 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
         if status == "rendered":
             p["terms"]["rendered"] = -RENDERED_COST
         p["score"] = round(sum(v for v in p["terms"].values() if isinstance(v, (int, float))), 3)
-        if m["label"]["sure"] and m["label"]["kind"] in ("fall", "stunt"):     # the sheets at the peak show a stunt
+        impact = impact_of(m)
+        if impact:                                          # the sheets at the peak show it, whatever words they used
             for s in rec["sheets"]:
-                if s["t"] - 1.0 <= m["peak_s"] < s["t"] + rec["every"] + 1.0 and "stunt" not in s["kinds"]:
-                    s["kinds"] = sorted(set(s["kinds"]) | {"stunt"})
+                if s["t"] - 1.0 <= m["peak_s"] < s["t"] + rec["every"] + 1.0 and impact not in s["kinds"]:
+                    s["kinds"] = sorted(set(s["kinds"]) | {impact})
         out.append(p)
     # Moments of different families may overlap in the bank; two candidates of one night may not.
     best = []
@@ -984,8 +1007,8 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
 
 def keep_what_the_peak_shows(m):
     """After the safety checks of a candidate from the bank: an impact seen somewhere else in its footage (M24's parked
-    pickup, hit 4 s before the jump) doesn't name it. Of m["verified"], only the impacts seen round the peak stay, and a
-    fall both looks saw counts as a stunt there."""
+    pickup, hit 4 s before the jump) doesn't name it. Of m["verified"], only the impacts seen round the peak stay, with the
+    one its label is sure of."""
     peak, v = m.get("peak_s"), m.get("verified")
     if peak is None or v is None:
         return m
@@ -993,10 +1016,10 @@ def keep_what_the_peak_shows(m):
         v[k] = [s for s in v.get(k, []) if s[0] < peak + AT_PEAK_S[1] and peak - AT_PEAK_S[0] < s[1]]
         if not v[k]:
             v.pop(k)
-    label = m.get("label") or {}
-    if label.get("sure") and label.get("kind") in ("fall", "stunt"):
-        v.setdefault("stunt", []).append([round(peak - 1.0, 2), round(peak + 1.0, 2)])
-        m["terms"]["stunt"] = launch.EVENTS["stunt"][0]
+    impact = impact_of(m)
+    if impact:
+        v.setdefault(impact, []).append([round(peak - 1.0, 2), round(peak + 1.0, 2)])
+        m["terms"][impact] = launch.EVENTS[impact][0]
     return m
 
 

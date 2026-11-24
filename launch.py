@@ -1690,6 +1690,8 @@ def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_r
             import bank
             bank.keep_what_the_peak_shows(m)
         verify_terms(recs[m["video"]], m)
+        if m.get("bank_id"):                    # ...and is what the moment is about, whatever else is in it
+            m["category"] = bank.impact_of(m) or m["category"]
         return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
     log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)"
         + (f", {len(posted)} posted topic(s) counted" if posted else "") + "...")

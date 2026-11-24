@@ -173,6 +173,18 @@ def short_clean_footage_gives_short_moments():
 
 
 @check
+def a_reaction_and_a_find_on_the_same_seconds_are_one_list_item():
+    """"Player attacked by a wild boar" is a reaction and a find on the same 6 s: one list item with both kinds, next to the
+    fall's own moment; on different seconds they stay two"""
+    boar = made_up(lines={300.0: ("Player falls in grass after being attacked by a wild boar.", "on_foot")})
+    small = [m for m in bank.mine_all(boar)[0] if m["family"] in bank.SMALL]
+    two = made_up(lines={300.0: ("Player argues with a man", "on_foot"), 360.0: ("Player sees a shark", "on_foot")})
+    apart = [m for m in bank.mine_all(two)[0] if m["family"] in bank.SMALL]
+    return (len(small) == 1 and small[0]["kinds"] == ["discovery", "reaction"] and len(small[0]["events"]) == 2
+            and len(apart) == 2 and any(m["main"] == "fall" for m in bank.mine_all(boar)[0]))
+
+
+@check
 def the_new_kinds_come_only_from_what_the_data_shows():
     """a fall, people reacting, a find, a mechanic are read from the lines that say so and not from lines that deny it or
     from scenery; "avoids collision" and a diver's "wreck" are no crash; wanted stars going up, all going, and the heat
@@ -288,6 +300,46 @@ def a_label_the_peak_does_not_show_is_unsure_and_counts_for_nothing():
             and "crash" not in drive["terms"] and all(x["payoff"]["tier"] < 3 for x in (drive, m, nobody, only))
             and "don't show that" in drive["label"]["why"] and "ticks a crash" in m["label"]["why"]
             and "not been looked at" in nobody["label"]["why"] and nobody["label"]["confidence"] == 0.0)
+
+
+@check
+def when_looks_disagree_the_ones_with_most_frames_count():
+    """the real bush scrape (_023422, 7:19): one look of 2 frames ticks a crash, four looks with 9 frames don't: unsure; the
+    crash into a tree (_164843, 24:12): 3 of 5 frames: a crash; a moment whose peak shows a crash is filed under it though
+    its stars go up too (its category, so its type and what it repeats)"""
+    lines = {300.0: ("Car drives, then crashes into bushes, causing smoke and debris.", "driving")}
+    rec = made_up(lines=lines, loud={301.5: 2.336})
+    no = "Black car drives on scenic road with trees and grass."
+    scrape = labelled(rec, 301, [look(300.0, 304.0, no), look(301.4, 305.4, no), look(302.0, 306.0, no), look(298.0, 302.0, no),
+                                 look(301.0, 302.0, "Car drives down street", every=0.5, crash=True)])
+    tree = labelled(made_up(lines=lines, loud={301.5: 3.0}), 301, [look(300.5, 304.5, "street scenes", crash=True),
+                                                                   look(299.0, 303.0, "Car drives through streets")])
+    counts = [0] * 596 + [1] * 100 + [0] * 504
+    both = made_up(lines=lines, loud={301.5: 2.5}, counts=counts, segs=[seg(0, 600, "driving")])
+    m = labelled(both, 301, [look(300.5, 304.5, "A car crashes", crash=True)])
+    return (scrape["label"]["kind"] == "unsure" and tree["label"]["kind"] == "crash" and "star rise" in m["kinds"]
+            and m["terms"].get("star_rise") and m["category"] == "crash" and bank.impact_of(m) == "crash"
+            and bank.impact_of(scrape) is None), (scrape["label"], tree["label"], m["category"])
+
+
+@check
+def a_crash_must_be_heard_and_a_wreck_is_not_one():
+    """the three wrong crashes of the first real build (looked at by hand): a truck that turns round (tick and line, but
+    loudness 1.8), a drift (1.1) and burnt cars after a fight ("wreckage", 0.1) are unsure and no impact; the same tick and
+    line with a real crash's sound (2.0) is a crash; where no sound was measured the sound can't speak against it"""
+    look_ = [look(302.0, 306.0, "Red Mustang drives and crashes on highway.", crash=True)]
+    lines = {300.0: ("Red sports car stuck on road after crash with barrier", "driving")}
+    turn = labelled(made_up(lines=lines, loud={303.0: 1.812}), 301, look_)
+    drift = labelled(made_up(lines=lines, loud={303.0: 1.143}), 301, look_)
+    heard = labelled(made_up(lines=lines, loud={303.0: 2.0}), 301, look_)
+    unmeasured = labelled(made_up(lines=lines), 301, [look(302.0, 306.0, "A car crashes on highway.", crash=True)])
+    wreck = made_up(lines={300.0: ("Player exits police SUV near wrecked cars and bodies.", "on_foot")}, loud={303.0: 2.5})
+    m = next(x for x in bank.mine_all(wreck)[0] if x["start_s"] <= 303 <= x["end_s"])
+    m["peak_s"] = 303.0
+    bank.set_label(m, wreck, [look(302.0, 306.0, "Player exits vehicle near wreckage in rural setting.", crash=True)])
+    return (all(x["label"]["kind"] == "unsure" and x["payoff"]["tier"] < 3 and "crash" not in x["terms"] for x in (turn, drift, m))
+            and "nothing that loud" in turn["label"]["why"] and heard["label"]["kind"] == "crash" and heard["payoff"]["tier"] == 3
+            and unmeasured["label"]["kind"] == "crash" and bank.kinds_in("Diver searches wreck, finds treasure") == {"discovery"})
 
 
 @check
@@ -444,7 +496,8 @@ def build(lib, shorts, bdir, ai):
 @check
 def raw_data_is_kept_and_mining_again_asks_nothing():
     """the loudness, change and HUD readings of each recording are in bank\\raw; the second build reads them (no HUD is
-    read again), finds every peak's answer saved, asks the model nothing and gives the same moments"""
+    read again), finds every peak's answer saved, asks the model nothing and gives the same moments; with the old run
+    folders gone, what was measured stays"""
     with tempfile.TemporaryDirectory() as tmp:
         lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, counts=[0] * 100 + [2] * 60 + [0] * 1040)
         ai, read = StandIn("Player's car crashes into a wall", cache_dir=lib / "_cache", crash=True), []
@@ -460,6 +513,9 @@ def raw_data_is_kept_and_mining_again_asks_nothing():
             raise AssertionError("the HUD was read again")
         second = bank.build(lib, shorts, bdir, ai, {"topics": []}, hud6=again, log=quiet)
         same = [(m["id"], m["label"]["kind"]) for m in first["moments"]] == [(m["id"], m["label"]["kind"]) for m in second["moments"]]
+        shutil.rmtree(shorts / "launch-2026-11-19")
+        third = bank.build(lib, shorts, bdir, ai, {"topics": []}, hud6=again, log=quiet)
+        same = same and [(m["id"], m["peak_s"]) for m in first["moments"]] == [(m["id"], m["peak_s"]) for m in third["moments"]]
     return (asked == first["vision_calls"] > 0 and ai.calls == asked and second["vision_calls"] == 0 and same
             and len(raw["loud"]) == len(raw["act"]) == 1200 and max(raw["loud"]) == 2.0 and read == [(50.0, 80.0)]
             and len(raw["hud6"]["series"]) == 40 and any("star look" in m["kinds"] for m in second["moments"]))
@@ -770,7 +826,7 @@ def an_impact_elsewhere_in_the_footage_does_not_name_the_moment():
     values = {e["value"] for o in c["point"]["action_payoff"] for e in [{"value": o}]}
     return (good and "crash" not in c["terms"] and c["category"] == "stunt" and launch.moment_type(c) == "stunt"
             and values == {"stunt"} and launch.payoff_strength(c)[0] == 3 and c["verified"].get("crash") is None
-            and bike["verified"]["crash"] == [[460.5, 464.5]] and bike["verified"]["police"]), (c["terms"], c["point"])
+            and [460.5, 464.5] in bike["verified"]["crash"] and bike["verified"]["police"]), (c["terms"], c["point"])
 
 
 @check
@@ -812,6 +868,7 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
         try:
             folder = launch.prepare("gta6", day="2026-11-24", bank_dir=bdir, **kw)
             data = json.loads((folder / "candidates.json").read_text(encoding="utf-8"))
+            in_bank = {m["video"] for m in bank.read_bank(bdir)["moments"]}
             again = launch.prepare("gta6", day="2026-11-25", bank_dir=bdir, **kw)
             data2 = json.loads((again / "candidates.json").read_text(encoding="utf-8"))
             stopped = None
@@ -820,8 +877,9 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
             except launch.LaunchError as e:
                 stopped = str(e)
             # a night on which nothing passes says so and is not carried on by the next one
-            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in ("GTA_20261119120000", "GTA_20261121010000")],
-                                     "posted", posted="2026-11-24")
+            (inp / "GTA_20261127010000.webm").write_bytes(b"x")
+            footage_short.set_status(shorts, "all", [[v, 0.0, 600.0] for v in ("GTA_20261119120000", "GTA_20261121010000",
+                                                                               "GTA_20261127010000")], "posted", posted="2026-11-24")
             nothing = None
             try:
                 launch.prepare("gta6", day="2026-11-27", bank_dir=bdir, **kw)
@@ -831,7 +889,6 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
             left, _ = launch.find_recordings(inp, lib, launch.load_runs(shorts))
         finally:
             launch.probe_duration, launch.choose_profile, launch.POSTED_FILE = keep
-        in_bank = {m["video"] for m in bank.read_bank(bdir)["moments"]}
     picks = data["picks"]
     hit = [p for p in picks if p["video"] == "GTA_20261119120000" and launch.overlap(p["window"][0], p["window"][1], 95.0, 115.0) > 0]
     return (in_bank == {"GTA_20261119120000", "GTA_20261121010000"} and {p["video"] for p in picks} == in_bank and not hit
