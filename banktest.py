@@ -329,7 +329,7 @@ def when_looks_disagree_the_ones_with_most_frames_count():
 def a_crash_must_be_heard_and_a_wreck_is_not_one():
     """wrong crashes of the first real build (looked at by hand): a truck that turns round (tick and line, but loudness
     1.8), a drift (1.1) and burnt cars after a fight ("wreckage", 0.1) are unsure and no impact; the same tick and
-    line with a real crash's sound (2.0) is a crash; where no sound was measured the sound can't speak against it"""
+    line with a real crash's sound (2.0) is a crash; where no sound was measured it is unsure too (PR 35: it was a crash)"""
     look_ = [look(302.0, 306.0, "Red Mustang drives and crashes on highway.", crash=True)]
     lines = {300.0: ("Red sports car stuck on road after crash with barrier", "driving")}
     turn = labelled(made_up(lines=lines, loud={303.0: 1.812}), 301, look_)
@@ -342,7 +342,7 @@ def a_crash_must_be_heard_and_a_wreck_is_not_one():
     bank.set_label(m, wreck, [look(302.0, 306.0, "Player exits vehicle near wreckage in rural setting.", crash=True)])
     return (all(x["label"]["kind"] == "unsure" and x["payoff"]["tier"] < 3 and "crash" not in x["terms"] for x in (turn, drift, m))
             and "nothing that loud" in turn["label"]["why"] and heard["label"]["kind"] == "crash" and heard["payoff"]["tier"] == 3
-            and unmeasured["label"]["kind"] == "crash" and bank.kinds_in("Diver searches wreck, finds treasure") == {"discovery"})
+            and unmeasured["label"]["kind"] == "unsure" and bank.kinds_in("Diver searches wreck, finds treasure") == {"discovery"})
 
 
 @check
@@ -461,6 +461,15 @@ def a_moment_that_may_not_be_shown_never_reaches_a_shelf():
 
 # --- 4a. Raw data, and no second look ---
 
+def clip_run(shorts, stem):
+    """What clip.py leaves for a recording: a run folder whose sound has a loud half second every 100 s (3.5, 103.5 ...)."""
+    run = Path(shorts) / "launch-2026-11-19" / "clip_runs" / stem / "20261119-120000"
+    run.mkdir(parents=True)
+    rows = ["time_s,audio_z,visual_z"] + [f"{i * 0.5},{2.0 if (i * 0.5) % 100 == 3.5 else 0.0},0.0" for i in range(1200)]
+    (run / "timeline.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return run
+
+
 def bank_of(tmp, recs_lines, used=None, counts=None):
     """A library, shorts folder and bank folder in tmp with these recordings ({stem: lines})."""
     tmp = Path(tmp)
@@ -478,10 +487,7 @@ def bank_of(tmp, recs_lines, used=None, counts=None):
         (lib / stem).mkdir()
         (lib / stem / "index.json").write_text(json.dumps(idx), encoding="utf-8")
         videos[stem] = {"index": f"{stem}/index.json", "duration_s": 600.0}
-        run = shorts / "launch-2026-11-19" / "clip_runs" / stem / "20261119-120000"
-        run.mkdir(parents=True)
-        rows = ["time_s,audio_z,visual_z"] + [f"{i * 0.5},{2.0 if (i * 0.5) % 100 == 3.5 else 0.0},0.0" for i in range(1200)]
-        (run / "timeline.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        clip_run(shorts, stem)
     (lib / "library.json").write_text(json.dumps({"videos": videos}), encoding="utf-8")
     if used is not None:
         (shorts / footage_short.USED_FOOTAGE).write_text(json.dumps(used), encoding="utf-8")
@@ -927,7 +933,7 @@ def prepare_picks_from_the_bank_and_needs_no_new_recording():
         launch.choose_profile = lambda *a, **k: {"profile": "gta6", "mode": "hud", "stars": True, "why": "x", "attempts": []}
         launch.POSTED_FILE = tmp / "none.json"
         kw = {"input_dir": inp, "shorts_dir": shorts, "library_dir": lib, "log": quiet, "index_video": index_video,
-              "clip_runner": lambda v, p: None, "check": False, "sheets": False, "posted_file": tmp / "none.json",
+              "clip_runner": lambda v, p: clip_run(shorts, v.stem), "check": False, "sheets": False, "posted_file": tmp / "none.json",
               "safety": Safe("Player's car crashes into a wall", only=CRASHES, crash=True), "hud6": lambda *a, **k: []}
         try:
             folder = launch.prepare("gta6", day="2026-11-24", bank_dir=bdir, **kw)
@@ -1304,6 +1310,148 @@ def a_proof_short_keeps_its_topic_as_its_type():
     return (m["category"] == "topic: heat-icons" and launch.moment_type(m) == "heat-icons" and other["category"] == "star rise"
             and picks == ["A", "B", "A"] and wanted == "star rise" and bank.type_of_moment(bank_m) == "heat-icons"
             and bank.type_of_moment(dict(bank_m, shelf="action")) == "star rise"), (m["category"], picks)
+
+
+@check
+def rejecting_a_moment_keeps_every_earlier_rejection():
+    """B10: mark_rejected threw out an earlier rejection that had the same id, though it was another recording's or, after a
+    rebuild, another moment's: that footage was offered again. Both stay; the same moment rejected twice is one entry"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        b = build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        m = next(x for x in b["moments"] if x["main"] == "crash")
+        old = [{"id": m["id"], "spans": [["rec_other", 10.0, 20.0]], "on": "2026-11-20", "label": "crash"},
+               {"id": m["id"], "spans": [[m["video"], 500.0, 510.0]], "on": "2026-11-21", "label": "crash"}]
+        (shorts / footage_short.USED_FOOTAGE).write_text(json.dumps({"shorts": [], "rejected": old}), encoding="utf-8")
+        for why in ("dull", "still dull"):
+            bank.mark_rejected(m["id"], why, shorts, bdir, quiet)
+        rows = footage_short.load_used(shorts)["rejected"]
+        locked = launch.all_used_spans(shorts)
+    return (rows[:2] == old and len(rows) == 3 and rows[2]["why"] == "still dull" and ("rec_other", 10.0, 20.0) in locked
+            and (m["video"], m["start_s"], m["end_s"]) in locked), rows
+
+
+@check
+def ids_are_unique_and_stay_with_their_moment_on_a_rebuild():
+    """B10: an id is the second a moment starts, so a rebuild whose moment starts a little earlier gave it another id (its
+    rendered Short was lost to it), a new moment could take an old one's id, and two recordings of the same second shared
+    theirs. Rebuilt, a moment keeps the id of the old one on its seconds; every id in the bank is one of a kind"""
+    stems = ("GTA_20261119120000", "PS5_20261119120000")
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {s: crash_at(102, 300) for s in stems}, used={"shorts": []})
+        ai = StandIn("Player's car crashes into a wall", only=CRASHES, crash=True)
+        first = build(lib, shorts, bdir, ai)
+        ids = [m["id"] for m in first["moments"]]
+        m = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] > 200)
+        other = next(x for x in first["moments"] if x["main"] == "crash" and x["video"] == stems[0] and x["start_s"] < 200)
+        # the last build saw it start 1.4 s earlier, under another id; another moment, gone since, had today's id
+        saved = bank.read_bank(bdir)
+        for x in saved["moments"]:
+            if x["id"] == m["id"]:
+                x.update(id="1119-120000-was", start_s=x["start_s"] - 1.4)
+        saved["moments"].append(dict(other, id=m["id"], start_s=550.0, end_s=560.0, video=stems[1], family="gone"))
+        index.write_json(bdir / bank.BANK_FILE, saved)
+        second = build(lib, shorts, bdir, ai)
+        now = next(x for x in second["moments"] if x["video"] == stems[0] and x["start_s"] == m["start_s"] and x["main"] == "crash")
+        ids2 = [x["id"] for x in second["moments"]]
+        third = build(lib, shorts, bdir, ai)
+    return (len(set(ids)) == len(ids) and len(set(ids2)) == len(ids2) and now["id"] == "1119-120000-was" and m["id"] not in ids2
+            and [x["id"] for x in third["moments"]] == ids2), (now["id"], m["id"] in ids2)
+
+
+@check
+def a_rendered_short_belongs_to_the_moment_it_shows():
+    """B10: a Short's bank_id was trusted on its own, so after a rebuild that gave the id to another moment, marking that
+    moment posted locked the wrong footage. A Short counts for a moment only when it shows some of its seconds"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        m = next(x for x in build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))["moments"]
+                 if x["main"] == "crash")
+        for run, span in (("launch-a", [["GTA_20261119120000", 20.0, 35.0]]), ("launch-b", [["GTA_20261119120000", 296.0, 312.0]])):
+            (shorts / run).mkdir()
+            (shorts / run / "render.json").write_text(json.dumps({"shorts": [
+                {"short": 1, "status": "READY", "bank_id": m["id"], "folder": str(shorts / run / "1-x"), "title": "x", "shown": span}]}),
+                encoding="utf-8")
+        got = [name for name, _, _ in bank.shorts_of(shorts, m)]
+    return got == ["1-x@launch-b"], got
+
+
+@check
+def a_crash_nobody_measured_the_sound_of_is_unsure():
+    """B11: with no loudness (an empty list, or all zeros: clip.py never ran on it) the loudness check was skipped, so a tick
+    and a line were a sure crash. Not measured is not heard: unsure, and it says so; an explosion the same"""
+    say = [look(302.0, 306.0, "A car crashes on highway, then an explosion.", crash=True, explosion=True)]
+    out = []
+    for loud in ([], [0.0] * 1200):
+        rec = made_up(lines={300.0: ("Red car crashes, then an explosion", "driving")}, loud={303.0: 3.0})
+        m = one(rec, 301)
+        rec["raw"]["loud"] = list(loud)
+        out.append(bank.label_of(m, rec, say))
+    rec = made_up(lines={300.0: ("Red car crashes, then an explosion", "driving")}, loud={303.0: 3.0})
+    heard = bank.label_of(one(rec, 301), rec, say)
+    return (all(x["kind"] == "unsure" and "sound" in x["why"] and "measured" in x["why"] for x in out)
+            and heard["kind"] == "crash" and heard["sure"]), [(x["kind"], x["why"]) for x in out + [heard]]
+
+
+@check
+def a_quiet_crash_does_not_hide_what_else_the_peak_shows():
+    """B11: a crash nothing loud is heard of was "unsure" at once, before the jump, the fall, the shooting or the HUD change
+    at the same peak was looked at. Those are the label where they hold; with nothing else there it stays unsure, with why"""
+    def label(note, line, counts=None, **yes):
+        rec = made_up(lines={300.0: (line, "driving")}, loud={303.0: 1.2}, counts=counts)
+        return bank.label_of(one(rec, 301), rec, [look(302.0, 306.0, note, crash=True, **yes)])
+    quiet_ = label("A car crashes", "Player's car crashes")
+    jump = label("A car crashes after a jump off a ramp", "Car jumps off a ramp and crashes", stunt=True)
+    fall = label("A man falls as a car crashes", "A car crashes and a man falls")
+    shots = label("A car crashes, man shooting", "Car crashes while shooting", shooting=True)
+    stars = label("A car crashes", "Player's car crashes", counts=[0] * 606 + [2] * 60 + [0] * 534)
+    kinds = [x["kind"] for x in (quiet_, jump, fall, shots, stars)]
+    return (kinds == ["unsure", "stunt", "fall", "shooting", "star rise"] and "loud" in quiet_["why"]
+            and all(x["sure"] for x in (jump, fall, shots, stars))), kinds
+
+
+@check
+def a_crash_that_is_only_ticked_names_nothing_else():
+    """B11: a crash the look ticks but no line says fell through to softer labels: "someone reacts", "police chase", "first
+    look" or "driving", sure. It is unsure: nobody knows what that peak shows; a HUD change there is still the HUD's"""
+    def label(line, note, t=301, segs=None, counts=None, kinds=None, main=None):
+        rec = made_up(lines={300.0: (line, "driving")}, loud={303.0: 2.5}, segs=segs, counts=counts)
+        ms = bank.mine_all(rec)[0]
+        m = next(x for x in ms if x["start_s"] <= 303 <= x["end_s"] and (kinds is None or x["family"] in kinds))
+        m["peak_s"] = 303.0
+        return bank.label_of(m, rec, [look(302.0, 306.0, note, crash=True)])
+    reaction = label("A man argues with the player", "A man argues with the player", kinds=("reaction",))
+    chase = label("Player drives fast", "Player drives fast in traffic", segs=[seg(0, 290, "driving"), seg(290, 320, "chase", stars=2),
+                                                                                seg(320, 600, "driving")], counts=[2] * 1200)
+    calm = label("Player drives down a street", "Player drives a car down a street", kinds=("calm",))
+    hud = label("Player drives", "Player drives a car", counts=[0] * 606 + [2] * 60 + [0] * 534)
+    return ([x["kind"] for x in (reaction, chase, calm)] == ["unsure"] * 3 and all("ticks a crash" in x["why"] for x in (reaction, chase, calm))
+            and hud["kind"] == "star rise"), [x["kind"] for x in (reaction, chase, calm, hud)]
+
+
+@check
+def an_empty_build_never_replaces_a_full_bank():
+    """B12: with every recording of the library gone (a drive not plugged in), prepare built a bank of nothing and wrote it
+    over the real one. It stops with a plain error and content_bank.json and bank.html keep every byte; a first, empty bank
+    may be written"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        before = [(bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)]
+        (tmp / "GTA_20261119120000.webm").unlink()
+        inp = tmp / "input"
+        inp.mkdir()
+        keep, launch.POSTED_FILE = launch.POSTED_FILE, tmp / "none.json"
+        try:
+            stopped = stops(lambda: launch.prepare("gta6", day="2026-11-24", bank_dir=bdir, input_dir=inp, shorts_dir=shorts,
+                                                   library_dir=lib, log=quiet, check=False, sheets=False, safety=None,
+                                                   posted_file=tmp / "none.json"), "moments")
+        finally:
+            launch.POSTED_FILE = keep
+        same = [(bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)] == before
+        fresh = bank.build(lib, shorts, tmp / "new", None, {"topics": []}, hud6=lambda *a, **k: [], log=quiet)
+    return stopped and same and fresh["moments"] == [], (stopped, same)
 
 
 def main():

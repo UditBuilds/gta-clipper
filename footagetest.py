@@ -989,6 +989,33 @@ def game_sound_sits_under_the_voice_only_where_its_shot_is():
             and rms(2.5, 3.5) > 0.0 and rms(2.0, 2.005) < 0.5 * rms(2.5, 3.5) and 11.0 <= under <= 15.0)
 
 
+@check
+def rejected_footage_is_never_picked():
+    """PR 35 (B13): /footage-short knew nothing of what the owner rejected. With bravo's drive rejected a driving beat takes
+    alpha's; with both rejected it finds nothing (footage an earlier Short showed is still taken again when nothing else
+    fits); a whole run reads the rejected list of _used_footage.json"""
+    lib = made_up_library()
+    beat = [{"line": 0, "shot": 0, "query": {"activity": ["driving"]}, "seconds": 2.0}]
+    both = [("bravo", 0.0, 60.0), ("alpha", 0.0, 30.0)]
+    one = footage_short.pick_beats(beat, lib, never=both[:1])[0]
+    none = footage_short.pick_beats(beat, lib, never=both)[0]
+    shown = footage_short.pick_beats(beat, lib, avoid=both)[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        first, _, _, _ = footage_run(tmp)
+        rows = json.loads((first / "picks.json").read_text(encoding="utf-8"))["beats"]
+        used_file = first.parent / footage_short.USED_FOOTAGE
+        used = json.loads(used_file.read_text(encoding="utf-8")) if used_file.is_file() else {"shorts": []}
+        drive = next(r for r in rows if r["source"] == "footage" and r["activity"] == "driving")
+        used["rejected"] = [{"id": "x", "spans": [[drive["video"], drive["start_s"], drive["end_s"]]]}]
+        used_file.write_text(json.dumps(used), encoding="utf-8")
+        again, _, _, _ = footage_run(tmp)
+        after = json.loads((again / "picks.json").read_text(encoding="utf-8"))["beats"]
+    hit = [r for r in after if r["source"] == "footage" and r["video"] == drive["video"]
+           and r["start_s"] < drive["end_s"] and drive["start_s"] < r["end_s"]]
+    return (one["video"] == "alpha" and none["found"] is False and shown["found"] and shown["reused"]
+            and footage_short.rejected_spans({"shorts": []}) == [] and not hit)
+
+
 def main():
     ok, skipped = True, 0
     for fn in testkit.selected(CHECKS):
