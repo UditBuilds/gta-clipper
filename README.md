@@ -483,7 +483,9 @@ red, click a time to play it), and adds the recording to `C:\AI\gta\library\libr
    apart, in a 2x2 grid.
 2. Code reads the HUD first, with `clip.py`'s own detectors and the profile: minimap there or not, phone call screen,
    wanted stars. New: it also counts the stars (an earned star has a dark outline round a lighter middle; an empty
-   slot is a flat grey shape).
+   slot is a flat grey shape). GTA 6 has no bars by its minimap, so there "minimap" means its player arrow, in either of
+   the two looks the game draws it in: a white pointer in a dark disc or a dark pointer in a white disc (PR 36; knowing only
+   the first one made 34 stretches of gameplay, 9.7 minutes, cutscenes: `docs/false-cutscenes-pr36.md`).
 3. A local vision model (`qwen3-vl:4b-instruct` in Ollama) looks at each sheet and answers in strict JSON: `activity`
    (driving, on_foot, shootout, chase, flying, boat, swimming, cutscene, menu_map, phone, loading, other), `vehicle`,
    `police_visible`, one `notable` line, `confidence`. It is told nothing about the HUD.
@@ -588,7 +590,8 @@ holds only shots, no claims about GTA 6, and every topic is marked `verify after
   `driving` (91 % and 95 %). The chase label comes almost entirely from the HUD rule (vehicle + stars); the model said
   chase on 2 of 364 sheets.
 - A stretch with no minimap is called `cutscene` unless the model says menu or loading, so a short pause map can be
-  listed as cutscene. It is never_use either way.
+  listed as cutscene. It is never_use either way. So is GTA 6 gameplay where the game hides the minimap (binoculars, the
+  focus view, a car's info panel, the safe house) and, not read yet, swimming under water, where the arrow's disc is grey.
 
 ## Footage Shorts (Mode B) and guided calibration
 
@@ -1172,9 +1175,9 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 34): `--full` | 580 | 8 min |
-| now: `--quick` | 503 | 1.9 min |
-| now: `--ci`, on GitHub's Windows machine | 488 | about 2 min |
+| now (PR 36): `--full` | 607 | 8.5 min |
+| now: `--quick` | 530 | 1.9 min |
+| now: `--ci`, on GitHub's Windows machine | 515 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1189,7 +1192,7 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | storytest | `.venv-tts` | 16 | 15 | 13 | 76 s | 22 s |
 | selftest | `.venv` | 3 | - | - | 33 s | 14 s |
 | hudtest | `.venv` | 9 | 9 | - | 19 s | 2 s |
-| indextest | `.venv` | 41 | 41 | 41 | 8 s | 2 s |
+| indextest | `.venv` | 49 | 49 | 49 | 8 s | 3 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
 | banktest (PR 32, 35) | `.venv` | 50 | 50 | 49 | - | 9 s |
