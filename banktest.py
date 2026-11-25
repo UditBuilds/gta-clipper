@@ -1596,7 +1596,8 @@ def an_animal_on_screen_is_no_attack():
           "Player walks past a gator, no attack", "Player with dog gets attacked by a man", "A man attacks the player near a dog",
           "Player near alligator attacks a man", "Player hiding in tall grass near a pig and red vehicle.",
           "Diver encounters jellyfish underwater in coral reef environment", "Player on jet ski in ocean with police pursuit",
-          "Player gets attacked and falls", "Player bites into a hot dog, then falls", "Player is never attacked by the gator"]
+          "Player gets attacked and falls", "Player bites into a hot dog, then falls", "Player is never attacked by the gator",
+          "Group on boat, dialogue about a shark attack", "Diver near boat, subtitles read attacked by a shark"]
     yes = ["Player aims gun at alligator, then gets attacked and falls", "Player survives crocodile attack, then walks away with gun drawn.",
            "Player falls in grass after being attacked by a wild boar.", "Alligator lunges and bites the player", "A shark bites the diver"]
     wrong = [x for x in no if payoffs.attack_in(x)[0]] + [x for x in yes if not payoffs.attack_in(x)[0]]
@@ -1610,18 +1611,21 @@ def an_animal_on_screen_is_no_attack():
 def taking_an_aircraft_two_checks_see_meets_the_payoff_bar():
     """the airliner: the index goes from on foot at the plane (it opens the door, walks up the stairs) to flying it, and the
     safety question's note there says the player is in control ("Player flies ..."): payoff 2/3, type and category "aircraft
-    taken", on the action shelf (its payoff is the plane, not the star). The star rise is still its label; a moment that starts
-    after he is in it doesn't get it"""
+    taken", on the action shelf (its payoff is the plane, not the star), also where it answers a question on screen or nothing else was
+    mined there, 10 s or more. The star rise is still its label; a moment that starts after he is in it doesn't get it"""
     import payoffs
     ms, calls = made(jet(), JET_LOOKS)
     m, old = held(ms, 727), held(made(jet(), NOT_IN_JET)[0], 727)
     proof = " | ".join(c["text"] for e in m["payoff_events"] for c in e["checks"])
     late = dict(m, start_s=725.5, end_s=732.5)
+    asks = [{"id": "wanted-system", "kind": "topic", "question": "x"}]       # it answers a question on screen, like the real one
+    shelves = [bank.shelf_of(x) for x in (dict(m, questions=asks), dict(old, questions=asks), dict(m, family="calm", main="calm"),
+                                          dict(m, end_s=m["start_s"] + 9.0))]
     return (calls == 0 and m["payoff"]["tier"] == 2 and "aircraft" in m["payoff"]["why"] and m["category"] == "aircraft taken"
             and launch.moment_type(m) == "aircraft taken" and m["shelf"] == "action" and m["label"]["kind"] == "star rise"
             and all(m[k] == old[k] for k in ("id", "start_s", "end_s", "peak_s", "label")) and old["payoff"]["tier"] == 1
             and "opens door" in proof and "Player flies" in proof and "payoff_events" not in old
-            and not any(payoffs.holds(late, e) for e in m["payoff_events"])
+            and shelves == ["action", "proof", "action", "list"] and not any(payoffs.holds(late, e) for e in m["payoff_events"])
             and new_payoffs(ms) == {("aircraft taken", int(m["start_s"]))}), (m["payoff"], m["category"], proof, new_payoffs(ms))
 
 
@@ -1643,8 +1647,14 @@ def near_a_plane_is_not_taking_it():
     drove, _ = made(jet(driving), JET_LOOKS)
     alone, _ = made(jet(), NOT_IN_JET)
     far, _ = made(jet(), NOT_IN_JET + [look(768.0, 772.0, IN_JET["answer"]["note"])])
-    got = [new_payoffs(x) for x in (pink, passing, drove, alone, far)]
-    return got == [set()] * 5, got
+    # the pink jet again, walked up to first: vehicle "plane" on foot is not in it; an SUV that drives up to a plane is not on foot
+    door = {**lines, 780.0: ("Player approaches pink airplane at airport.", "on_foot", "none")}
+    stairs, _ = made(jet(door), JET_LOOKS + [look(786.0, 790.0, "Player flies a pink airplane.")])
+    parks = {**JET_LINES, 714.0: ("Player's SUV approaches a parked airplane", "driving", "car"),
+             720.0: ("Black SUV approaches plane on airport tarmac", "driving", "car")}
+    parked, _ = made(jet(parks), JET_LOOKS)
+    got = [new_payoffs(x) for x in (pink, passing, drove, alone, far, stairs, parked)]
+    return got == [set()] * 7, got
 
 
 @check
@@ -1693,7 +1703,7 @@ def the_new_payoffs_go_all_the_way_to_a_pick():
     events = [{e["value"] for e in p["evidence"] if e["kind"] == "event"} for p in (g, j)]
     return (g["type"] == "action" and g["point"]["action_payoff"] == ["animal attack"] and g["payoff_strength"]["tier"] == 2
             and "animal attack" in events[0] and "aircraft taken" in events[1] and j["payoff_strength"]["tier"] == 2
-            and not {"animal attack", "aircraft taken"} & set(none) and any("no clear point" in w for r in rejected for w in r["why"])
+            and (g["category"], j["category"]) == ("animal attack", "aircraft taken") and not {"animal attack", "aircraft taken"} & set(none) and any("no clear point" in w for r in rejected for w in r["why"])
             and any("below the minimum" in str((m.get("checked") or {}).get("not_picked")) for m in pool)), (
                 g["type"], g["point"], events, sorted(none), [r["why"] for r in rejected])
 
@@ -1722,8 +1732,9 @@ def a_new_look_is_asked_only_where_the_index_says_it():
 @check
 def an_impact_still_outranks_the_new_payoffs_and_nothing_else_changes():
     """payoff_strength: a crash with an attack in it stays 3/3 "impact"; an attack or an aircraft alone is 2/3; a star rise with police
-    2/3, without 1/3, a chase 1/3, as before; the impact kinds are the same three. A recording with no animal and no aircraft gives
-    moments with no payoff_events and no new key in their terms"""
+    2/3, without 1/3, a chase 1/3, as before; the impact kinds are the same three, and the type is the impact's, else the new payoff's,
+    whatever the category says. A recording with no animal and no aircraft gives moments with no payoff_events and no new key in their
+    terms"""
     s = launch.payoff_strength
     tiers = [s({"terms": t})[0] for t in ({"crash": 1.5, "animal_attack": 1.0}, {"animal_attack": 1.0, "activity": 2.0},
                                           {"aircraft_taken": 1.0, "star_rise": 2.5}, {"star_rise": 2.5, "police": 0.5},
@@ -1731,8 +1742,10 @@ def an_impact_still_outranks_the_new_payoffs_and_nothing_else_changes():
     rec = made_up(lines=crash_at(300), loud={303.0: 2.0})
     ms, _ = made(rec, [look(302.0, 306.0, "Player's car crashes into a wall", crash=True)])
     crash = held(ms, 303)
-    return (tiers == [3, 2, 2, 2, 1, 1, 0] and launch.IMPACT_TERMS == ("crash", "explosion", "stunt") and crash["payoff"]["tier"] == 3
-            and not any("payoff_events" in m or {"animal_attack", "aircraft_taken"} & set(m["terms"]) for m in ms)), tiers
+    types = [launch.moment_type({"terms": t, "category": "star rise"}) for t in ({"crash": 1.5, "animal_attack": 1.0}, {"aircraft_taken": 1.0},
+                                                                                 {"animal_attack": 1.0}, {"star_rise": 2.5})]
+    return (tiers == [3, 2, 2, 2, 1, 1, 0] and types == ["crash", "aircraft taken", "animal attack", "star rise"] and launch.IMPACT_TERMS == ("crash", "explosion", "stunt") and crash["payoff"]["tier"] == 3
+            and not any("payoff_events" in m or {"animal_attack", "aircraft_taken"} & set(m["terms"]) for m in ms)), (tiers, types)
 
 
 @check
