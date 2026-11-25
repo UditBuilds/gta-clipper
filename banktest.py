@@ -1492,7 +1492,7 @@ JET_LINES = {702.0: ("Player drives a black SUV on airport tarmac at dusk.", "dr
              780.0: ("Man runs near airplane and truck on airport tarmac.", "on_foot", "none"),
              786.0: ("Player climbs stairs to a pink airplane at airport.", "on_foot", "plane"),
              792.0: ("Player walks through airport terminal with no visible threats or action.", "on_foot", "none")}
-JET_SEGS = [(0, 645, "driving"), (645, 714, "chase"), (714, 726, "on_foot"), (726, 738, "chase"), (738, 840, "on_foot")]
+JET_SEGS = [(0, 20, "driving"), (20, 30, "shootout"), (30, 645, "driving"), (645, 714, "chase"), (714, 726, "on_foot"), (726, 738, "chase"), (738, 840, "on_foot")]
 IN_JET = look(730.5, 734.5, "Player flies low over airport with aircraft on ground.", subtitles=True)
 JET_LOOKS = [look(722.5, 726.5, "Airport scene with planes and sunset lighting."),
              look(726.5, 730.5, "Airplane flying low over airport runway at dusk.", subtitles=True),

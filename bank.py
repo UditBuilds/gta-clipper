@@ -35,6 +35,9 @@ How a moment is made (code, no model):
      "crash" because a car hit the parked pickup 4 s before the moment's peak, which is a jump off an overpass.
   5. SHELF: "action" (an impact, a shootout, a chase), "proof" (it answers an experiment or shot-list question with
      something on screen), "list" (one short fact).
+  6. An ANIMAL ATTACK or an AIRCRAFT TAKEN in it (payoffs.py, the owner, Nov 25) is a payoff of 2/3 where two checks agree:
+     the index's line and the safety look. It changes no label, no peak and no seconds; a long moment with one is on the
+     action shelf.
 
 STATUS (status_of) comes from _used_footage.json's spans: new; rendered (a Short was made of it and not posted: still
 offered, ranked after new ones); posted (locked); rejected (never offered again). Only posted and rejected footage is
@@ -63,6 +66,7 @@ import heavy
 import index
 import launch
 import library
+import payoffs
 import safety
 import vlm
 
@@ -580,6 +584,29 @@ def look_at(m, answers, checker, work):
     return new, checker.calls - before
 
 
+def looked_at(answers, a, b):
+    """How many of the seconds a..b the saved answers' frames cover."""
+    spans = sorted((max(a, s["from_s"]), min(b, s["to_s"])) for s in answers if s["every_s"] <= 1.0 and s["from_s"] < b and a < s["to_s"])
+    total, end = 0.0, a
+    for x, y in spans:
+        total += max(0.0, y - max(x, end))
+        end = max(end, y)
+    return total
+
+
+def payoff_events(rec, moments, answers, checker, work):
+    """(the recording's animal attacks and taken aircraft that two checks agree on: payoffs.events; how many times the model was
+    asked). Where the index says one and nobody has looked at its seconds, the safety question is asked about them once, if a
+    moment has them: its answer is the second check."""
+    before = checker.calls if checker is not None else 0
+    for a, b in payoffs.need_looks(rec["sheets"], rec["every"]) if checker is not None else []:
+        b = min(b, rec["duration_s"])
+        if looked_at(answers, a, b) < b - a - 0.5 and any(m["start_s"] < b and a < m["end_s"] for m in moments):
+            answers += [{"from_s": s["from_s"], "to_s": s["to_s"], "every_s": 1.0, "answer": s["answer"]}
+                        for s in checker.look(rec["path"], a, b, 1.0, work) if s["answer"]]
+    return payoffs.events(rec["sheets"], rec["every"], answers), (checker.calls - before if checker is not None else 0)
+
+
 SEEN_AS = {"crash": "crash", "explosion": "explosion", "stunt": "stunt", "shooting": "shooting"}
 
 
@@ -691,6 +718,8 @@ def set_label(m, rec, sheets):
     impact = impact_of({"label": label})
     if impact:
         terms[impact] = launch.EVENTS[impact][0]
+    for e in m.get("payoff_events", []):           # an animal attack or an aircraft taken, where two checks agree
+        terms[payoffs.TERM[e["kind"]]] = payoffs.POINTS
     if label["sure"] and label["kind"] in ("stars lost", "heat icons", "star look"):
         terms["hud6"] = 1.0                        # a HUD change, as the topic candidates count it
     if terms.get("activity_label") == "shootout" and not (label["sure"] and label["kind"] == "shooting"):
@@ -700,7 +729,8 @@ def set_label(m, rec, sheets):
         terms.pop("police")
     m["label"], m["terms"] = label, terms
     m["score"] = round(sum(v for v in terms.values() if isinstance(v, (int, float))), 3)
-    m["category"] = impact or (launch.category_of(terms) if m["family"] in ("main", "calm") else m["main"])
+    m["category"] = impact or ((payoffs.kind_of(terms) or launch.category_of(terms)) if m["family"] in ("main", "calm")
+                               else m["main"])
     tier, name, why = launch.payoff_strength(dict(m, point=None))
     m["payoff"] = {"tier": tier, "label": name, "why": why}
     m["subtitles"] = any(s["answer"].get("subtitles") for s in sheets)
@@ -773,13 +803,13 @@ def answers_question(m, qs, rec):
 
 
 def shelf_of(m):
-    """"action" (a clear impact at the peak, a shootout, a chase or loud action that answers no question), "proof" (a
-    question answered on screen, 10 s or more), else "list"."""
+    """"action" (a clear impact at the peak, an animal attack or an aircraft taken, a shootout, a chase or loud action that
+    answers no question), "proof" (a question answered on screen, 10 s or more), else "list"."""
     long = m["end_s"] - m["start_s"] >= MAIN_MIN_S - 1e-6
     kind, sure = m["label"]["kind"], m["label"]["sure"]
     if m["family"] in SMALL and m["family"] != "first look":
         return "list"                              # (the impact next to a reaction or a find is a moment of its own)
-    if long and sure and kind in ("crash", "explosion", "stunt", "fall", "shooting"):
+    if long and (m.get("payoff_events") or sure and kind in ("crash", "explosion", "stunt", "fall", "shooting")):
         return "action"
     if m["family"] == "calm":
         return "list"
@@ -894,10 +924,13 @@ def make_moments(recs, checker=None, cache_dir=None, work=None, shotlist=None, l
         for k, v in out.items():
             left[k] = left.get(k, 0) + v
         answers = saved_answers(cache_dir, rec["stem"])
-        asked = 0
-        for m in found:
-            sheets, c = look_at(m, answers, checker, work)
-            asked += c
+        looked = [look_at(m, answers, checker, work) for m in found]
+        rec["payoff_events"], asked = payoff_events(rec, found, answers, checker, work)
+        asked += sum(c for _, c in looked)
+        for m, (sheets, _) in zip(found, looked):
+            mine = [e for e in rec["payoff_events"] if payoffs.holds(m, e)]
+            if mine:
+                m["payoff_events"] = mine
             why = blocked(m, rec, sheets)
             if why:
                 dropped.append({"id": m["id"], "video": m["video"], "start_s": m["start_s"], "end_s": m["end_s"],
@@ -1042,6 +1075,9 @@ def candidates(moments, recs, spans=None, offered=("new", "rendered")):
                                "category", "peak_s", "shelf", "kinds", "label")}
         p.update(bank_id=m["id"], status=status, span=[round(lo, 2), round(hi, 2)], terms=dict(m["terms"]), session_s=round(
             rec["offset_s"] + (m["start_s"] + m["end_s"]) / 2, 1), questions=m.get("questions", []))
+        if m.get("payoff_events"):                          # launch.evidence reads them from the recording
+            p["payoff_events"] = m["payoff_events"]
+            rec["payoff_events"] = rec.get("payoff_events", []) + [e for e in m["payoff_events"] if e not in rec.get("payoff_events", [])]
         # (the HUD change nearest the peak is where a topic's proof is; launch.anchor reads topic["at_s"])
         topic = topic_of(m)
         if topic:

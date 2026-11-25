@@ -55,6 +55,7 @@ import footage_short
 import heavy
 import index
 import library
+import payoffs
 import safety as safety_checks
 import truth
 import vlm
@@ -769,6 +770,7 @@ def pick_pool(moments, ok, count=3, size=None, log=print, posted=(), text_of=Non
 # moments, a run aims for both an action clip and a topic, and a moment that repeats a topic already posted costs points.
 IMPACT_TERMS = ("crash", "explosion", "stunt")
 PAYOFF_LABELS = {3: "impact", 2: "HUD change with a visible cause", 1: "no single clear event", 0: "quiet"}
+TWO_CHECKS = "an event two checks see"   # ...and the other 2/3 (the owner, Nov 25): an animal attack, an aircraft taken (payoffs.py)
 PER_RECORDING = 2            # picks from one recording, unless nothing else qualifies
 NEAR_DUP_S = 600.0           # two picks of one recording of the same kind closer than this are the same moment twice
                              # (M1 and M5 of the Nov 20 run were 321 s apart and the owner called them near-identical)
@@ -785,13 +787,17 @@ FAILED_SHARE = 0.5           # a moment this much inside a Short that failed its
 
 def payoff_strength(m):
     """(tier 0-3, label, why): how clear and visible a moment's payoff is. 3: an impact (a crash, explosion or stunt
-    its own frames confirmed: verify_terms drops one they don't show); 2: a HUD change with a visible cause (the stars
-    rise with police or a shootout on screen); 1: a HUD change alone, or action with no single event; 0: quiet."""
+    its own frames confirmed: verify_terms drops one they don't show); 2: an animal attack or an aircraft taken that two checks
+    agree on (payoffs.py, the owner, Nov 25), or a HUD change with a visible cause (the stars rise with police or a shootout on
+    screen); 1: a HUD change alone, or action with no single event; 0: quiet."""
     terms = m.get("terms") or {}
     point = (m.get("point") or {}).get("action_payoff") or []
     hits = [k for k in IMPACT_TERMS if terms.get(k) or k in point]
     if hits:
         return 3, PAYOFF_LABELS[3], f"a {hits[0]} seen in its own frames"
+    seen = payoffs.kind_of(terms)
+    if seen:
+        return 2, TWO_CHECKS, payoffs.WHY[seen]
     hud = bool(terms.get("star_rise") or terms.get("hud6") or "star rise" in point)
     cause = (["police"] if terms.get("police") else []) + (["a shootout"] if terms.get("activity_label") == "shootout"
                                                           else [])
@@ -848,11 +854,12 @@ def plain_type(label):
 
 def moment_type(m):
     """The kind of Short a moment makes, in the posted list's words: its impact (crash, explosion, stunt), from its
-    verified terms, its action payoff or its own label, or else the topic it teaches (TOPIC_TYPE, PR 35), or its category
-    (star rise, chase, heat-icons ...)."""
+    verified terms, its action payoff or its own label, or else the animal attack or the aircraft taken in it (payoffs.py), the
+    topic it teaches (TOPIC_TYPE, PR 35), or its category (star rise, chase, heat-icons ...)."""
     terms, point = m.get("terms") or {}, (m.get("point") or {}).get("action_payoff") or []
     hits = [k for k in IMPACT_TERMS if terms.get(k) or any(plain_type(x) == k for x in point)]
     topic = (m.get("topic") or {}).get("id")
+    hits = hits or [k for k in [payoffs.kind_of(terms)] if k]
     return hits[0] if hits else TOPIC_TYPE.get(topic, topic) if topic else plain_type(m.get("category", ""))
 
 
@@ -932,7 +939,7 @@ def can_be(kind, m):
     Short, i.e. a format the quality gate found (which needs a narrated window: the Nov 20 re-pick's M1 had a topic
     but only 17 s of clean footage, so it was made an action clip). Without the gate (older steps' tests), a topic."""
     if kind == "action":
-        return payoff_strength(m)[0] == 3
+        return payoff_strength(m)[0] == 3 or payoffs.kind_of(m.get("terms")) is not None
     if m.get("point") is not None:
         return bool(m["point"].get("formats"))
     return bool(m.get("topic"))
@@ -1102,7 +1109,8 @@ def evidence(rec, a, b, verified=None):
       activity  an index segment's label (chase, shootout, driving ...), with its length in seconds
       stars     a wanted-star rise (HUD, the exact half second) or the stars showing (HUD count); never in NO-HUD mode
       police    police seen by the model
-      event     crash, explosion, stunt or character, from a notable line
+      event     crash, explosion, stunt or character, from a notable line; an animal attack or an aircraft taken that two
+                checks agree on (rec["payoff_events"]: bank.make_moments, payoffs.py)
       seen      the model's notable line for one sheet (6 s), word for word"""
     items = []
     check = verified is not None
@@ -1157,6 +1165,11 @@ def evidence(rec, a, b, verified=None):
         if unseen:
             seen_item["not_seen"] = unseen
         items.append(seen_item)
+    for e in rec.get("payoff_events", []):
+        lo, hi = max(a, e["from_s"]), min(b, e["to_s"])
+        if hi - lo >= 1.0:
+            items.append({"kind": "event", "value": e["kind"], "from_s": round(lo, 2), "to_s": round(hi, 2), "numbers": [],
+                          "source": payoffs.source(e), "picture": sheet_picture(rec, e["checks"][0]["from_s"])})
     items.sort(key=lambda e: (e["from_s"], e["kind"]))
     for k, e in enumerate(items, 1):
         e["id"] = f"E{k}"
@@ -1285,7 +1298,8 @@ def type_options(rec, m):
     verified = m.get("verified")
     if act:
         items = evidence(rec, *act, verified=verified)
-        strong = any(terms.get(k) for k in ("crash", "explosion", "stunt")) or terms.get("activity_label") == "shootout"
+        strong = (any(terms.get(k) for k in ("crash", "explosion", "stunt")) or terms.get("activity_label") == "shootout"
+                  or payoffs.kind_of(terms) is not None)
         out["action"] = {"window": list(act), "evidence": items,
                          "fits": bool(strong or terms.get("action", 0) >= ACTION_STRONG),
                          "fit": round(terms.get("action", 0) + sum(terms.get(k, 0) for k in ("crash", "explosion",
@@ -1509,7 +1523,8 @@ def settle_story_types(picks):
             if not (want[other] and chosen):
                 continue
             m["type_why"] = f"changed to {other}: " + ("no format fits a narrated Short" if other == "action" else
-                                                       "an action clip needs a crash, explosion, stunt or star rise")
+                                                       "an action clip needs a crash, explosion, stunt, animal attack, taken "
+                                                       "aircraft or star rise")
             m["type"], m["window"], m["evidence"] = other, chosen["window"], chosen["evidence"]
         if m["type"] == "narrated":
             for f in m["format_options"]:
@@ -1525,8 +1540,8 @@ def settle_story_types(picks):
 def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
     """(passes, why) and m's "format_options", "point" and "mission": the owner's quality gate. A moment passes when a
     narrated Short of it can teach something (a format) or an action clip has a payoff (a crash, explosion or stunt,
-    or a star rise). Mission footage passes only with a payoff that needs no story: a star rise or one of those
-    events."""
+    an animal attack or an aircraft taken, or a star rise). Mission footage passes only with a payoff that needs no story: a star
+    rise or one of those events."""
     opts = type_options(rec, m)
     for k in ("action", "narrated"):           # as choose_types() will: the safety checks' windows
         if k in opts and "safe_options" in m:
@@ -1553,7 +1568,7 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
     payoff = []
     if act:
         payoff = sorted({e["value"] for e in act["evidence"] if e["kind"] == "event"
-                         and e["value"] in ("crash", "explosion", "stunt")}
+                         and e["value"] in (*IMPACT_TERMS, *payoffs.TERM)}
                         | {"star rise" for e in act["evidence"] if e["kind"] == "stars" and "at_s" in e})
     window = (nar or act or {"window": [m["start_s"], m["end_s"]]})["window"]
     m["mission"] = mission_share(m, window) >= MISSION_SHARE
@@ -1561,8 +1576,8 @@ def story_gate(rec, m, game, dry_run, find_compare=None, session_firsts=()):
     if m["mission"]:
         clear = payoff or any(f["format"] == "F2" for f in formats)
         if not clear:
-            return False, ["mission footage with no point that is clear without the story (no star rise, test or "
-                           "crash/explosion/stunt)"]
+            return False, ["mission footage with no point that is clear without the story (no star rise, test, "
+                           "crash/explosion/stunt, animal attack or taken aircraft)"]
     if not formats and not payoff:
         return False, ["no clear point: nothing to teach (no format fits) and no payoff for an action clip"]
     return True, []
@@ -1726,7 +1741,7 @@ def pick_step(recs, recordings, used, posted, safety, folder, game, count, dry_r
             bank.keep_what_the_peak_shows(m)
         verify_terms(recs[m["video"]], m)
         if m.get("bank_id"):                    # ...and is what the moment is about, whatever else is in it
-            m["category"] = bank.impact_of(m) or m["category"]
+            m["category"] = bank.impact_of(m) or payoffs.kind_of(m["terms"]) or m["category"]
         return story_gate(recs[m["video"]], m, game, dry_run, find_compare, firsts)
     log(f"Checking a pool of up to {max(POOL_MIN, min(POOL_MAX, 5 * count))} candidates for {count} Short(s)"
         + (f", {len(posted)} posted topic(s) counted" if posted else "") + "...")
