@@ -60,6 +60,24 @@ The saved bank (Nov 24, 20:38) was written before that night's /launch looked at
 now reads those newer saved looks, and 21 entries get another note in their label (3 of them another kind: `1119-014828-0534` and
 `1119-135610-0893` unsure to a calm activity, `1119-051818-0485` unsure to a find). No payoff, score, shelf or status changes with it.
 
+## Deliberate breaks: 26 of 26 caught
+
+One at a time, in a copy of the repo, each must make banktest fail: any animal agrees with any; two fights are an attack; the seconds
+need not match; the note names a plane instead of the player in it; no note needed; a vehicle called plane is enough; any sheet before
+counts as on foot at it; on foot anywhere; driving up to it; denied attacks; written words; the player attacking it; a man's attack near
+an animal; a moment that starts after it; the tier is 1; the tier is 3; the gate doesn't know it; no evidence item; the type is the star
+rise's; the new term outranks an impact; the proof shelf; never asked about unseen seconds; asked again where answers are saved; no
+points; every moment gets the recording's events; the category is the index's again. The first version of the checks missed 6 of them
+(a vehicle called plane, driving up, written words, the type, the shelf, the category); the cases were added.
+
+## What /launch picks with it (Nov 25, `--count 6`, 0 model calls)
+
+Three crashes (3/3), a false star rise (`1119-135610-0907`, see PR 36), **the gator (2/3, ACTION, "animal attack")** and the runway. Not the
+airliner: `launch.pool_of` keeps 60 s between two candidates of a recording, and the runway moment (`1119-135610-0678`, 40 s earlier,
+11.65 points with its posted-topic cost, rendered and not posted) takes its place in the pool. Nothing was changed for it. For the airliner
+Short the same prepare was run with only that moment offered (every check, the gate, the bar and the types as they are): it passes all of
+them, NARRATED, and a third look agrees ("Player flying low over airport with altitude indicator").
+
 ## Known limits
 
 - The rule reads what a 4B model says. An attack the index's line doesn't name (it names one line every 6 s) is not found.
