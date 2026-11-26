@@ -3510,12 +3510,21 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
         if game_sound and not heard["later"]:
             flags.append(f"SOUND: the game's own sound is in; the speech check heard no swearing "
                          f"({heard['words']} words). Listen once anyway: it can miss mumbled words")
-    if engine == "v4":                        # PR 34: the hook's first words are heard as they were written
-        bad, note = first_words_check(out / "short.mp4", short["lines"][0].get("say"), log)
-        if bad:
-            entry["problems"] = [bad]
-            return entry
-        flags += [note] if note else []
+    if engine == "v4":                        # PR 34: the hook's first words are heard as they were written; Nov 26: on
+        say = short["lines"][0].get("say")    # the clean voice (that fails the Short), then in the mix (a flag only)
+        clip = hook_voice(out)
+        if clip is None:
+            flags.append("FIRST WORDS: not checked (no clean voice track): listen to the first second before uploading")
+        else:
+            bad, note = first_words_check(clip, say, log)
+            if bad:
+                entry["problems"] = [bad]
+                return entry
+            flags += [note] if note else []
+            mixed, _ = first_words_check(out / "short.mp4", say, log)
+            if mixed:
+                flags.append(f"FIRST WORDS IN THE MIX: {mixed.replace('the hook is misheard: ', '')} (the voice alone is "
+                             "heard right, so music or game sound covers it): listen to the first second")
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
@@ -3534,6 +3543,35 @@ def speech_check(path, log=print, check=None):
     except Exception as e:                      # a broken speech check must not stop the night
         log(f"  Note: the speech check failed ({e}); listen to this Short once")
         return None
+
+
+HOOK_LEAD_S = 0.06          # silence put before line 1 in first_words.wav: with the line's own trimmed lead (0.02 s,
+                            # assemble.LEAD_KEEP_S) the first word starts 0.08 s in, so Whisper hears its start
+
+
+def hook_voice(out_dir, lead_s=HOOK_LEAD_S):
+    """first_words.wav in the Short's folder: voice.wav (the voice alone: no music, game sound or whoosh) from line 1's
+    start to its end (log.json), with lead_s of silence in front. The first-word check listens to this (rule 6, Nov 26:
+    on the mixed Short Whisper misheard "Can", and the airliner's "steal" became "take"). None without voice.wav or
+    log.json."""
+    import wave
+    out_dir = Path(out_dir)
+    run_log = index.read_json(out_dir / "log.json") or {}
+    one = next((x for x in (run_log.get("durations") or {}).get("lines") or [] if x.get("line") == 1), None)
+    if one is None or not (out_dir / "voice.wav").is_file():
+        return None
+    out = out_dir / "first_words.wav"
+    with wave.open(str(out_dir / "voice.wav")) as w:
+        rate, width, channels = w.getframerate(), w.getsampwidth(), w.getnchannels()
+        a, b = round(one["start_s"] * rate), round(one["end_s"] * rate)
+        w.setpos(min(a, w.getnframes()))
+        frames = w.readframes(max(0, b - a))
+    with wave.open(str(out), "wb") as o:
+        o.setnchannels(channels)
+        o.setsampwidth(width)
+        o.setframerate(rate)
+        o.writeframes(b"\x00" * (round(lead_s * rate) * width * channels) + frames)
+    return out
 
 
 def first_words_check(path, say, log=print, listen=None):

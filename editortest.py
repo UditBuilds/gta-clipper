@@ -703,7 +703,7 @@ def the_render_fails_on_the_clean_voice_and_only_flags_the_mix():
     ready, failed = made_again("mixheard", heard=mix_only), made_again("cleanheard", heard=clean_only)
     return (ready["status"] == "READY" and any(f.startswith("FIRST WORDS IN THE MIX") for f in ready["flags"])
             and failed["status"] == "FAILED" and has(failed["problems"], "wash closely")
-            and not has(failed["problems"], "Can anyone"))
+            and not has(failed["problems"], "is heard right"))
 
 
 @check
