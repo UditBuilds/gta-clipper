@@ -1461,6 +1461,58 @@ def an_empty_build_never_replaces_a_full_bank():
     return stopped and same and fresh["moments"] == [], (stopped, same)
 
 
+# --- One Short that locks too much (Nov 26: a hand-made [0.0, 400.0] entry locked 35+ moments of _014828) ---
+
+def long_lock_record():
+    """Six entries: three lock more than 45 s, three don't (overlaps count once; 45 s is not more; rendered is free)."""
+    return {"shorts": [
+        {"name": "big", "spans": [["A", 0.0, 400.0]], "status": "posted"},
+        {"name": "overlapping", "spans": [["A", 500.0, 530.0], ["A", 510.0, 540.0]], "status": "posted"},
+        {"name": "two recordings", "spans": [["A", 600.0, 625.0], ["B", 0.0, 25.0]], "status": "posted"},
+        {"name": "rendered only", "spans": [["A", 0.0, 100.0]], "status": "rendered"},
+        {"name": "no status", "spans": [["C", 0.0, 46.0]]},
+        {"name": "exactly 45", "spans": [["D", 0.0, 20.0], ["D", 30.0, 55.0]], "status": "posted"}]}
+
+
+@check
+def a_short_that_locks_more_than_45_s_is_named():
+    """footage_short.long_locks: the entries whose locked seconds, overlaps counted once and every recording added up,
+    are more than 45 s (a Short is 15-39 s): [0, 400] (400 s), 25 s of two recordings (50 s) and an old entry with no
+    status (locked, 46 s). Not: two overlapping spans (40 s, though they add up to 60), exactly 45 s, or 100 s that were
+    only rendered (free)"""
+    got = footage_short.long_locks(long_lock_record())
+    return got == [("big", 400.0), ("two recordings", 50.0), ("no status", 46.0)], got
+
+
+@check
+def building_the_bank_or_posting_warns_about_a_long_lock():
+    """the warning is printed where the owner sees it: bank.build, bank.py page and bank.py posted (mark_posted) each say
+    WARNING with the entry's name and its seconds; with no long lock they say nothing about it"""
+    with tempfile.TemporaryDirectory() as tmp:
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used=long_lock_record())
+        posted = Path(tmp) / "posted_topics.json"
+        shutil.copyfile(launch.POSTED_FILE, posted)
+        said = []
+        b = bank.build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True), {"topics": []},
+                       hud6=lambda *a, **k: [], log=said.append)
+        built = [s for s in said if s.startswith("WARNING") and "45 s" in s]
+        said.clear()
+        m = next(x for x in b["moments"] if x["main"] == "crash")
+        bank.mark_posted(m["id"], "car into a wall", shorts_dir=shorts, bank_dir=bdir, posted_file=posted, log=said.append,
+                         on="2026-11-24")
+        on_post = [s for s in said if s.startswith("WARNING") and "45 s" in s]
+        said.clear()
+        bank.page_command(bdir, shorts, log=said.append)
+        on_page = [s for s in said if s.startswith("WARNING") and "45 s" in s]
+        index.write_json(shorts / footage_short.USED_FOOTAGE, {"shorts": [long_lock_record()["shorts"][1]]})
+        said.clear()
+        bank.page_command(bdir, shorts, log=said.append)
+        none = [s for s in said if "WARNING" in s]
+    names = all(len(w) == 3 and "'big'" in w[0] and "400" in w[0] and "'two recordings'" in w[1] and "'no status'" in w[2]
+                for w in (built, on_post, on_page))
+    return names and none == [], (built, on_post, on_page, none)
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):
