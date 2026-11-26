@@ -1176,6 +1176,18 @@ def the_spoken_hook_the_card_and_the_title_share_the_key_verb():
 
 
 @check
+def a_key_verb_must_be_a_real_word_not_the_or_this():
+    """the key verb check would pass with "the" or "this" (every hook, card and title has one): a key verb that is a
+    word every line has ("the", "this", "you", "GTA", "can") is refused; "watch", "steal" and "survive" are fine"""
+    plain = [problems_of(short(key_verb=w)) for w in ("the", "This", "you", "GTA", "can")]
+    real = [problems_of(short(key_verb=w, title=f"{w.upper()} this GTA 6 car on the highway",
+                              hooks=[f"{w.title()} this crash", "b", "c"],
+                              lines=[dict(short()["lines"][0], say=f"{w.title()} closely.")] + short()["lines"][1:]))
+            for w in ("watch", "steal", "survive")]
+    return all(has(p, "key_verb:") for p in plain) and not any(has(p, "key_verb:") for p in real)
+
+
+@check
 def the_short_ends_as_the_talking_ends_or_on_the_replay():
     """no dead air at the end: the last word 2.8 s before the end is refused; the fixture's last word ends 0.48 s
     before; an ending on the slow-mo replay is allowed however long after the last word"""

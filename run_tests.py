@@ -65,7 +65,7 @@ SUITES = [
     suite("launchtest", ".venv-tts", 49),
     suite("topictest", ".venv-tts", 24),
     suite("storytest", ".venv-tts", 16),
-    suite("editortest", ".venv-tts", 76),
+    suite("editortest", ".venv-tts", 77),
     suite("explainertest", ".venv-tts", 89),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
