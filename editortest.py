@@ -54,12 +54,12 @@ def short(**over):
          "title": "WATCH this GTA 6 car on the highway",                      # (was "This GTA 6 CRASH came out of nowhere")
          "description": "A car speeds down the road. Then it crashes.",
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
-         "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
+         "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 34.2}],    # Nov 26: no 5.7 s quiet (was to 36.0)
          "lines": [{"say": "Watch closely.", "claim": "hype", "at": 14.0},        # Nov 26: "Watch this." is filler now
                    {"say": "Hold for it.", "claim": "hype", "at": 17.5},          # PR 34: "Wait for it." is filler now
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
-                   {"say": "You just keep going.", "claim": "hype", "at": 34.8}]}  # PR 30: ends the Short (was 30.3)
+                   {"say": "You just keep going.", "claim": "hype", "at": 32.6}]}  # Nov 26: 3.48 s after line 3 (was 34.8)
     s.update(over)
     return s
 
@@ -82,9 +82,10 @@ def has(problems, text):
 
 @check
 def a_good_plan_passes():
-    """the made-up action Short keeps every rule: payoff whole in shot 1, 17 s, lines before their cuts"""
+    """the made-up action Short keeps every rule: payoff whole in shot 1, 15.2 s (17 s until its 5.7 s quiet ending was
+    cut, Nov 26), lines before their cuts"""
     p, problems, _ = cutplan.plan(short(), moment(), secs(short()), 21.0)
-    return not problems and p["total_s"] == 17.0 and len(p["placed"]) == 4 and p["payoff"]["what"]
+    return not problems and abs(p["total_s"] - 15.2) < 1e-6 and len(p["placed"]) == 4 and p["payoff"]["what"]
 
 
 @check
@@ -322,8 +323,8 @@ def an_action_short_may_replay_its_impact_once_right_after_the_payoff():
     p, problems, _ = cutplan.plan(short(replay=dict(REPLAY)), moment(), secs(short()), 21.0)
     shots = [(s["from"], s["to"], s.get("speed", 1.0)) for s in p["shots"]]
     r = p["replay"]
-    return (not problems and shots == [(14.0, 22.5, 1.0), (20.6, 21.4, 0.5), (22.5, 25.0, 1.0), (30.0, 36.0, 1.0)]
-            and abs(p["total_s"] - 18.6) < 1e-6 and (r["start"], r["end"]) == (8.5, 10.1)
+    return (not problems and shots == [(14.0, 22.5, 1.0), (20.6, 21.4, 0.5), (22.5, 25.0, 1.0), (30.0, 34.2, 1.0)]
+            and abs(p["total_s"] - 16.8) < 1e-6 and (r["start"], r["end"]) == (8.5, 10.1)
             and cutplan.to_short(20.0, p["shots"]) == 6.0 and cutplan.to_short(21.0, p["shots"]) == 7.0
             and has(problems_of(short(replay=dict(REPLAY), shots=[{"from": 14.0, "to": 25.0},
                                                                  {"from": 24.0, "to": 31.0}])), "both show"))
@@ -501,7 +502,7 @@ def replay_render():
 @check
 @testkit.full
 def end_to_end_a_v4_short_names_its_payoff():
-    """launch.render with engine v4 on a made-up 40 s recording: READY, 17 s, the payoff named in render.json and on
+    """launch.render with engine v4 on a made-up 40 s recording: READY, 15.2 s, the payoff named in render.json and on
     the review page, every shot once, the voice at 1.2, no word over a cut or over the payoff, the crash sound up"""
     made = plain_render()
     e, log, speeds = made.entry, made.log, made.speeds
@@ -510,16 +511,16 @@ def end_to_end_a_v4_short_names_its_payoff():
     pay = e["payoff"]
     words_ok = all(not (w["start_s"] < c < w["end_s"]) for w in log["word_times"] for c in cuts)
     quiet = all(not (pay["at_s"] < w["start_s"] < pay["at_s"] + 2.5) for w in log["word_times"])
-    return (abs(e["length_s"] - 17.0) < 0.1 and pay["what"] == "the car slams into the wall"
+    return (abs(e["length_s"] - 15.2) < 0.1 and pay["what"] == "the car slams into the wall"
             and "slams into the wall" in page and speeds == [1.2] and words_ok and quiet
-            and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 36.0]]
+            and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 34.2]]
             and (log["game_audio"].get("quiet_lift_db") is not None))
 
 
 @check
 @testkit.full
 def end_to_end_a_v4_short_with_its_replay():
-    """launch.render engine v4 with "replay": READY, 18.6 s, the replay shot made at half speed (48 frames for 0.8 s
+    """launch.render engine v4 with "replay": READY, 16.8 s, the replay shot made at half speed (48 frames for 0.8 s
     of the recording) right after the payoff, its sound slowed, the crash sound up over the payoff and the replay, no
     word over either, the replay in render.json and as a flag that says no ring was drawn, and the used footage
     counted once"""
@@ -529,10 +530,10 @@ def end_to_end_a_v4_short_with_its_replay():
     made = steady.count_frames(play["clip"]) if Path(play["clip"]).is_file() else None
     r = e["replay"]
     silent = all(not (w["start_s"] < r["end"] and w["end_s"] > e["payoff"]["at_s"]) for w in log["word_times"])
-    return (abs(e["length_s"] - 18.6) < 0.1 and play["frames"] == 48 and play["speed"] == 0.5
+    return (abs(e["length_s"] - 16.8) < 0.1 and play["frames"] == 48 and play["speed"] == 0.5
             and (made in (None, 48)) and (r["start"], r["end"]) == (8.5, 10.1) and silent
             and any("No highlight ring" in f for f in e["flags"])
-            and e["shown"] == [["synth", 14.0, 22.5], ["synth", 22.5, 25.0], ["synth", 30.0, 36.0]]
+            and e["shown"] == [["synth", 14.0, 22.5], ["synth", 22.5, 25.0], ["synth", 30.0, 34.2]]
             and log["game_audio"].get("quiet_lift_db") is not None)
 
 
@@ -870,6 +871,92 @@ def the_open_card_is_5_words_at_most_small_and_above_the_action():
             and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
 
 
+# --- 13. The first second and the voice gaps (the owner's rules 3 and 4, Nov 26) ---
+
+@check
+def no_voice_gap_over_3_5_s_but_on_the_payoff_or_the_replay():
+    """rule 4 (the Shorts had 4-8 s with no voice): between two lines at most 3.5 s with no voice, the payoff's seconds
+    and the slow-mo replay left out. The fixture's 4.66 s between lines 2 and 3 is 1.66 + 0.5 s outside its payoff, so
+    it passes, and so does its 3.48 s ending; its old ending (line 4 at 34.8 s in a 17 s Short: 5.68 s) is refused; line 2
+    at 15.0 s leaves 4.16 s before the payoff, refused; with the replay the quiet replay is left out too; 3.5 s passes,
+    3.6 s doesn't"""
+    old = short(shots=[{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
+                lines=short()["lines"][:3] + [dict(short()["lines"][3], at=34.8)])
+    early = short(lines=short()["lines"][:1] + [dict(short()["lines"][1], at=15.0)] + short()["lines"][2:])
+    shots = [{"n": 1, "from": 0.0, "to": 20.0, "start": 0.0, "end": 20.0}]
+    edge = [cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 1.0}, {"line": 2, "start": 1.0 + g, "end": 9.0}],
+                                 shots, None) for g in (3.5, 3.6)]
+    replayed = problems_of(short(replay=dict(REPLAY)))
+    word = "no voice for"
+    return (not has(problems_of(short()), word) and has(problems_of(old), "no voice for 5.7 s between line 3 and line 4")
+            and has(problems_of(early), "no voice for 4.2 s between line 2 and line 3") and not has(replayed, word)
+            and edge[0] == [] and len(edge[1]) == 1)
+
+
+@check
+def a_short_names_the_subject_it_opens_on():
+    """rule 3 (the animal Short opened on empty grass): every Short knows what is on screen at 0:00: the thing its starred
+    hook names, else "subject", else what its payoff names (the fixture: "the car slams ..."). Nothing named is refused;
+    a subject the rules don't know ("a spaceship") is refused; "Which GTA 6 animal ..." names an animal, which, like any
+    subject a hook names, must be in the evidence at shot 1's start"""
+    nothing = dict(payoff={"from": 20.0, "to": 22.5, "what": "he lands hard on the road"})
+    none = problems_of(short(**nothing))
+    given = problems_of(short(**nothing, subject="bike"))
+    unknown = problems_of(short(**nothing, subject="a spaceship"))
+    animal = problems_of(short(hooks=["Which GTA 6 animal takes you DOWN first?", "b", "c"], star=0))
+    return (has(none, "subject:") and not has(given, "subject:") and has(unknown, "subject:")
+            and cutplan.subject_of(short()) == "car" and cutplan.subject_of(short(**nothing, subject="bike")) == "bike"
+            and has(animal, "the hook names 'animal'") and not has(problems_of(short()), "subject:"))
+
+
+class FirstLook(FakeChecker):
+    """The vision model, answering the first-second question with these fields changed."""
+    def __init__(self, **first):
+        self.first, self.asked = first, []
+
+    def frame(self, jpg, meta):
+        answer, error = super().frame(jpg, meta)
+        self.asked.append(meta.get("use"))
+        return (dict(answer, **self.first) if meta.get("use") == "first frame" else answer), error
+
+
+@check
+def the_first_second_must_show_the_subject():
+    """rule 3, on the made shot 1 (its frames at 0.0 and 0.5 s, the vision model's frame question): empty, only the
+    character's back, too dark, or no vehicle when the subject is a car each fail with what it saw; a subject the
+    question has no field for (an animal) passes as a flag to look at 0:00 by hand; through launch.render an empty
+    first second makes the Short FAILED before it is put together"""
+    with tempfile.TemporaryDirectory() as tmp:
+        clip = Path(tmp) / "shot1.mp4"
+        make_video(clip, 2, size="108x192")
+        look = {k: launch.first_frame_check(clip, "car", FirstLook(**{k: True}), tmp)
+                for k in ("empty", "back_only", "dark")}
+        novehicle = launch.first_frame_check(clip, "car", FirstLook(vehicle=False), tmp)
+        fine = launch.first_frame_check(clip, "car", FirstLook(), tmp)
+        animal = launch.first_frame_check(clip, "animal", FirstLook(), tmp)
+        cop = launch.first_frame_check(clip, "police", FirstLook(), tmp)       # FakeChecker sees no police
+
+        def make_shot(video, s, path, grade, log):
+            make_video(path, 12, size="108x192")
+            return {"pieces": []}
+        video = Path(tmp) / "x.webm"
+        folder = run_folder_with(tmp, [moment(video)], [short()])
+        data = launch.render(folder, engine="v4", checker=FirstLook(empty=True), indexes=[made_up_idx("synth", video)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "make_shot": make_shot,
+                                       "light": lambda v, s: __import__("numpy").full((16, 480, 270), 150, "uint8"),
+                                       "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+        e = data["shorts"][0]
+    print(f"       {[(k, v[0]) for k, v in look.items()]}; animal flag {animal[1]}")
+    return (all(len(v[0]) == 1 for v in look.values()) and has(look["empty"][0], "almost nothing to look at")
+            and has(look["back_only"][0], "only the character's back") and has(look["dark"][0], "too dark")
+            and has(novehicle[0], "doesn't show the car") and fine[0] == [] and fine[1] == [] and fine[2]["ok"]
+            and animal[0] == [] and len(animal[1]) == 1 and "look at 0:00" in animal[1][0]
+            and has(cop[0], "doesn't show the police")
+            and e["status"] == "FAILED" and has(e["problems"], "the first second shows almost nothing to look at"))
+
+
 # --- 12. Hooks, the open card and the title (the owner's rules of Nov 26) ---
 
 @check
@@ -950,13 +1037,13 @@ def the_spoken_hook_the_card_and_the_title_share_the_key_verb():
 
 @check
 def the_short_ends_as_the_talking_ends_or_on_the_replay():
-    """no dead air at the end: the last word 4.6 s before the end is refused; the fixture's last word ends 0.08 s
+    """no dead air at the end: the last word 2.8 s before the end is refused; the fixture's last word ends 0.48 s
     before; an ending on the slow-mo replay is allowed however long after the last word"""
     early = short(lines=short()["lines"][:3] + [dict(short()["lines"][3], at=30.3)])
     shots = [{"n": 1, "from": 0.0, "to": 6.0, "start": 0.0, "end": 6.0},
              {"n": 2, "from": 5.0, "to": 5.8, "start": 6.0, "end": 7.6, "speed": 0.5, "replay": True}]
     placed = [{"line": 1, "start": 0.0, "end": 1.0}]
-    return (has(problems_of(early), "goes on 4.6 s after the last word") and not problems_of(short())
+    return (has(problems_of(early), "goes on 2.8 s after the last word") and not problems_of(short())
             and not cutplan.ending_problems(shots, placed)
             and cutplan.ending_problems(shots[:1], placed))
 
@@ -1069,7 +1156,8 @@ def captions_it_cannot_test_are_flagged_never_silent():
                        {"say": "Wait for it.", "claim": "hype", "at": 17.5},
                        {"say": "Yes, you get right back up.", "claim": "on_screen", "evidence": ["E2"], "at": 23.0},
                        {"say": "You just run off like nothing happened.", "claim": "on_screen", "evidence": ["E2"],
-                        "at": 33.9}])
+                        "at": 33.9}],
+                shots=[{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}])     # its own (the fixture's ends at 34.2)
     with tempfile.TemporaryDirectory() as tmp:
         checks, report, bad, flags = v4_captions(tmp, m24)
     page = launch.checks_block({"caption_checks": checks, "captions": report})
@@ -1324,6 +1412,17 @@ def caption_lines_stay_inside_the_safe_area_on_real_pixels():
 
 @check
 @testkit.full
+def a_real_v4_render_looks_at_its_first_second():
+    """plain_render, a whole Short: its checks say what the first second showed (the subject, the car: a vehicle, seen)
+    and the review page has it; no first-frame flag"""
+    made = plain_render()
+    look = made.entry["checks"].get("first_second") or {}
+    return (look.get("subject") == "car" and look.get("field") == "vehicle" and look.get("ok") is True
+            and not any(f.startswith("FIRST FRAME: the vision check") for f in made.entry["flags"]))
+
+
+@check
+@testkit.full
 def a_real_v4_render_counts_its_captions():
     """plain_render, a whole Short: render.json's checks say its 12 captioned words were seen (of 13 words: WATCH is on
     the open card, PR 33; line 1 is "Watch closely." since Nov 26, it was "Watch this." with 2 on the card), each over a
@@ -1487,8 +1586,9 @@ def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
         grades.append((s["n"], bool(s.get("replay")), grade))
         return {"pieces": []}
     with tempfile.TemporaryDirectory() as tmp:
-        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 36.0}], replay={"from": 20.6, "to": 21.4},
-                    lines=short()["lines"][:2] + [{"say": "Hold for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
+        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 35.0}], replay={"from": 20.6, "to": 21.4},
+                    lines=short()["lines"][:2] + [{"say": "Hold for it.", "claim": "hype", "at": 30.2},
+                                                  dict(short()["lines"][3], at=33.4)])   # Nov 26: no quiet ending
         folder = run_folder_with(tmp, [moment(Path(tmp) / "x.webm")], [one])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", Path(tmp) / "x.webm")],
                              facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
