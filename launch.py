@@ -1850,6 +1850,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     log(heavy.ram_line() + " (before the safety checks)")
     t = time.perf_counter()
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
+    if not dry_run:
+        footage_short.warn_long_locks(shorts_dir, lambda w: log("  " + w))
     posted = load_posted(posted_file, log=log)
     recs, offset = {}, 0.0
     for v in recordings if not use_bank else []:

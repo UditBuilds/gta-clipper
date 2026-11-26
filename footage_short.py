@@ -417,6 +417,37 @@ def locked(entry):
     return entry.get("status") != "rendered"
 
 
+LOCK_WARN_S = 45.0          # one Short is 15-39 s: an entry that locks more than this is a mistake until shown otherwise
+                            # (Nov 26: a hand-made [0.0, 400.0] for the cops Short locked 35+ bank moments of _014828)
+
+
+def locked_seconds(entry):
+    """The seconds an entry's spans cover, overlaps counted once, every recording added up."""
+    total = 0.0
+    for video in {s[0] for s in entry.get("spans", [])}:
+        end = None
+        for a, b in sorted((float(s[1]), float(s[2])) for s in entry["spans"] if s[0] == video):
+            total += max(0.0, b - (a if end is None else max(a, end)))
+            end = b if end is None else max(end, b)
+    return round(total, 3)
+
+
+def long_locks(used, limit=LOCK_WARN_S):
+    """[(name, seconds)] of the locked entries (locked()) that lock more than `limit` seconds, in the file's order."""
+    return [(s.get("name"), locked_seconds(s)) for s in used.get("shorts", [])
+            if locked(s) and locked_seconds(s) > limit + 1e-6]
+
+
+def warn_long_locks(shorts_dir, log=print):
+    """Says WARNING for every entry of _used_footage.json that locks more than LOCK_WARN_S. Returns the warnings."""
+    out = [f"WARNING: {name!r} locks {sec:.0f} s of footage in {USED_FOOTAGE}, more than {LOCK_WARN_S:g} s (one Short is "
+           "15-39 s): put its real spans there (what it showed), or the bank keeps that footage locked"
+           for name, sec in long_locks(load_used(shorts_dir))]
+    for w in out:
+        log(w)
+    return out
+
+
 def save_used(shorts_dir, name, spans, status=None):
     """The footage a Short showed. status "rendered": made, not posted (bank.py posted locks it). Rendering a Short that
     was posted again keeps it posted, with the footage it was posted with."""
