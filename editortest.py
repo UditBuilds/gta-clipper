@@ -50,10 +50,12 @@ def short(**over):
     s = {"short": 1, "moment": "M1", "type": "action", "format": "A1", "format_why": "a crash: setup, then the hit",
          "payoff": {"from": 20.0, "to": 22.5, "what": "the car slams into the wall"},
          "hooks": ["Watch this crash", "This crash came fast", "Wait for the crash"], "star": 0,
-         "title": "This GTA 6 CRASH came out of nowhere", "description": "A car speeds down the road. Then it crashes.",
+         "key_verb": "watch",                                                 # Nov 26: the hook, card and title share it
+         "title": "WATCH this GTA 6 car on the highway",                      # (was "This GTA 6 CRASH came out of nowhere")
+         "description": "A car speeds down the road. Then it crashes.",
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
          "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
-         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.0},           # PR 30: on frame 0 (was 14.3)
+         "lines": [{"say": "Watch closely.", "claim": "hype", "at": 14.0},        # Nov 26: "Watch this." is filler now
                    {"say": "Hold for it.", "claim": "hype", "at": 17.5},          # PR 34: "Wait for it." is filler now
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
@@ -621,10 +623,11 @@ def only_the_first_two_seconds_are_transcribed_for_it():
 @check
 @testkit.full
 def a_short_whose_hook_is_misheard_fails_and_one_heard_right_is_ready():
-    """PR 34, through launch.render: line 1 is "Watch this."; heard as "Wash this" the Short is FAILED with both named and
-    keeps its metadata; heard right it is READY (the shots and the finished Short are plain_render's, copied in)"""
-    bad, good = made_again("misheard", heard=["Wash", "this."]), made_again("heard", heard=["watch", "This"])
-    return (bad["status"] == "FAILED" and has(bad["problems"], "watch this") and has(bad["problems"], "wash this")
+    """PR 34, through launch.render: line 1 is "Watch closely." (it was "Watch this.", filler since Nov 26); heard as
+    "Wash closely" the Short is FAILED with both named and keeps its metadata; heard right it is READY (the shots and
+    the finished Short are plain_render's, copied in)"""
+    bad, good = made_again("misheard", heard=["Wash", "closely."]), made_again("heard", heard=["watch", "Closely"])
+    return (bad["status"] == "FAILED" and has(bad["problems"], "watch closely") and has(bad["problems"], "wash closely")
             and bad.get("moment") == "M1" and bad.get("folder") and good["status"] == "READY")
 
 
@@ -790,6 +793,84 @@ def the_open_card_is_5_words_at_most_small_and_above_the_action():
             and lines == "WATCH THE OVERPASS|RAILING"
             and all(380 <= y <= 655 for _, y in pos) and size and max(size) <= assemble.CARD_SIZE
             and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
+
+
+# --- 12. Hooks, the open card and the title (the owner's rules of Nov 26) ---
+
+@check
+def a_trailing_in_gta_6_comes_off_the_card_before_a_question_mark_too():
+    """rule 7: the open card leaves out a trailing "in GTA 6" before "?" as it does before "." or "!" ("Can you survive
+    this bridge in GTA 6?" made a 7-word card, so it was refused); "GTA 6" in the middle stays, and so does a card given
+    by hand"""
+    def card(h):
+        return cutplan.card_words(short(hooks=[h, "b", "c"], star=0))
+    return (card("Can you survive this bridge in GTA 6?") == "Can you survive this bridge?"
+            and card("Can you STEAL this in GTA VI?!") == "Can you STEAL this?!"
+            and card("Watch the black SUV in GTA 6") == "Watch the black SUV"
+            and card("Which GTA 6 animal takes you DOWN first?") == "Which GTA 6 animal takes you DOWN first?"
+            and cutplan.card_words(short(open_card="Steal it in GTA 6?")) == "Steal it in GTA 6?"
+            and not has(problems_of(short(hooks=["Can you survive this bridge in GTA 6?", "b", "c"], star=0)), "7 words"))
+
+
+@check
+def filler_hooks_are_refused_and_named_hooks_are_not():
+    """rule 2: no filler in a hook, the open card, the title or a line: "Watch this.", "Watch this!", "Watch this, you're
+    flying through traffic." and "Wait for it" (the 1.2K bike Short opened "Watch this. Wait for it.") are refused
+    wherever they are; "Watch this crash", "Watch the black SUV", "Watch this car go" and "Wait for the cops" name
+    something to watch and pass"""
+    def hit(**over):
+        return has(problems_of(short(**over)), "is filler")
+
+    def line(say):
+        return has(truth.story_problems(short(lines=[{"say": say, "claim": "hype", "at": 14.0}]), moment(), FACTS, "v4"),
+                   "is filler")
+    bad = [hit(hooks=["Watch this. Wait for it.", "b", "c"]), hit(hooks=["Watch this crash", "Watch this!", "c"]),
+           hit(open_card="Wait for it"), hit(title="WATCH this, GTA 6 traffic is wild"), line("Watch this."),
+           line("Watch this, you're flying through traffic."), line("Okay, watch this")]
+    good = [hit(hooks=["Watch this crash", "Watch the black SUV", "Watch this car go"]),
+            hit(hooks=["Wait for the cops", "b", "c"]), line("Watch this car go."), line("Watch the black SUV.")]
+    print(f"       refused {bad}; passed {[not g for g in good]}")
+    return all(bad) and not any(good)
+
+
+@check
+def a_question_hook_needs_its_stakes_on_screen_at_frame_0():
+    """rule 2: a hook is a statement or a command; a question only when the stakes are readable at frame 0. The starred
+    hook asking with no "stakes_at_0" is refused, and so is line 1 asking; "stakes_at_0" passes when its evidence covers
+    shot 1's start (E1, driving, 10-40 s) and it says why in 3+ words; E2 (the crash, 20-23 s), an id the moment hasn't,
+    or a one-word why are refused; a statement needs nothing"""
+    q = dict(hooks=["Can you stop this car?", "b", "c"], star=0)
+    none = problems_of(short(**q))
+    ok = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "the car is already racing down the road"}))
+    late = problems_of(short(**q, stakes_at_0={"evidence": ["E2"], "why": "the crash comes soon"}))
+    unknown = problems_of(short(**q, stakes_at_0={"evidence": ["E9"], "why": "the car is racing"}))
+    terse = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "car"}))
+    spoken = problems_of(short(lines=[dict(short()["lines"][0], say="Watch it go?")] + short()["lines"][1:]))
+    word = "is a question"
+    return (has(none, word) and not has(ok, word) and has(late, word) and has(unknown, word) and has(terse, word)
+            and has(spoken, word) and not has(problems_of(short()), word))
+
+
+@check
+def the_spoken_hook_the_card_and_the_title_share_the_key_verb():
+    """rules 2 and 8 (the airliner Short: its title said STEAL, its voice "take", 1.2K views): "key_verb" is said by line
+    1, the open card and the title, in any form (steal, stealing); where it isn't, that place is named; no key_verb is
+    refused; the fixture's (watch) passes"""
+    air = dict(key_verb="steal", title="Can you STEAL this GTA 6 airliner?", hooks=["Steal this airliner", "b", "c"],
+               star=0)
+
+    def with_line(say, **over):
+        return problems_of(short(**dict(air, **over), lines=[dict(short()["lines"][0], say=say)] + short()["lines"][1:]))
+    took = with_line("Take this airliner.")
+    said = with_line("Stealing an airliner.")
+    card = with_line("Steal this airliner.", open_card="Take the airliner")
+    title = with_line("Steal this airliner.", title="Can you TAKE this GTA 6 airliner?")
+    none = problems_of(short(key_verb=None))
+    k = "the key verb"
+    return (has(took, "line 1 (the spoken hook) doesn't say the key verb \"steal\"") and not has(said, k)
+            and has(card, "the open card doesn't say the key verb") and not has(card, "line 1 (the spoken hook)")
+            and has(title, "the title doesn't say the key verb") and has(none, "key_verb:")
+            and not has(problems_of(short()), k) and not has(problems_of(short()), "key_verb"))
 
 
 @check

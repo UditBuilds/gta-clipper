@@ -2345,6 +2345,44 @@ def beat_example_scripts_read():
             and all("beat" not in v for v in shots(old)) and old["end_pill"] is None and len(shots(old)) == 23)
 
 
+@check
+def an_end_pill_names_the_channels_real_handle():
+    """rule 8 (Nov 26): the channel is @NeonGetawayYT, and some end cards said @NeonGetaway. A pill that names any other
+    @handle is refused by explainer and by edit2, the right handle named; @NeonGetawayYT and a pill with no handle ("TEST
+    ONLY ...") pass; /launch's own pill, every example script and the commands' examples say @NeonGetawayYT"""
+    import edit2
+    import launch
+    assets()
+
+    def problems(pill):
+        try:
+            ex.load_script(write_script("handle.json", title="Handle", end_pill=pill,
+                                        lines=[{"say": "One two three.", "visuals": ["shot.png"]}]), ROOT)
+            return ""
+        except ex.ScriptError as e:
+            return str(e)
+
+    def v2(pill):
+        raw = json.loads((HERE / "examples" / "s4_sample.json").read_text(encoding="utf-8"))
+        raw["end_pill"] = pill
+        try:
+            edit2.load(raw)
+            return ""
+        except edit2.EditError as e:
+            return str(e)
+    wrong, right = problems("@NeonGetaway • Subscribe"), problems("@NeonGetawayYT • Subscribe")
+    plain, other = problems("TEST ONLY • not for posting"), problems("@SomeoneElse • Subscribe")
+    v2_wrong = v2("@NeonGetaway • Subscribe")
+    files = [*(HERE / "examples").rglob("*.json"), *(HERE / ".claude" / "commands").glob("*.md"), HERE / "launch.py",
+             HERE / "explainer.py", HERE / "edit2.py"]
+    stale = [f.name for f in files if re.search(r"@NeonGetaway(?!YT)", f.read_text(encoding="utf-8"))]
+    print(f"       wrong: {wrong[-120:]!r}; files still naming @NeonGetaway: {stale}")
+    return ("@NeonGetawayYT" in wrong and "@NeonGetaway " in wrong and right == "" and plain == ""
+            and "@SomeoneElse" in other and "the channel is @NeonGetawayYT" in v2_wrong
+            and "the channel is" not in v2("@NeonGetawayYT • Subscribe")
+            and launch.END_PILL == "@NeonGetawayYT • Subscribe" and stale == [])
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ok = True
