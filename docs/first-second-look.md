@@ -82,3 +82,45 @@ render (`launch-2026-11-26`) captioned NO alone; it is left as it was, not poste
 - The game's crash camera on the red pickup (347.0-351.5 s) is marked a cutscene by the index ("hud: no minimap"), so the
   Short shows the hit on the chase camera, then in slow motion, and skips the crash camera. Not changed (a known class of
   false cutscenes, PR 36).
+
+## The outside reviews' claims, checked (file:line on main fecbb83)
+
+| claim | verdict | where |
+|---|---|---|
+| captions render flat yellow, one word a line | confirmed | explainer.py:1887-1912 (`colour ... HIGHLIGHT` :1908), called from assemble.py:183 |
+| 80 % of winning Shorts open with a statement; mine mostly with questions | first half not checkable here; second partly confirmed | of the 9 posted Shorts whose first line I could read, 5 open with a question (all of the last 3), 4 with a statement or command |
+| 4-8 s voice gaps | confirmed raw, but each sits on the silent payoff + replay | airliner 5.71 s, animal 7.79 s, overpass 6.2 s (log.json); outside the payoff/replay the longest is 3.25 s |
+| render_v4 has no punch-in zoom | confirmed | steady.py:23 (`ZOOM = 1.05`, fixed), :82-95 (one fixed window) |
+| the first-word check runs on the mixed short.mp4 and misheard "Can" (steal -> take) | confirmed | launch.py:3512, speech.py:92-94 (first 2 s); launch-2026-11-25-part3-a2 render.json: "and anyone steal"; nov25-watch-list.txt:8 |
+| the "Can anyone ..." advice is misleading | confirmed | speech.py:111, printed in the very failure where "Can anyone" was misheard |
+| card_words ignores "?" | confirmed | cutplan.py:421 (`[.!]*`) |
+| a manual [0.0, 400.0] locks 35+ bank moments | partly: the entry is real, it locked 27 | _used_footage.json:83-90 (before; backup 20261126-120910) |
+| titles stack hashtags | refuted | make_short.py:82-83 refuses "#" in a title (truth.py:265 for /launch); make_short.py:156-159 puts the tags on their own line under the description; no posted upload.txt has one |
+| some end cards show @NeonGetaway | confirmed | launch.py:2058, explainer.py:809, examples/*.json, .claude/commands/new-short.md:52, footage-short.md:45 |
+| slow-mo replay only for action Shorts | confirmed (rule 5) | cutplan.py:171; launch.py:3283 and :3386 |
+| a whoosh on the cut into the replay | confirmed | assemble.py:198 |
+
+## What the checks guarantee, and what they don't
+
+- `key_verb`: the word or a regular form of it (steal, steals, stealing; irregular ones like "stole" don't count) is
+  in line 1, the open card and the title. A word every line has ("the", "this", "you", "GTA", "can") is refused. Whether
+  it is the *key* verb is the writer's choice.
+- `stakes_at_0`: declared, not seen. Code checks the cited evidence covers shot 1's start and a why is written; the vision
+  model doesn't judge whether the stakes are readable.
+- First second: 2 frames (0.0, 0.5 s) through frame_v1's fields. It catches empty, back-only, too dark and a missing
+  vehicle/police/street/water. It can't tell walking or running on a busy street, and an animal is only a flag.
+- Punch-in: on the middle of the picture. A subject at the side can be cut off at 1.2 (today's Short: the white sedan at
+  the right edge, 9.4-12.4 s).
+- Gap rule: between lines only. Before line 1 (by 0.2 s) and after the last line (0.5 s) were already rules.
+- Captions: a line never shows a card word while the card is up; widths are fitted by measuring with libass.
+
+## Noticed, not fixed
+
+- The game's crash camera hides the minimap, so the index calls it a cutscene ("hud: no minimap", never_use): today's
+  red-pickup crash camera (_025552, 347.0-351.5 s) can't be used. A false cutscene of the PR 36 kind.
+- `render_one` runs the twice-a-second first-7-s check (blood, subtitle swearing) only when `start_s` is set: a Short
+  whose shot 1 starts later than its moment's window gets only prepare's once-a-second look there. Run by hand for today's
+  Short (336.5-343.5 s): nothing.
+- FIRST WORDS IN THE MIX on today's Short: the voice alone is heard "watch the red pickup", the mix "watch the room".
+- explainer.py's own captions (/new-short, /footage-short) are still one yellow word at a time: rule 1 was built for /launch.
+- The proof moments above the payoff bar all repeat the posted star topics, so today's options are all action.

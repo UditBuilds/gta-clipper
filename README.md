@@ -1208,15 +1208,15 @@ Every claim was checked in the code first; what each change guarantees, and the 
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 38): `--full` | 628 | 8.7 min |
-| now: `--quick` | 549 | 2.0 min |
-| now: `--ci` (here; GitHub's Windows machine runs the same) | 534 | about 2 min |
+| now (PR 38): `--full` | 629 | 8.8 min |
+| now: `--quick` | 550 | 2.0 min |
+| now: `--ci`, on GitHub's Windows machine | 535 | 3.3 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
 | explainertest | `.venv-tts` | 89 | 55 | 52 | 1396 s | 154 s |
 | hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 70 s |
-| editortest | `.venv-tts` | 76 | 66 | 66 | 715 s | 139 s |
+| editortest | `.venv-tts` | 77 | 67 | 67 | 715 s | 139 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
 | launchtest | `.venv-tts` | 49 | 48 | 48 | 196 s | 28 s |
