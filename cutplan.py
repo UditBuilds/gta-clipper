@@ -69,7 +69,8 @@ SUBJECTS = {"suv": ("suv", "suvs"), "car": ("car", "cars", "sedan", "sports car"
             "helicopter": ("helicopter", "chopper", "heli"), "plane": ("plane", "jet", "airplane"),
             "police": ("cop", "cops", "police", "officer", "officers", "cruiser", "patrol car"),
             "bridge": ("bridge", "overpass"), "highway": ("highway", "freeway", "interstate"),
-            "beach": ("beach",), "train": ("train",), "gator": ("gator", "alligator", "crocodile")}
+            "beach": ("beach",), "train": ("train",), "gator": ("gator", "alligator", "crocodile"),
+            "animal": ("animal", "animals", "wildlife", "boar", "deer", "dog", "horse", "cow")}   # Nov 26 (rule 3)
 FRAME0_S = 0.05                           # "frame 0": the evidence covers shot 1's start within this
 
 
@@ -587,6 +588,57 @@ def frame0_problems(short, shots, evidence):
             f"({t:.2f} s): start shot 1 where it is seen, or name what is on screen there"]
 
 
+def subject_of(short):
+    """What is on screen at 0:00 (rule 3, Nov 26: the animal Short opened on empty grass): the first of SUBJECTS the
+    starred hook names, else "subject", else what the payoff names. None when nothing names one."""
+    hooks, star = short.get("hooks") or [], short.get("star")
+    starred = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else ""
+    pay = short.get("payoff") if isinstance(short.get("payoff"), dict) else {}
+    for text in (starred, short.get("subject"), pay.get("what")):
+        names = named_subjects(text)
+        if names:
+            return names[0]
+    return None
+
+
+def subject_problems(short):
+    given = short.get("subject")
+    if given is not None and not named_subjects(given):
+        return [f"subject: {given!r} is none of the things the first-second check knows ({', '.join(SUBJECTS)})"]
+    if subject_of(short) is None:
+        return ['subject: name what is on screen at 0:00 ("subject": a car, a truck, a bike, the police, an animal ...): '
+                "the first second shows it, never walking, running or empty scenery"]
+    return []
+
+
+MAX_GAP_S = 3.5                           # rule 4 (Nov 26: the Shorts had 4-8 s with no voice)
+
+
+def gap_problems(placed, shots, payoff):
+    """Rule 4: between two lines at most MAX_GAP_S with no voice, the payoff's seconds and the slow-mo replay left out
+    (the game's sound plays them)."""
+    free = []
+    if payoff:
+        a, b = to_short(payoff["from"], shots), to_short(payoff["to"], shots)
+        if a is not None and b is not None:
+            free.append((a, b))
+    play = replay_shot(shots)
+    if play:
+        free.append((play["start"], play["end"]))
+    out = []
+    for one, two in zip(placed, placed[1:]):
+        pieces = [(one["end"], two["start"])]
+        for x, y in free:
+            pieces = [q for p0, p1 in pieces for q in ([(p0, p1)] if p1 <= x or p0 >= y else
+                                                         [(p0, min(p1, x)), (max(p0, y), p1)])]
+        longest = max([p1 - p0 for p0, p1 in pieces] or [0.0])
+        if longest > MAX_GAP_S + 1e-6:
+            out.append(f"no voice for {longest:.1f} s between line {one['line']} and line {two['line']} "
+                       f"({one['end']:.1f}-{two['start']:.1f} s; the payoff and the replay don't count): at most "
+                       f"{MAX_GAP_S:g} s. Add a line, or say one sooner")
+    return out
+
+
 HUD_KINDS = ("stars", "heat", "star_look")  # HUD readings: measured twice a second, so their edges are real moments
 
 
@@ -651,6 +703,7 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
         problems += hook_problems(short, shots, hud_words)
         problems += frame0_problems(short, shots, moment.get("evidence"))
     problems += hook_text_problems(short) + hook_rule_problems(short, shots, moment.get("evidence"))
+    problems += subject_problems(short)
     lines = short.get("lines") or []
     more, style_flags = style_problems(lines)
     problems += more
@@ -663,6 +716,7 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
         problems += cut_problems(shots, placed, events_of(moment, payoff, camera_cuts))
         if len(placed) == len(lines):
             problems += first_seconds_problems(placed) + ending_problems(shots, placed)
+            problems += gap_problems(placed, shots, payoff)
     play = replay_shot(shots)
     return ({"payoff": payoff, "shots": shots, "placed": placed, "total_s": shots[-1]["end"] if shots else 0.0,
              "replay": dict(replay, start=play["start"], end=play["end"]) if play else None},

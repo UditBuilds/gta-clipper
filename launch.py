@@ -3213,6 +3213,42 @@ def render_v3(short, m, out_dir, facts, today, indexes, used=(), log=print, timi
             "shown": [list(x) for x in used_spans], "engine": "v3", "game_sound": sound, "checks": checks}
 
 
+# Rule 3 (Nov 26: the animal Short, 203 views, opened on empty grass; the overpass jump, 20.7K, showed the stakes at
+# 0:00): the first second shows the subject, never walking, running or empty scenery. The frame question's field for
+# each subject (prompts/frame_v1.txt); one it has none for (an animal, a gator) is a flag to look by hand.
+FIRST_SECOND_AT = (0.0, 0.5)                 # s into shot 1: what the viewer sees before the first second is over
+FIRST_SECOND_FIELD = {"suv": "vehicle", "car": "vehicle", "truck": "vehicle", "bike": "vehicle", "bus": "vehicle",
+                      "boat": "vehicle", "helicopter": "vehicle", "plane": "vehicle", "train": "vehicle",
+                      "police": "police", "bridge": "street", "highway": "street", "beach": "water"}
+
+
+def first_frame_check(clip, subject, checker, out_dir, inset=False):
+    """(problems, flags, look) for shot 1's first second (its frames at FIRST_SECOND_AT, the HUD inset blurred out):
+    empty, only the character's back or too dark fails; so does a subject whose field the vision model doesn't see.
+    look: what goes in checks.json."""
+    import proof
+    field = FIRST_SECOND_FIELD.get(subject)
+    jpg = frame_jpeg(clip, list(FIRST_SECOND_AT), Path(out_dir) / "checks" / "first_second.jpg",
+                     hide=proof.inset_screen_rect() if inset else None)
+    answer, error = (checker.frame(jpg, {"clip": Path(clip).name, "at": list(FIRST_SECOND_AT), "use": "first frame"})
+                     if jpg else (None, "no frame"))
+    look = {"subject": subject, "field": field, "note": (answer or {}).get("note"), "ok": False}
+    if answer is None:
+        return [f"the first second: the vision model couldn't judge it ({error})"], [], look
+    problems = [f"the first second shows {text} (vision model: \"{answer.get('note')}\"): open on the {subject}"
+                for key, text in (("empty", "almost nothing to look at"), ("back_only", "only the character's back"),
+                                  ("dark", "a picture too dark to see")) if answer.get(key)]
+    flags = []
+    if field is None:
+        flags.append(f"FIRST FRAME: the vision check has no question for the {subject}: look at 0:00 yourself that it is "
+                     f"on screen (it saw: \"{answer.get('note')}\")")
+    elif not answer.get(field):
+        problems.append(f"the first second doesn't show the {subject} (the vision model sees no {field}: "
+                        f"\"{answer.get('note')}\"): start shot 1 where it is on screen")
+    look["ok"] = not problems
+    return problems, flags, look
+
+
 def v4_insets(plan_shots):
     """(insets, problems): each shot's HUD close-up as it will be made, or None. A shot's own "inset": {"zoom":
     "stars" | "tip" | "minimap" | [x, y, w, h], "box": "stars" | "icons", "start": s into the shot, "length": 0.5-2 s}."""
@@ -3362,8 +3398,11 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     cplan = [[{"clip": s["clip"], "video": m["video"], "from_s": s["from"], "inset": ins}]
              for s, ins in zip(plan["shots"], insets)]
     times = {"lines": [[s["frames"] / cutplan.FPS] for s in plan["shots"]]}
+    first_problems, first_flags, first_second = first_frame_check(plan["shots"][0]["clip"], cutplan.subject_of(short),
+                                                                  checker, out_dir, bool(insets[0]))
     more, rejected, bflags = beat_checks(cplan, times, out_dir, checker, log, what="shot", max_s=0)
-    flags += bflags
+    more = first_problems + more
+    flags += first_flags + bflags
     pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
     replay = plan.get("replay")
     quiet = (pay_at[0], replay["end"]) if replay else pay_at     # no voice over the payoff and its replay: the game's
@@ -3372,7 +3411,8 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                      f"{replay['start']:.1f}-{replay['end']:.1f} s into the Short, right after the payoff. No highlight "
                      "ring: nothing tracks the object, so a ring can't be placed reliably")
     checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": 1.0,
-              "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "steady": report,
+              "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "first_second": first_second,
+              "steady": report,
               "replay": replay,
               "lines": plan["placed"], "camera_cuts": cams,
               "cuts": cutplan.cut_reasons(plan["shots"], plan["placed"], cutplan.events_of(m, pay, cams))}
