@@ -33,6 +33,9 @@ LINE_SIZE, LINE_OUTLINE, LINE_SHADOW = 120, 12, 6
 LINE_WORDS = 3                # the most a line
 LINE_UNITS = 13.5             # explainer.text_width units that fit the safe width at LINE_SIZE (measured: 57 px a unit;
                               # 13.5 is 770 px, under the 797 px left at the pop's peak with the outline and shadow)
+LINE_UNITS_MAX = 17.0         # a line up to this is drawn smaller to fit (down to about 80 %), rather than leave a word
+                              # alone: "No slowing down." (13.9) was NO for 0.2 s, then SLOWING DOWN (Nov 26)
+WIDE_COST = 4                 # what a line wider than LINE_UNITS costs; a word alone costs 25
 LINE_Y = ex.WORD_Y            # the middle of the capitals: 1260, as the word captions
 YELLOW, CYAN = ex.HIGHLIGHT, ex.COLOURS["green"]
 # Words that are never an accent while a line has another (a line of only these takes its longest).
@@ -177,8 +180,8 @@ def bare(text):
 
 def caption_lines(words, hidden=(), card_end=None):
     """The caption lines: lists of word indexes, in order. A line never crosses a sentence, a hidden word or the open
-    card's end; inside that, 2-3 words a line that fit LINE_UNITS, the fewest lines, breaking at a comma where it can and
-    not after "the" or "on"; one word only when nothing pairs with it."""
+    card's end; inside that, 2-3 words a line (best within LINE_UNITS, at most LINE_UNITS_MAX, drawn smaller), the fewest
+    lines, breaking at a comma where it can and not after "the" or "on"; one word only when nothing pairs with it."""
     runs, run = [], []
     for i, w in enumerate(words):
         if i in hidden:
@@ -196,9 +199,11 @@ def caption_lines(words, hidden=(), card_end=None):
             options = []
             for j in range(1, min(LINE_WORDS, n - i) + 1):
                 g = run[i:i + j]
-                if j > 1 and ex.text_width(" ".join(words[k]["text"] for k in g)) > LINE_UNITS:
+                width = ex.text_width(" ".join(words[k]["text"] for k in g))
+                if j > 1 and width > LINE_UNITS_MAX:
                     break
                 cost = 10 + (25 if j == 1 and n > 1 else 0) + 15 * sum(words[k]["pause"] for k in g[:-1])
+                cost += WIDE_COST if j > 1 and width > LINE_UNITS else 0
                 if i + j < n and not words[g[-1]]["pause"]:
                     last = bare(words[g[-1]]["text"])
                     cost += 6 if last in ARTICLES else 3 if last in PREPOSITIONS else 0
