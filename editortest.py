@@ -1250,15 +1250,15 @@ def caption_lines_stay_inside_the_safe_area_on_real_pixels():
 @check
 @testkit.full
 def a_real_v4_render_counts_its_captions():
-    """plain_render, a whole Short: render.json's checks say its 11 captions were seen (of 13 words: WATCH THIS is on the
-    open card, PR 33), each over a shot, and the one the check knows was asked about its frame and passed; the review
-    page says so too"""
+    """plain_render, a whole Short: render.json's checks say its 12 captioned words were seen (of 13 words: WATCH is on
+    the open card, PR 33; line 1 is "Watch closely." since Nov 26, it was "Watch this." with 2 on the card), each over a
+    shot, and the one the check knows was asked about its frame and passed; the review page says so too"""
     made = plain_render()
     checks = made.entry["checks"]
-    return (checks["captions"] == {"shown": 11, "over_a_shot": 11, "tested": 1, "unknown_things": [], "on_card": 2}
+    return (checks["captions"] == {"shown": 12, "over_a_shot": 12, "tested": 1, "unknown_things": [], "on_card": 1}
             and len(made.log["word_times"]) == 13 and [c["word"] for c in checks["caption_checks"]] == ["CRASH"]
             and all(c["ok"] for c in checks["caption_checks"])
-            and "11 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
+            and "12 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
 
 
 @check

@@ -216,7 +216,9 @@ def load(source, caption_style=None):
             if visual["kind"] != "video":
                 problems.append("moment: the footage is a video")
     pill = None
-    if raw.get("end_pill"):
+    if raw.get("end_pill") and ex.handle_problem(raw["end_pill"]):
+        problems.append(ex.handle_problem(raw["end_pill"]))
+    elif raw.get("end_pill"):
         pill = {"text": " ".join(str(raw["end_pill"]).split()), "style": "info", "pos": "bottom", "font": ex.PILL_SIZE,
                 "pad": ex.PILL_PAD, "fill": (255, 255, 255), "ink_colour": ex.INK, "border": 0, "shadow": 6,
                 "text_border": 0, "round": 0.5, "y": ex.PILL_Y["bottom"]}

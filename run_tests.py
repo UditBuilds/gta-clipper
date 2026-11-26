@@ -65,8 +65,8 @@ SUITES = [
     suite("launchtest", ".venv-tts", 49),
     suite("topictest", ".venv-tts", 24),
     suite("storytest", ".venv-tts", 16),
-    suite("editortest", ".venv-tts", 60),
-    suite("explainertest", ".venv-tts", 88),
+    suite("editortest", ".venv-tts", 64),
+    suite("explainertest", ".venv-tts", 89),
     suite("selftest", ".venv", 3, ("full",)),                # clip.py on a 3-minute video
 ]
 MINIMUM = {"quick": 511, "ci": 496}      # fewer checks than this in all, and the run fails

@@ -2057,7 +2057,7 @@ def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="aut
 GTA_ROOT = footage_short.make_short.GTA_ROOT
 SHORTS_FILE = "shorts.json"              # in the run folder: what Claude wrote
 RENDER_LOG = "render.json"               # in the run folder: what render made of it
-END_PILL = "@NeonGetaway • Subscribe"
+END_PILL = "@NeonGetawayYT • Subscribe"   # Nov 26: the channel's handle (explainer.HANDLE)
 NARRATED_LENGTH = (20.0, 35.0)
 GAME_LUFS, MUSIC_LUFS = -14.0, -28.0     # an ACTION CLIP: the game's sound (as loud as every Short), the music bed 14 LU under it
 MIX_LIMIT_DB = -1.5                      # the final mix goes through a true-peak limiter at this; the guard wants < -1

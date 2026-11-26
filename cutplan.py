@@ -427,14 +427,14 @@ def spoilers_in(text):
 
 def card_words(short):
     """The open card's words: "open_card" when given, else the starred hook without a trailing "in GTA 6" (the
-    title and the hashtags say GTA 6). None when there is no card."""
+    title and the hashtags say GTA 6), before "?" too (Nov 26: "... in GTA 6?" kept it). None when there is no card."""
     card = short.get("open_card")
     if card:
         return " ".join(str(card).replace("|", " ").split())
     hooks, star = short.get("hooks") or [], short.get("star")
     if not (isinstance(star, int) and 0 <= star < len(hooks)):
         return None
-    return re.sub(r"\s*\b(in\s+)?GTA\s*(6|VI)\s*([.!]*)$", r"\3", str(hooks[star]).strip(), flags=re.IGNORECASE) or None
+    return re.sub(r"\s*\b(in\s+)?GTA\s*(6|VI)\s*([.!?]*)$", r"\3", str(hooks[star]).strip(), flags=re.IGNORECASE) or None
 
 
 def hook_text_problems(short):
@@ -452,6 +452,94 @@ def hook_text_problems(short):
         out.append(f"open card: \"{card}\" has {len(words_of(card))} words; at most {CARD_MAX_WORDS}: write "
                    "\"open_card\" (what to watch, short)")
     return out
+
+
+# The owner's rules of Nov 26 (two outside reviews: 80 % of winning Shorts open with a statement; the overpass jump, 20.7K,
+# asked a question whose stakes showed at 0:00; the bike Short, 1.2K, opened "Watch this. Wait for it."; the airliner,
+# 1.2K, had STEAL in its title and "take" in its voice):
+# - no filler in a hook, the open card, the title or line 1. "Watch this" is filler only where nothing it names follows
+#   ("Watch this.", "Watch this, you're ..."); "Watch this crash" names what to watch.
+HOOK_FILLER = (r"\bwatch\s+this\s*(?=[.!?,;:…]|$)", r"\bwait\s+for\s+it\b", r"\bthat\s+was\s+close\b", r"\bouch\b",
+               r"\blet'?s\s+see\b")
+# - a hook is a statement or a command; a question only when the stakes are readable at frame 0 ("stakes_at_0": the
+#   evidence that shows them at shot 1's start, and why, in a few words);
+STAKES_WHY_WORDS = 3
+# - the spoken hook (line 1), the open card and the title say the same key verb ("key_verb", in any of its forms).
+
+
+def filler_of(text):
+    """The filler a hook, card or title says ("watch this", "wait for it" ...), or None."""
+    low = str(text or "").replace("’", "'")
+    for pat in HOOK_FILLER:
+        hit = re.search(pat, low, re.IGNORECASE)
+        if hit:
+            return " ".join(hit.group(0).split()).lower()
+    return None
+
+
+def is_question(text):
+    return str(text or "").replace("|", " ").strip().endswith("?")
+
+
+def stakes_problems(stakes, shots, evidence):
+    """Why "stakes_at_0" doesn't show the stakes at frame 0 (empty when it does): evidence ids of the moment that cover
+    shot 1's start (within FRAME0_S), and a why of STAKES_WHY_WORDS words or more."""
+    if not isinstance(stakes, dict) or not isinstance(stakes.get("evidence"), list) or not stakes["evidence"]:
+        return ['no "stakes_at_0": {"evidence": ["E1"], "why": "what at 0:00 shows what is at stake"}']
+    out = []
+    if len(words_of(stakes.get("why"))) < STAKES_WHY_WORDS:
+        out.append(f"its \"why\" says in {STAKES_WHY_WORDS}+ words what at 0:00 shows the stakes")
+    if not shots:
+        return out
+    t = shots[0]["from"]
+    by_id = {e.get("id"): e for e in evidence or []}
+    for i in stakes["evidence"]:
+        e = by_id.get(i)
+        if e is None:
+            out.append(f"{i} is not this moment's evidence")
+        elif not (number(e.get("from_s")) and number(e.get("to_s")) and e["from_s"] <= t + FRAME0_S and e["to_s"] >= t):
+            out.append(f"{i} is not on screen at shot 1's start ({t:.2f} s)")
+    return out
+
+
+def key_verb_problems(short):
+    """Line 1 (the spoken hook), the open card and the title each say "key_verb" in one of its forms."""
+    kv = short.get("key_verb")
+    if not isinstance(kv, str) or len(words_of(kv)) != 1:
+        return ['key_verb: the one verb the spoken hook (line 1), the open card and the title all say ("steal", "survive", '
+                '"watch"; the airliner Short\'s title said STEAL and its voice "take")']
+    lines = short.get("lines") or []
+    line1 = lines[0].get("say") if lines and isinstance(lines[0], dict) else None
+    want, out = forms(kv), []
+    for where, text in (("line 1 (the spoken hook)", line1), ("the open card", card_words(short)),
+                        ("the title", short.get("title"))):
+        if not any(w.lower().replace("’", "'") in want for w in words_of(text)):
+            out.append(f"{where} doesn't say the key verb \"{kv}\" ({text!r}): the spoken hook, the open card and the "
+                       "title share it")
+    return out
+
+
+def hook_rule_problems(short, shots, evidence):
+    """Rules 2 and 8 of Nov 26: no filler; a question only with its stakes at frame 0; one key verb."""
+    hooks, star = short.get("hooks") or [], short.get("star")
+    lines = short.get("lines") or []
+    line1 = lines[0].get("say") if lines and isinstance(lines[0], dict) else None
+    out = []
+    texts = [(f"hook {k}", h) for k, h in enumerate(hooks, 1)]
+    texts += [("open card", short.get("open_card")), ("title", short.get("title")), ("line 1", line1)]
+    for where, text in texts:
+        f = filler_of(text)
+        if f:
+            out.append(f"{where}: \"{text}\" is filler (\"{f}\"): name what to watch or what is at stake")
+    starred = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
+    asking = next(((w, t) for w, t in (("the starred hook", starred), ("line 1", line1)) if is_question(t)), None)
+    if asking:
+        why = stakes_problems(short.get("stakes_at_0"), shots, evidence)
+        if why:
+            out.append(f"{asking[0]} is a question ({asking[1]!r}): a hook is a statement or a command, and a question "
+                       "only when the stakes are readable at frame 0 (" + "; ".join(why) + "). Make it a statement, or "
+                       "show the stakes from 0:00")
+    return out + key_verb_problems(short)
 
 
 def subject_terms(name):
@@ -562,7 +650,7 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
         problems += length_problems(shots, kind) + payoff_place_problems(payoff, shots)
         problems += hook_problems(short, shots, hud_words)
         problems += frame0_problems(short, shots, moment.get("evidence"))
-    problems += hook_text_problems(short)
+    problems += hook_text_problems(short) + hook_rule_problems(short, shots, moment.get("evidence"))
     lines = short.get("lines") or []
     more, style_flags = style_problems(lines)
     problems += more
