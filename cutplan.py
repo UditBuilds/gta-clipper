@@ -73,8 +73,24 @@ SUBJECTS = {"suv": ("suv", "suvs"), "car": ("car", "cars", "sedan", "sports car"
 FRAME0_S = 0.05                           # "frame 0": the evidence covers shot 1's start within this
 
 
+NUMBER_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+
+
 def words_of(text):
     return re.findall(r"[A-Za-z0-9'’]+", str(text or ""))
+
+
+def forms(word):
+    """The forms of a word that count as the same word, lower case: steal, steals, stealing, stealed; stop, stops,
+    stopped, stopping; survive, survives, surviving, survived; take, takes, taking, taken."""
+    w = str(word or "").lower().replace("’", "'").strip(".,!?;:\"'()")
+    if not w:
+        return set()
+    stem = w[:-1] if w.endswith("e") else w
+    out = {w, w + "s", w + "es", w + "ed", w + "d", w + "ing", stem + "ing", w + "n", stem + "en"}
+    if len(w) >= 3 and w[-1] not in "aeiouwxy" and w[-2] in "aeiou" and w[-3] not in "aeiou":
+        out |= {w + w[-1] + "ed", w + w[-1] + "ing"}
+    return out
 
 
 def sentences(text):
