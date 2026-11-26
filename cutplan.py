@@ -480,6 +480,9 @@ HOOK_FILLER = (r"\bwatch\s+this\s*(?=[.!?,;:…]|$)", r"\bwait\s+for\s+it\b", r"
 # - a hook is a statement or a command; a question only when the stakes are readable at frame 0 ("stakes_at_0": the
 #   evidence that shows them at shot 1's start, and why, in a few words);
 STAKES_WHY_WORDS = 3
+# Words every hook, card or title has: as a "key_verb" they would pass anywhere, so they are refused.
+NOT_A_KEY_VERB = set("a an the this that these those it its is are was were be you your you're i we he she they can could "
+                     "will would do does did has have had in on at to of for and or but so gta 6 vi".split())
 # - the spoken hook (line 1), the open card and the title say the same key verb ("key_verb", in any of its forms).
 
 
@@ -521,7 +524,7 @@ def stakes_problems(stakes, shots, evidence):
 def key_verb_problems(short):
     """Line 1 (the spoken hook), the open card and the title each say "key_verb" in one of its forms."""
     kv = short.get("key_verb")
-    if not isinstance(kv, str) or len(words_of(kv)) != 1:
+    if not isinstance(kv, str) or len(words_of(kv)) != 1 or kv.strip().lower() in NOT_A_KEY_VERB:
         return ['key_verb: the one verb the spoken hook (line 1), the open card and the title all say ("steal", "survive", '
                 '"watch"; the airliner Short\'s title said STEAL and its voice "take")']
     lines = short.get("lines") or []
