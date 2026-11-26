@@ -1517,6 +1517,22 @@ def captions_are_two_or_three_white_words_with_one_or_two_accents():
 
 
 @check
+def a_short_word_never_flashes_alone_when_its_line_is_a_little_wide():
+    """the first real render (Nov 26) captioned "No slowing down." as NO alone for 0.2 s, then SLOWING DOWN: the opposite
+    of what was said, because the 3 words were a little wider (13.9) than a comfortable line (13.5). A line a little
+    wide is drawn a little smaller instead; a word is alone only when no partner fits even then (here: a 30-letter word)"""
+    import assemble
+    import explainer as ex
+    words, total = line_words([{"say": "No slowing down."}, {"say": "Watch the red pickup."},
+                               {"say": "Supercalifragilisticexpialidocious crash."}])
+    lines = [" ".join(w for w, _ in ws) for _, _, ws, _ in
+             line_events_of(ex.ass_document(assemble.caption_events(words, total, None, keys=["watch"])))]
+    print(f"       captions {lines}")
+    return (lines[0] == "NO SLOWING DOWN" and "NO" not in lines
+            and lines[-2:] == ["SUPERCALIFRAGILISTICEXPIALIDOCIOUS", "CRASH"])
+
+
+@check
 def caption_lines_stay_inside_the_safe_area_on_real_pixels():
     """burnt onto a black 1080x1920 frame at each caption's middle, the ink (outline and shadow in) stays inside x 60-960
     and y 1185-1345, the band the word captions had, even for the widest line; white, yellow and cyan are all there
