@@ -176,17 +176,28 @@ def shots_of(short, window, payoff):
     return shots, problems
 
 
-def replay_of(short, payoff, kind, loudest_s=None):
+IMPACT_EVENTS = ("crash", "stunt", "jump", "fall")    # Nov 26 (rule 5): a Short of one may replay it, even narrated
+
+
+def is_impact(moment):
+    """Whether a moment's evidence has a crash, a stunt, a jump or a fall (an event its frames confirmed)."""
+    return any(e.get("kind") == "event" and str(e.get("value", "")).lower() in IMPACT_EVENTS
+               for e in moment.get("evidence") or [])
+
+
+def replay_of(short, payoff, kind, loudest_s=None, impact=False):
     """(replay, problems). The Short's slow-mo replay of its impact, or None: "replay": {"from": s, "to": s} names the
-    impact itself in the recording. Only in an action Short, only one, inside the payoff, at most
+    impact itself in the recording. Only in an action Short or (Nov 26) a crash or stunt Short typed narrated
+    (impact), only one, inside the payoff, at most
     REPLAY_IMPACT_MAX_S long (a longer impact is not replayed), holding the loudest moment (the hit) give or take
     LOUDEST_SLACK_S. It plays at REPLAY_SPEED for at most REPLAY_MAX_S: an impact over 1 s of the recording shows the
     1 s round the hit."""
     r = short.get("replay")
     if r is None or r is False:
         return None, []
-    if kind != "action":
-        return None, ["replay: only an action Short replays its impact (a narrated Short never shows a second twice)"]
+    if kind != "action" and not impact:
+        return None, ["replay: only an action Short or a crash or stunt Short replays its impact (this one's evidence has "
+                      "no crash, stunt, jump or fall, so it never shows a second twice)"]
     if not isinstance(r, dict) or not (number(r.get("from")) and number(r.get("to"))) or r["to"] <= r["from"]:
         return None, ['replay: {"from": s, "to": s}, the impact itself (one, inside the payoff) in the recording']
     if payoff is None:
@@ -306,6 +317,7 @@ def place_lines(lines, durations, shots, payoff, kind):
     end. In an action Short no line talks over the payoff: the game's own sound plays it."""
     placed, problems, prev_end = [], [], 0.0
     pay = (to_short(payoff["from"], shots), to_short(payoff["to"], shots)) if payoff else (None, None)
+    play = replay_shot(shots)
     for n, (line, dur) in enumerate(zip(lines, durations), 1):
         at = line.get("at")
         where = f"line {n}"
@@ -326,6 +338,9 @@ def place_lines(lines, durations, shots, payoff, kind):
         if kind == "action" and pay[0] is not None and start < pay[1] and end > pay[0]:
             problems.append(f"{where} ({start:.1f}-{end:.1f} s) talks over the payoff ({pay[0]:.1f}-{pay[1]:.1f} s): "
                             "let the game's own sound play it; say it before or after")
+        if play and start < play["end"] - 1e-6 and end > play["start"] + 1e-6:
+            problems.append(f"{where} ({start:.1f}-{end:.1f} s) talks over the slow-mo replay ({play['start']:.1f}-"
+                            f"{play['end']:.1f} s): it plays on the game's own sound; say it before or after")
         src0 = shot["from"] + (start - shot["start"])
         placed.append({"line": n, "start": round(start, 3), "end": round(end, 3), "shot": shot["n"],
                        "src": (round(src0, 3), round(src0 + (min(end, cut) - start), 3))})
@@ -692,7 +707,7 @@ def plan(short, moment, durations=None, loudest_s=None, camera_cuts=(), hud_word
     problems += loudest_problems(payoff, loudest_s) if kind == "action" else []
     shots, more = shots_of(short, moment["window"], payoff)
     problems += more + unique_problems(shots)
-    replay, more = replay_of(short, payoff, kind, loudest_s)
+    replay, more = replay_of(short, payoff, kind, loudest_s, is_impact(moment))
     problems += more
     flags = []
     if replay and shots and not problems:

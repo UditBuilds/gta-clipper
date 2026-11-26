@@ -3284,7 +3284,7 @@ def v4_voice(lines, speed):
 
 
 def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, checker=None, hud6=None, synth=None,
-              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None):
+              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None, punch=None):
     """One Short with engine v4 (editor-v3, Nov 20): payoff first. Before anything is made: the Short's one payoff
     (the interest gate: none, no Short), its shots as spans of the recording (the payoff whole inside one, no second
     twice, 15 s or more), an action payoff on the loudest moment (the hit), a hook about the HUD shown from frame 0.
@@ -3310,6 +3310,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                                                                                 speed=s.get("speed", 1.0)))
     light = light or (lambda v, s: steady().light_frames(v, s["from"], s["to"], steady().info_of(v), s["focus"]))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
+    punch = punch or (lambda clip, out, t0, t1: steady().punch_in(clip, out, t0, t1))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
     pay0 = short.get("payoff") if isinstance(short.get("payoff"), dict) else {}
@@ -3318,7 +3319,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                    and cutplan.number(pay0.get("to")) and x["from"] <= pay0["from"] and pay0["to"] <= x["to"]), None)
     # the loudest moment of the payoff's own shot (a horn or gunshots elsewhere in the window must not fail it)
     loud = (loudest(m["path"], *((holder["from"], holder["to"]) if holder else (w0, w1)))
-            if kind == "action" else None)
+            if kind == "action" or short.get("replay") else None)     # Nov 26: a narrated crash's replay holds the hit
     plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
     if problems:
         raise RenderProblem("\n  ".join(problems))
@@ -3383,6 +3384,12 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
         if grade is None or not s.get("replay"):  # the replay shows the payoff's shot again: the same grade
             grade, lit = steady().shot_grade(light(m["path"], s), normal)
         rep = dict(make_shot(m["path"], s, path, grade, log), light=lit)
+        holds = not s.get("replay") and s["from"] - 1e-6 <= pay["from"] and pay["to"] <= s["to"] + 1e-6
+        if holds or s.get("replay"):              # rule 5 (Nov 26): punch in over the payoff, hold it over the replay
+            punched = path.with_name(f"shot{s['n']}_punch.mp4")
+            punch(path, punched, pay["from"] - s["from"] if holds else None, pay["to"] - s["from"] if holds else None)
+            path = punched
+            rep["punch_in"] = ([round(pay["from"] - s["from"], 3), round(pay["to"] - s["from"], 3)] if holds else "held")
         if lit["low_light"]:
             flags.append(f"LOW LIGHT: shot {s['n']} is dark (ungraded {lit['level']:.0f} of 255): no contrast or "
                          f"vignette, shadows lifted (gamma {lit['gamma']:.2f}); look that it isn't washed out")
@@ -3406,7 +3413,9 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
     replay = plan.get("replay")
     quiet = (pay_at[0], replay["end"]) if replay else pay_at     # no voice over the payoff and its replay: the game's
-    if replay:                                                    # own sound comes up for both
+    if kind != "action":                                          # own sound comes up for both; a narrated Short's
+        quiet = (replay["start"], replay["end"]) if replay else None   # payoff has its voice, its replay doesn't
+    if replay:
         flags.append(f"REPLAY: the impact {hms(replay['from'])}-{hms(replay['to'])} again at {replay['speed']:g}x, "
                      f"{replay['start']:.1f}-{replay['end']:.1f} s into the Short, right after the payoff. No highlight "
                      "ring: nothing tracks the object, so a ring can't be placed reliably")
@@ -3425,7 +3434,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     card = cutplan.card_words(short)              # PR 30: at most 5 words (cutplan.hook_text_problems)
     card = open_card_text(card, assemble.CARD_CHARS) if card else None
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
-                                        quiet if kind == "action" else None, "auto",
+                                        quiet, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,
                                         "am_puck", log)
     checks["caption_checks"] = caption_checks(run_log, cplan, lines, checker, v3_hud(cplan, m, prof, hud6), out_dir, log)

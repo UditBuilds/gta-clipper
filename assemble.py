@@ -277,6 +277,12 @@ def visuals(shots, placed, total_s):
     return out
 
 
+def cut_sfx(shots):
+    """A whoosh on every cut but the one into the slow-mo replay (rule 5, Nov 26): the replay starts on the game's own
+    sound. The cut out of it keeps its whoosh."""
+    return [{"kind": "whoosh", "at_s": round(s["start"], 3), "why": "a cut"} for s in shots[1:] if not s.get("replay")]
+
+
 def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, music="auto", seed="short",
           speed=cutplan.SPEED, voice="am_puck", log=print):
     """The finished Short: out_dir/short.mp4, voice.wav, captions.ass, log.json. shots: cutplan shots with "clip"
@@ -309,7 +315,7 @@ def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet=None, 
     if game is not None:
         mix += game
     cuts = [s["start"] for s in shots[1:]]
-    sfx = [{"kind": "whoosh", "at_s": round(c, 3), "why": "a cut"} for c in cuts]
+    sfx = cut_sfx(shots)
     mix += ex.sfx_track(sfx, n)[:, None]
     mixed = work / "mix.f32"
     mix.astype(np.float32).tofile(mixed)

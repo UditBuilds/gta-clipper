@@ -971,7 +971,7 @@ def square_widths(path):
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
                          capture_output=True).stdout
     f = np.frombuffer(raw, np.uint8).reshape(-1, 384, 216)
-    return [int(np.nonzero((x > 128).any(axis=0))[0].ptp()) + 1 for x in f]
+    return [int(np.ptp(np.nonzero((x > 128).any(axis=0))[0])) + 1 for x in f]
 
 
 @check
@@ -1072,8 +1072,8 @@ def a_narrated_replay_gets_the_games_sound_and_the_loudest_moment():
     import numpy as np
     seen = {}
 
-    def make_shot(video, x, path, grade, log):
-        make_video(path, 2, size="108x192")
+    def make_shot(video, x, path, grade, log):              # as long as the shot, so every shot check finds its frames
+        make_video(path, x["frames"] / 30 + 0.5, size="108x192")
         return {"pieces": []}
 
     def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet, *rest):
@@ -1085,7 +1085,8 @@ def a_narrated_replay_gets_the_games_sound_and_the_loudest_moment():
         return 21.0
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "x.webm"
-        folder = run_folder_with(tmp, [dict(narrated_crash(), path=str(video))], [short(replay=dict(REPLAY))])
+        folder = run_folder_with(tmp, [dict(narrated_crash(), path=str(video))],
+                                 [short(replay=dict(REPLAY), type="narrated")])
         launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)], facts=FACTS,
                       today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
                       v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "build": build,
@@ -1733,7 +1734,8 @@ def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
                              facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
                              v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "light": light,
                                        "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
-                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+                                       "clear": lambda v, a, latest, focus: (a, [], []),
+                                       "punch": lambda clip, out, t0, t1: None})     # Nov 26: no clip is made here
         e = data["shorts"][0]
     if len(grades) != 3:
         raise AssertionError("; ".join(e["problems"]))
@@ -1770,8 +1772,9 @@ def v4_commands():
 @testkit.needs("nvenc")
 def v4_runs_the_same_commands_as_before_the_speed_work():
     """every ffmpeg and ffprobe command that engine v4 builds with its default settings, for the fixture Short plain and
-    with its replay, is the one main built before PR 31 (testdata/v4_commands.json, recorded from main 31d6ab7):
-    sizes, crops, filter graphs, encoder settings, all of it, in order"""
+    with its replay, is the one pinned in testdata/v4_commands.json (recorded from main 31d6ab7 before PR 31; PR 38
+    re-recorded it on purpose four times, each change listed in its "history"): sizes, crops, filter graphs, encoder
+    settings, all of it, in order"""
     got, want = v4_commands(), json.loads(GOLDEN.read_text(encoding="utf-8"))["commands"]
     for name in want:
         for k, (a, b) in enumerate(zip(got[name], want[name])):
