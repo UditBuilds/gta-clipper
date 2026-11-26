@@ -963,12 +963,43 @@ def built_captions(tmp):
 
 
 def captions_in(ass):
-    """[(start, end, word)] of the word captions in an .ass file."""
+    """[(start, end, word)] of the captions in an .ass file: each word with the times of the caption it is in (one word
+    a caption until Nov 26, 2-3 since)."""
     def s(t):
         h, m, x = t.split(":")
         return int(h) * 3600 + int(m) * 60 + float(x)
-    return [(s(f[1]), s(f[2]), re.sub(r"\{[^}]*\}", "", f[9])) for line in ass.splitlines() if ",Caption," in line
-            for f in [line.split(",", 9)] if line.startswith("Dialogue")]
+    return [(s(f[1]), s(f[2]), w) for line in ass.splitlines() if ",Caption," in line
+            for f in [line.split(",", 9)] if line.startswith("Dialogue")
+            for w in re.sub(r"\{[^}]*\}", " ", f[9]).split()]
+
+
+def caption_lines_in(ass):
+    """[(start, end, text)] of each caption event (the words it shows, tags left out)."""
+    out = []
+    for line in ass.splitlines():
+        words = captions_in(line)
+        if words:
+            out.append((words[0][0], words[0][1], " ".join(w for _, _, w in words)))
+    return out
+
+
+def edited_caption(line, word, new=None):
+    """One caption event of captions.ass with `word` taken out (new=None) or put in its place; None when no word is
+    left in it."""
+    head, text = line.split(",", 9)[:9], line.split(",", 9)[9]
+    pieces, done = re.split(r"(\{[^}]*\})", text), False
+    for k, piece in enumerate(pieces):
+        if piece.startswith("{") or done:
+            continue
+        ws = piece.split(" ")
+        if word in ws:
+            i = ws.index(word)
+            ws = ws[:i] + ws[i + 1:] if new is None else ws[:i] + [new] + ws[i + 1:]
+            pieces[k], done = " ".join(ws), True
+    joined = "".join(pieces)
+    if not re.sub(r"\{[^}]*\}", " ", joined).split():
+        return None
+    return ",".join(head) + "," + joined
 
 
 @check
@@ -981,9 +1012,15 @@ def no_caption_repeats_a_word_the_open_card_shows():
         report, why = judge(ass)
     caps = captions_in(ass)
     under = [w for a, b, w in caps if a < 2.0]
+    lines = caption_lines_in(ass)
+    print(f"       captions {lines}")
+    # Nov 26: captions are lines of 2-3 words. CAN YOU is up from its first word until a moment after YOU (0.53 + 0.25 s):
+    # the card words said next get no caption, so it doesn't stay up over them (it was YOU alone, 0.28-0.56); and no
+    # caption shown under the card runs past the card's end, so OVERPASS never shows while the card does
     return (under == ["CAN", "YOU", "OR", "THE"] and [w for a, b, w in caps if a >= 2.0] == ["OVERPASS", "THAT", "OVERPASS",
                                                                                           "JUMP", "HURT"]
-            and caps[1][:2] == (0.28, 0.56) and not why
+            and lines[0] == (0.0, 0.78, "CAN YOU") and all(b <= 2.0 + 1e-6 for a, b, _ in lines if a < 2.0)
+            and not why
             and report == {"shown": 9, "over_a_shot": 9, "tested": 0, "unknown_things": ["OVERPASS"], "on_card": 4})
 
 
@@ -996,12 +1033,18 @@ def the_caption_check_allows_only_what_the_card_shows():
         ass, judge = built_captions(tmp)
         lines = ass.splitlines()
 
+        def holding(word, after=0.0):            # the caption event that shows this word (one word or a line of them)
+            return next(k for k, x in enumerate(lines) if ",Caption," in x
+                        and word in [w for *_, w in captions_in(x)] and captions_in(x)[0][0] >= after)
+
         def without(word, after):
-            k = next(k for k, x in enumerate(lines) if ",Caption," in x and x.endswith("}" + word)
-                     and captions_in(x)[0][0] >= after)
-            return "\n".join(lines[:k] + lines[k + 1:])
-        twice = next(x for x in lines if x.endswith("}THE")).replace("}THE", "}SURVIVE")
-        at = next(k for k, x in enumerate(lines) if x.endswith("}OR"))
+            k = holding(word, after)
+            left = edited_caption(lines[k], word)
+            return "\n".join(lines[:k] + ([left] if left else []) + lines[k + 1:])
+        at = holding("OR")
+        twice = lines[holding("THE")]            # SURVIVE alone, captioned under the card, just before OR's caption
+        for w in [w for *_, w in captions_in(twice)]:
+            twice = edited_caption(twice, w, "SURVIVE") if w == "THE" else edited_caption(twice, w)
         both = judge("\n".join(lines[:at] + [twice] + lines[at:]))[1]
         bare = judge("\n".join(x for x in lines if ",Title," not in x))[1]
         or_gone, late_gone = judge(without("OR", 0.0))[1], judge(without("JUMP", 3.0))[1]
@@ -1009,6 +1052,118 @@ def the_caption_check_allows_only_what_the_card_shows():
             and late_gone == ["the caption is 'hurt' where the line says 'jump'"]
             and both == ["the caption is 'survive' where the line says 'or'"]
             and bare == ["the caption is 'or' where the line says 'survive'"])
+
+
+# --- 11. The captions (the owner, Nov 22; built Nov 26): 2-3 white words a line, 1-2 accent words, in the safe area ---
+
+LINE_TEST = [{"say": "Watch the red pickup on the bridge."}, {"say": "It has one lane left, then the traffic stops."},
+             {"say": "Nope."}, {"say": "Watch that pickup again."}]
+WHITE_ASS, YELLOW_ASS, CYAN_ASS = "&HFFFFFF&", "&H00E6FF&", "&HFFE500&"
+
+
+def line_words(lines=LINE_TEST, pause_after=("left,",)):
+    """assemble's word times for these lines, one after the other (0.28 s a word, 0.3 s between lines); a word in
+    pause_after is followed by a pause (a comma), as Kokoro's tokens mark it."""
+    import assemble
+    spoken = fake_voice([])(lines, 1.2)
+    marks = [w.lower() for w in pause_after]
+    for sp, line in zip(spoken, lines):
+        toks = line["say"].split()
+        for w, tok in zip(sp["words"], toks):
+            w["pause"] = tok.lower() in marks
+    placed, t = [], 0.0
+    for n, sp in enumerate(spoken, 1):
+        placed.append({"line": n, "start": round(t, 3), "end": round(t + sp["seconds"], 3)})
+        t += sp["seconds"] + 0.3
+    return assemble.voice_track(spoken, placed, t)[2], t
+
+
+def line_events_of(ass):
+    """[(start, end, [(word, colour)], override tags)] of the caption events in an .ass file."""
+    out = []
+    for raw in ass.splitlines():
+        if not raw.startswith("Dialogue") or ",Caption," not in raw:
+            continue
+        f = raw.split(",", 9)
+        h1, m1, s1 = f[1].split(":")
+        h2, m2, s2 = f[2].split(":")
+        tags = re.match(r"\{([^}]*)\}", f[9]).group(1)
+        words, colour = [], None
+        for block, text in re.findall(r"\{([^}]*)\}([^{]*)", f[9]):
+            c = re.findall(r"\\c(&H[0-9A-F]{6}&)", block)
+            colour = c[-1] if c else colour
+            words += [(w, colour) for w in text.split()]
+        out.append((int(h1) * 3600 + int(m1) * 60 + float(s1), int(h2) * 3600 + int(m2) * 60 + float(s2), words, tags))
+    return out
+
+
+@check
+def captions_are_two_or_three_white_words_with_one_or_two_accents():
+    """assemble's captions for 4 lines (21 words): every word once, in order; each caption 2-3 words, never across a
+    sentence, broken at the comma, one word only for the one-word sentence (NOPE.); every word white but 1-2 accent
+    words a caption, yellow or cyan: PICKUP (a thing to watch) cyan, the key word (WATCH, which the open card and the
+    hook share) yellow; a thick black outline (12), Lilita One at 120 at most, centred on x 510 and the old word line (y 1260); each
+    caption is up from its first word until the next one starts, or a moment after a pause"""
+    import assemble
+    import explainer as ex
+    words, total = line_words()
+    events = line_events_of(ex.ass_document(assemble.caption_events(words, total, None, keys=["watch"])))
+    flat = [w for _, _, ws, _ in events for w, _ in ws]
+    sizes = [len(ws) for _, _, ws, _ in events]
+    said = [w["text"] for w in words]
+    k, crossing = 0, False
+    for _, _, ws, _ in events:
+        crossing |= len({words[k + j]["sentence"] for j in range(len(ws))}) > 1
+        k += len(ws)
+    accents = [[(w, c) for w, c in ws if c != WHITE_ASS] for _, _, ws, _ in events]
+    colours = {w: c for _, _, ws, _ in events for w, c in ws}
+    styled = all(re.search(r"\\bord1[2-9]", t) and "\\3c&H000000&" in t and "\\pos(510," in t
+                 and int(re.search(r"\\fs(\d+)", t).group(1)) <= 120 and "\\fnLilita One" in t for *_, t in events)
+    ys = [int(re.search(r"\\pos\(510,(\d+)\)", t).group(1)) for *_, t in events]
+    comma = next(ws for _, _, ws, _ in events if any(w == "LEFT" for w, _ in ws))
+    timed = all(abs(a - words[sum(sizes[:i])]["start"]) < 0.011 for i, (a, *_) in enumerate(events))
+    print(f"       captions {[' '.join(w for w, _ in ws) for _, _, ws, _ in events]}; accents {accents}; y {set(ys)}")
+    return (flat == said and len(said) == 21 and not crossing and timed
+            and all(2 <= n <= 3 for n, (_, _, ws, _) in zip(sizes, events) if ws[0][0] != "NOPE")
+            and [ws for _, _, ws, _ in events if ws[0][0] == "NOPE"][0] == [("NOPE", YELLOW_ASS)]
+            and comma[-1][0] == "LEFT"
+            and all(1 <= len(a) <= 2 and all(c in (YELLOW_ASS, CYAN_ASS) for _, c in a) for a in accents)
+            and colours["PICKUP"] == CYAN_ASS and colours["WATCH"] == YELLOW_ASS and colours["THE"] == WHITE_ASS
+            and styled and all(abs(y - 1260) <= 40 for y in ys))
+
+
+@check
+def caption_lines_stay_inside_the_safe_area_on_real_pixels():
+    """burnt onto a black 1080x1920 frame at each caption's middle, the ink (outline and shadow in) stays inside x 60-960
+    and y 1185-1345, the band the word captions had, even for the widest line; white, yellow and cyan are all there
+    (the key word SURVIVE, the thing to watch PICKUP)"""
+    import numpy as np
+    import assemble
+    import explainer as ex
+    words, total = line_words([{"say": "Survive this overpass jump."}, {"say": "Nobody expected this pickup."}])
+    events = assemble.caption_events(words, total, None, keys=["survive"])
+    with tempfile.TemporaryDirectory() as tmp:
+        for font in ex.FONT_FILES:
+            shutil.copy(font, tmp)
+        Path(tmp, "c.ass").write_text(ex.ass_document(events), encoding="utf-8")
+        boxes, seen = [], set()
+        for a, b, ws, _ in line_events_of(ex.ass_document(events)):
+            t = (a + b) / 2
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=30:d={total + 1}",
+                                  "-vf", "ass=c.ass:fontsdir=.", "-ss", f"{t:.2f}", "-frames:v", "1", "-f", "rawvideo",
+                                  "-pix_fmt", "rgb24", "-"], cwd=tmp, capture_output=True).stdout
+            f = np.frombuffer(raw, np.uint8).reshape(1920, 1080, 3).astype(int)
+            ys, xs = np.nonzero(f.max(axis=2) > 24)
+            boxes.append((xs.min(), ys.min(), xs.max(), ys.max()))
+            if ((f > 230).all(axis=2)).sum() > 200:
+                seen.add("white")
+            if ((f[..., 0] > 230) & (f[..., 1] > 200) & (f[..., 2] < 60)).sum() > 200:
+                seen.add("yellow")
+            if ((f[..., 0] < 60) & (f[..., 1] > 200) & (f[..., 2] > 230)).sum() > 200:
+                seen.add("cyan")
+    print(f"       ink boxes {boxes}; colours {sorted(seen)}")
+    return (all(60 <= x0 and x1 <= 960 and 1185 <= y0 and y1 <= 1345 for x0, y0, x1, y1 in boxes)
+            and seen == {"white", "yellow", "cyan"})
 
 
 @check
