@@ -957,6 +957,145 @@ def the_first_second_must_show_the_subject():
             and e["status"] == "FAILED" and has(e["problems"], "the first second shows almost nothing to look at"))
 
 
+# --- 14. The payoff: a punch-in, slow-mo on any crash or stunt, no whoosh into it (the owner's rule 5, Nov 26) ---
+
+def square_clip(path, frames=60):
+    """A 216x384 clip: a 60 px white square in the middle of black, for measuring a zoom."""
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    f"color=black:s=216x384:r=30:d={frames / 30},drawbox=x=78:y=162:w=60:h=60:color=white:t=fill",
+                    "-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p", str(path)], check=True)
+
+
+def square_widths(path):
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                         capture_output=True).stdout
+    f = np.frombuffer(raw, np.uint8).reshape(-1, 384, 216)
+    return [int(np.nonzero((x > 128).any(axis=0))[0].ptp()) + 1 for x in f]
+
+
+@check
+def the_payoff_gets_a_punch_in_from_1_05_to_1_2():
+    """steady.punch_in on a made shot: before the payoff the picture is as made (the shot is 1.05 in already); over the
+    payoff it zooms in smoothly to 1.2 of the recording's picture (1.2 / 1.05 of the made shot) and holds there to the
+    shot's end; the frame count and size don't change; with no payoff times (the replay) it holds 1.2 from the first
+    frame"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src, out, held = Path(tmp) / "sq.mp4", Path(tmp) / "punched.mp4", Path(tmp) / "held.mp4"
+        square_clip(src)
+        steady.punch_in(src, out, 20 / 30, 40 / 30)
+        steady.punch_in(src, held, None, None)
+        w, h = square_widths(out), square_widths(held)
+        frames = steady.count_frames(out)
+    rel = steady.PUNCH_TO / steady.ZOOM
+    print(f"       widths at 0/19/30/40/59: {[w[k] for k in (0, 19, 30, 40, 59)]}; held {h[0]}, {h[-1]}; x{rel:.4f}")
+    return (abs(steady.PUNCH_TO - 1.2) < 1e-9 and abs(steady.ZOOM - 1.05) < 1e-9 and frames == 60 and len(w) == 60
+            and w[0] == w[19] == 60 and 60 < w[30] < 60 * rel and all(abs(x - 60 * rel) <= 2 for x in w[40:])
+            and all(a <= b for a, b in zip(w, w[1:])) and all(abs(x - 60 * rel) <= 2 for x in h))
+
+
+@check
+def render_punches_in_on_the_payoffs_shot_and_holds_it_over_the_replay():
+    """launch.render_v4: the shot that holds the payoff (14-25 s, payoff 20.0-22.5) is punched in over 6.0-8.5 s of its
+    clip, before any HUD inset goes on; shot 2 isn't; with the replay, the payoff's shot (14-22.5 s) is punched over
+    6.0-8.5 s, the replay holds the punch-in, and the rest of shot 1 after it doesn't"""
+    import numpy as np
+
+    def run(s):
+        calls = []
+
+        def make_shot(video, x, path, grade, log):
+            make_video(path, 2, size="108x192")
+            return {"pieces": []}
+
+        def punch(clip, out, t0, t1):
+            calls.append((Path(clip).stem, t0 if t0 is None else round(t0, 3), t1 if t1 is None else round(t1, 3)))
+            shutil.copy(clip, out)
+
+        def build(*a, **k):
+            raise launch.RenderProblem("stopped after the shots (test)")
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "x.webm"
+            folder = run_folder_with(tmp, [moment(video)], [s])
+            launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)], facts=FACTS,
+                          today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                          v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "punch": punch, "build": build,
+                                    "light": lambda v, x: np.full((16, 480, 270), 150, np.uint8),
+                                    "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                    "clear": lambda v, a, latest, focus: (a, [], [])})
+        return calls
+    plain, replayed = run(short()), run(short(replay=dict(REPLAY)))
+    print(f"       plain {plain}; with the replay {replayed}")
+    return plain == [("shot1", 6.0, 8.5)] and replayed == [("shot1", 6.0, 8.5), ("shot2", None, None)]
+
+
+def narrated_crash(evidence_kind="crash"):
+    m = moment()
+    m["type"] = "narrated"
+    if evidence_kind != "crash":
+        m["evidence"] = [e for e in m["evidence"] if e["id"] != "E2"] + [
+            {"id": "E2", "kind": "stars", "value": "2", "from_s": 20.0, "to_s": 23.0, "source": "made up"}]
+    return m
+
+
+@check
+def a_narrated_crash_or_stunt_may_replay_its_impact():
+    """rule 5: the slow-mo replay was for action Shorts only; a crash or stunt Short typed narrated may have it too (its
+    evidence has a crash, a stunt, a jump or a fall); a narrated Short with no impact still may not; no line, of any
+    Short, talks over the replay"""
+    crash = cutplan.plan(short(replay=dict(REPLAY)), narrated_crash(), secs(short()), 21.0)
+    stars = cutplan.plan(short(replay=dict(REPLAY)), narrated_crash("stars"), secs(short()), 21.0)
+    over = short(replay=dict(REPLAY), lines=short()["lines"][:2] + [dict(short()["lines"][2], at=22.0)]
+                 + short()["lines"][3:])
+    talks = problems_of(over) + problems_of(over, m=narrated_crash())
+    return (not has(crash[1], "only an action Short") and crash[0]["replay"] is not None
+            and has(stars[1], "only an action Short or a crash or stunt") and stars[0]["replay"] is None
+            and len([p for p in talks if "talks over the slow-mo replay" in p]) == 2)
+
+
+@check
+def no_whoosh_into_the_slow_mo_replay():
+    """rule 5: every cut gets its whoosh but the one into the replay (the slow-mo starts on the game's own sound); the
+    cut out of it keeps its whoosh"""
+    import assemble
+    shots = [{"n": 1, "start": 0.0}, {"n": 2, "start": 8.5, "replay": True}, {"n": 3, "start": 10.1},
+             {"n": 4, "start": 12.6}]
+    return ([x["at_s"] for x in assemble.cut_sfx(shots)] == [10.1, 12.6]
+            and [x["at_s"] for x in assemble.cut_sfx([dict(s, replay=False) for s in shots])] == [8.5, 10.1, 12.6])
+
+
+@check
+def a_narrated_replay_gets_the_games_sound_and_the_loudest_moment():
+    """launch.render_v4, a narrated crash Short with its replay: the payoff's shot is measured for its loudest moment (the
+    replay must hold the hit), and the replay is a quiet stretch where the game's own sound comes up, as in an action
+    Short"""
+    import numpy as np
+    seen = {}
+
+    def make_shot(video, x, path, grade, log):
+        make_video(path, 2, size="108x192")
+        return {"pieces": []}
+
+    def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet, *rest):
+        seen.update(kind=kind, quiet=quiet)
+        raise launch.RenderProblem("stopped at the build (test)")
+
+    def loudest(v, a, b):
+        seen["loudest"] = (a, b)
+        return 21.0
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "x.webm"
+        folder = run_folder_with(tmp, [dict(narrated_crash(), path=str(video))], [short(replay=dict(REPLAY))])
+        launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)], facts=FACTS,
+                      today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                      v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "build": build,
+                                "punch": lambda c, o, a, b: shutil.copy(c, o),
+                                "light": lambda v, x: np.full((16, 480, 270), 150, np.uint8), "loudest": loudest,
+                                "cuts": lambda v, a, b: [], "clear": lambda v, a, latest, focus: (a, [], [])})
+    print(f"       {seen}")
+    return seen.get("kind") == "narrated" and seen.get("loudest") == (14.0, 25.0) and seen.get("quiet") == (8.5, 10.1)
+
+
 # --- 12. Hooks, the open card and the title (the owner's rules of Nov 26) ---
 
 @check
