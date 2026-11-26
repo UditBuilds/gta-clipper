@@ -452,12 +452,17 @@ def render_short(name, s, heard=None, **parts):
     tmp = ROOT / name
     tmp.mkdir()
     speeds, commands, run, first = [], [], subprocess.run, launch.first_words_check
+    listened = []
 
     def recorder(args, *a, **k):
         commands.append([str(x) for x in args])
         return run(args, *a, **k)
+
+    def hears(path, say):                       # heard: words, or a function of the file listened to
+        listened.append(Path(path).name)
+        return (heard(path) if callable(heard) else heard) or say.split()
     subprocess.run = recorder
-    launch.first_words_check = lambda path, say, log=print: first(path, say, log, lambda p: heard or say.split())
+    launch.first_words_check = lambda path, say, log=print: first(path, say, log, lambda p: hears(p, say))
     try:
         folder = run_folder_with(tmp, [moment(v)], [s])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)], facts=FACTS,
@@ -465,7 +470,8 @@ def render_short(name, s, heard=None, **parts):
                              v4_parts={"synth": fake_voice(speeds), "build": no_music_build, **parts})
     finally:
         subprocess.run, launch.first_words_check = run, first
-    return SimpleNamespace(folder=folder, entry=data["shorts"][0], speeds=speeds, commands=commands, name=name)
+    return SimpleNamespace(folder=folder, entry=data["shorts"][0], speeds=speeds, commands=commands, name=name,
+                           listened=listened)
 
 
 def ready(made):
@@ -554,11 +560,13 @@ def made_again(name, early=(), heard=None):
         shutil.copy(next(x["clip"] for x in first.log["shots"] if x["n"] == s["n"]), path)
         return {"pieces": []}
 
-    def build(out_dir, *rest):
-        for name in ("short.mp4", "captions.ass"):
+    def build(out_dir, *rest):                 # what assemble.build leaves: the Short, its captions, voice and log
+        for name in ("short.mp4", "captions.ass", "voice.wav"):
             shutil.copy(first.out / name, out_dir)
         there, here = (json.dumps(str(x))[1:-1] for x in (first.out, out_dir))
-        return json.loads((first.out / "log.json").read_text(encoding="utf-8").replace(there, here))
+        text = (first.out / "log.json").read_text(encoding="utf-8").replace(there, here)
+        (Path(out_dir) / "log.json").write_text(text, encoding="utf-8")
+        return json.loads(text)
     old = launch.speech_check
     launch.speech_check = lambda path, log=print, check=None: {"early": list(early), "later": [], "words": 9}
     try:
@@ -629,6 +637,73 @@ def a_short_whose_hook_is_misheard_fails_and_one_heard_right_is_ready():
     bad, good = made_again("misheard", heard=["Wash", "closely."]), made_again("heard", heard=["watch", "Closely"])
     return (bad["status"] == "FAILED" and has(bad["problems"], "watch closely") and has(bad["problems"], "wash closely")
             and bad.get("moment") == "M1" and bad.get("folder") and good["status"] == "READY")
+
+
+def voice_folder(tmp, lines=((0.0, 1.0), (1.5, 2.5)), rate=48000):
+    """A Short's folder as assemble.build leaves it, as far as the first-word check reads it: voice.wav (16-bit stereo,
+    a tone where each line is, its first 0.02 s quiet as Kokoro's trimmed lead) and log.json with the lines' times."""
+    import wave
+    import numpy as np
+    total = lines[-1][1] + 0.5
+    v = np.zeros(int(total * rate), np.float32)
+    for k, (a, b) in enumerate(lines):
+        n0, n1 = int((a + 0.02) * rate), int(b * rate)
+        v[n0:n1] = 0.3 * np.sin(2 * np.pi * (220 + 110 * k) * np.arange(n1 - n0) / rate)
+    with wave.open(str(Path(tmp) / "voice.wav"), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.repeat((v * 32767).astype("<i2"), 2).tobytes())
+    log = {"durations": {"lines": [{"line": k, "start_s": a, "end_s": b} for k, (a, b) in enumerate(lines, 1)]}}
+    (Path(tmp) / "log.json").write_text(json.dumps(log), encoding="utf-8")
+    return v
+
+
+@check
+def the_first_word_check_hears_the_clean_voice_up_to_the_end_of_line_1():
+    """rule 6 (Nov 26: on the mixed Short, Whisper misheard "Can", and "steal" became "take"): launch.hook_voice cuts
+    voice.wav, the voice alone (no music, game sound or whoosh), from line 1's start to its end, with 0.06 s of silence
+    in front, 0.08 s before the first word with the line's own trimmed lead; nothing of line 2 is in it, and every sample
+    of line 1 is; a folder with no voice.wav or log.json gives None (the Short is then flagged, never passed)"""
+    import wave
+    import numpy as np
+    with tempfile.TemporaryDirectory() as tmp:
+        v = voice_folder(tmp)
+        clip = launch.hook_voice(tmp)
+        with wave.open(str(clip)) as w:
+            rate, ch = w.getframerate(), w.getnchannels()
+            got = np.frombuffer(w.readframes(w.getnframes()), "<i2").reshape(-1, ch)[:, 0].astype(np.float32) / 32767
+        lead = int(launch.HOOK_LEAD_S * rate)
+        quiet = np.abs(got[:lead + int(0.02 * rate)]).max()
+        same = np.abs(got[lead:] - v[:len(got) - lead]).max()
+        (Path(tmp) / "voice.wav").unlink()
+        gone = launch.hook_voice(tmp)
+    import assemble
+    import speech
+    advice = speech.first_words_problem("Can anyone steal this?", ["Can", "anyone", "still"])
+    print(f"       {len(got) / rate:.3f} s, silent first {(lead / rate + 0.02):.2f} s (peak {quiet:.4f}), off by {same:.5f}; "
+          f"{advice}")
+    return (clip.name == "first_words.wav" and abs(len(got) / rate - (launch.HOOK_LEAD_S + 1.0)) < 1e-3 and quiet == 0
+            and same < 1e-3 and abs(launch.HOOK_LEAD_S + assemble.LEAD_KEEP_S - 0.08) < 1e-9 and gone is None
+            and "is heard right" not in advice and "can anyone steal" in advice and "can anyone still" in advice)
+
+
+@check
+@testkit.full
+def the_render_fails_on_the_clean_voice_and_only_flags_the_mix():
+    """through launch.render: the first-word check hears first_words.wav first, the clean hook. Heard right there and
+    wrong in the mix (music or a whoosh over "Can"), the Short is READY with a FIRST WORDS IN THE MIX flag; heard wrong
+    on the clean voice it is FAILED, whatever the mix says; the message no longer says "Can anyone ..." is heard right
+    (in the real mix it wasn't, Nov 25)"""
+    def mix_only(path):
+        return ["Wash", "closely."] if Path(path).name == "short.mp4" else ["watch", "closely"]
+
+    def clean_only(path):
+        return ["Wash", "closely."] if Path(path).name == "first_words.wav" else ["watch", "closely"]
+    ready, failed = made_again("mixheard", heard=mix_only), made_again("cleanheard", heard=clean_only)
+    return (ready["status"] == "READY" and any(f.startswith("FIRST WORDS IN THE MIX") for f in ready["flags"])
+            and failed["status"] == "FAILED" and has(failed["problems"], "wash closely")
+            and not has(failed["problems"], "Can anyone"))
 
 
 @check
