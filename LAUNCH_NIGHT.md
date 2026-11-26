@@ -79,7 +79,7 @@ cd C:\AI\gta-clipper
 claude
 ```
 In Claude Code type `/model sonnet`, then `/launch` (or `/launch --count 5` for more). It asks you nothing. It makes
-**3** Shorts when 3 moments keep the rules and have a clear payoff (2/3 or more; fewer when fewer do, never a weak one to make up the number), every one like the posted sample (hook from frame 0, voice, yellow
+**3** Shorts when 3 moments keep the rules and have a clear payoff (2/3 or more; fewer when fewer do, never a weak one to make up the number), every one like the posted sample (hook from frame 0, voice, white
 captions, music and sound effects, setup -> payoff, close-ups of the HUD as proof); topic explainers come first,
 action clips get a short voice too. A pick that can only be a plain clip is left out, and the report says why. When
 it is done it prints the review page: `C:\AI\gta\shorts\launch-<date>\review.html` (or `...-part2\review.html`).

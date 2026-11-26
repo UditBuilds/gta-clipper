@@ -41,3 +41,44 @@ Unlocked (all of recording _014828; none reaches the 2/3 payoff bar, so /launch 
 **The warning (`footage_short.long_locks`, `LOCK_WARN_S = 45`).** An entry that locks more than 45 s (overlaps counted once,
 every recording added up; a Short is 15-39 s) is named with a WARNING by `bank.py build`, `bank.py page`, `bank.py posted`
 and `launch.py prepare`. On the old file it names the cops entry (400 s) and nothing else; on the new one, nothing.
+
+## Steps 3-7: what changed in the code (engine v4, /launch)
+
+Each change was a failing check first (editortest, banktest, explainertest), then the fix; commits in that order.
+
+- **Captions** (`assemble.caption_events`, `caption_lines`, `accents`): 2-3 words a line, Lilita One at 120 px (drawn
+  smaller only to fit 900 px), white, 1-2 accent words (the key word yellow, a thing to watch cyan), a 12 px black outline,
+  centred on y 1260. A line never crosses a sentence, a word under the open card (PR 33) or the card's end, and breaks at a
+  comma. The first real render captioned "No slowing down." as NO alone, then SLOWING DOWN; a line a little wide is now
+  drawn a little smaller instead (`LINE_UNITS_MAX`).
+- **Hooks** (`cutplan.hook_rule_problems`): no filler ("Watch this." / "Watch this, ..." / "Wait for it", also in every line
+  through `truth.filler_in`); a starred hook or line 1 that asks needs `"stakes_at_0"` (evidence covering shot 1's start, a
+  why of 3+ words); `"key_verb"` in line 1, the open card and the title. `cutplan.card_words` drops "in GTA 6" before "?".
+- **End card**: `explainer.HANDLE = "@NeonGetawayYT"`; any other @handle in a pill is refused (explainer and edit2);
+  launch.py's pill, the examples and the commands' examples say @NeonGetawayYT.
+- **First words** (`launch.hook_voice`): Whisper hears voice.wav from line 1's start to its end, 0.08 s before the first
+  word; that fails the Short. The mixed short.mp4 is checked too, as a flag only (FIRST WORDS IN THE MIX).
+- **First second** (`cutplan.subject_of`, `subject_problems`, `launch.first_frame_check`): the subject is named (hook,
+  `"subject"` or payoff); the frame question looks at shot 1 at 0.0 and 0.5 s: empty, back-only or too dark fails, and so
+  does a subject whose field it doesn't see (vehicle, police, street, water); an animal is a flag.
+- **Voice gaps** (`cutplan.gap_problems`): at most 3.5 s with no voice between two lines, the payoff and the replay left out.
+- **Punch-in** (`steady.punch_in`): perspective filter, from 1.05 to 1.2 of the recording over the payoff, held to the
+  shot's end and over the replay. **Narrated replay** (`cutplan.is_impact`, `replay_of`): a Short whose evidence has a
+  crash, stunt, jump or fall may replay its impact; no line talks over a replay; the game's sound comes up over it.
+  **No whoosh into the replay** (`assemble.cut_sfx`).
+- **Fixtures**: editortest's line 1 "Watch this." is "Watch closely." (filler now), its key verb "watch", its title "WATCH
+  this GTA 6 car on the highway", its shot 2 ends at 34.2 s (it ended on 5.7 s of quiet). Checks that pinned values of the
+  old fixture say the new ones; none was removed or loosened. `testdata/v4_commands.json` was re-recorded four times on
+  purpose; its `history` names every command that changed.
+
+## Step 8: today's Short
+
+`C:\AI\gta\shorts\launch-2026-11-26-v2\1-watch-this-red-pickup-in-gta-6-traffic\short.mp4` (READY, 15.0 s). The first
+render (`launch-2026-11-26`) captioned NO alone; it is left as it was, not posted.
+
+- Options (prepared with only these bank moments offered, the bank read, not rebuilt): **M2 the red pickup** (_025552
+  5:36-5:54, star), M3 the blue convertible (_164843 23:53-24:13, into a yard), M5 the white pickup at sunset (_135610
+  7:23-7:43, its footage rendered once before). The black SUV T-bone (_164843 15:37) lost to M3 as a near-duplicate.
+- The game's crash camera on the red pickup (347.0-351.5 s) is marked a cutscene by the index ("hud: no minimap"), so the
+  Short shows the hit on the chase camera, then in slow motion, and skips the crash camera. Not changed (a known class of
+  false cutscenes, PR 36).

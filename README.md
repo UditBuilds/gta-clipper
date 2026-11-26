@@ -1162,6 +1162,39 @@ must have no caption, any other word without one still fails the Short. The repo
 survive ..." as "You survived ...". "Can anyone ..." is heard as it is said. What else was looked at by hand, the duplicate
 check and the jet ski: `docs/short-nov24-notes.md`.
 
+## The first second (PR 38, Nov 26)
+
+Two outside reviews of the channel found what the hits share: the stakes on screen at 0:00 (the overpass jump, 20.7K;
+the black SUV, 12K), a statement or a command for a hook. The flops opened on empty grass (the animal Short, 203), on
+filler ("Watch this. Wait for it.", 1.2K) or said STEAL in the title and "take" in the voice (the airliner, 1.2K).
+Every claim was checked in the code first; what each change guarantees, and the notes, are in
+[docs/first-second-look.md](docs/first-second-look.md).
+
+- **Captions** (my decision of Nov 22, never built until now; engine v4 drew one yellow word at a time):
+  `assemble.caption_events` draws 2-3 words a line in Lilita One, white with 1-2 accent words (yellow; cyan for a thing to
+  watch: a car, the police, an animal), a 12 px black outline, centred on y 1260 inside the safe area. A line never crosses
+  a sentence, a word under the open card (PR 33) or the card's end, and breaks at a comma.
+- **Hooks** (`cutplan.hook_rule_problems`): a statement or a command; a question only with `"stakes_at_0"` (evidence on
+  screen at shot 1's start, and why); no "Watch this." / "Wait for it" in a hook, the card, the title or a line ("Watch
+  this crash" is fine); `"key_verb"` is said by line 1, the open card and the title. The card drops a trailing "in GTA 6"
+  before "?" too.
+- **The first second** (rule 3): every Short names what it opens on (`cutplan.subject_of`), and the render asks the frame
+  question about shot 1 at 0.0 and 0.5 s (`launch.first_frame_check`): empty, the character's back or too dark fails; so
+  does no vehicle for a car. An animal (the question has no field for it) is a flag to look by hand.
+- **No 3.5 s without voice** between two lines (`cutplan.gap_problems`), the payoff and the replay left out. The four
+  posted v4 Shorts pass it: their 5.7-7.8 s gaps were the silent payoff and replay.
+- **The payoff punches in** (`steady.punch_in`, ffmpeg's perspective filter, sub-pixel): from 1.05 to 1.2 of the recording
+  over the payoff, held to its shot's end and over the replay. A crash or stunt Short may replay its impact even typed
+  narrated; no line talks over the replay, and there is no whoosh into it (`assemble.cut_sfx`).
+- **The first-word check hears the voice alone** (`launch.hook_voice`: voice.wav to the end of line 1, 0.08 s before the
+  first word). Misheard there fails the Short; misheard only in the mix is a FIRST WORDS IN THE MIX flag.
+- **The channel is @NeonGetawayYT** (`explainer.HANDLE`): an end card naming another handle is refused.
+- **One Short locking too much is named**: `footage_short.long_locks`, a WARNING from `bank.py build/page/posted` and
+  `launch.py prepare` for an entry over 45 s. The cops Short's hand-made `[0.0, 400.0]` is now its 17 real spans (34.4 s):
+  12 moments of recording _014828 are free again.
+- `testdata/v4_commands.json` was re-recorded on purpose four times; its `history` lists what changed each time (the
+  captions' measuring run, the fixture's title and shorter ending, the first second's frames, the punch-in).
+
 ## Tests (PR 31, Nov 23)
 
 ```powershell
@@ -1175,15 +1208,15 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 36): `--full` | 607 | 8.5 min |
-| now: `--quick` | 530 | 1.9 min |
-| now: `--ci`, on GitHub's Windows machine | 515 | about 2 min |
+| now (PR 38): `--full` | 628 | 8.7 min |
+| now: `--quick` | 549 | 2.0 min |
+| now: `--ci` (here; GitHub's Windows machine runs the same) | 534 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
-| explainertest | `.venv-tts` | 88 | 54 | 51 | 1396 s | 164 s |
+| explainertest | `.venv-tts` | 89 | 55 | 52 | 1396 s | 154 s |
 | hooktest | `.venv` | 51 | 33 | 33 | 1166 s | 70 s |
-| editortest | `.venv-tts` | 58 | 50 | 50 | 715 s | 94 s |
+| editortest | `.venv-tts` | 76 | 66 | 66 | 715 s | 139 s |
 | shorttest | `.venv` | 42 | 42 | 42 | 383 s | 10 s |
 | topictest | `.venv-tts` | 24 | 20 | 20 | 238 s | 39 s |
 | launchtest | `.venv-tts` | 49 | 48 | 48 | 196 s | 28 s |
@@ -1195,7 +1228,7 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | indextest | `.venv` | 49 | 49 | 49 | 8 s | 3 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
-| banktest (PR 32, 35) | `.venv` | 50 | 50 | 49 | - | 9 s |
+| banktest (PR 32, 35, 38) | `.venv` | 52 | 52 | 51 | - | 11 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
