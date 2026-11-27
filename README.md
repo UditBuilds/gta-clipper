@@ -955,7 +955,8 @@ Short 6 itself was missing the slow-mo of the hit that made my hand-made crash S
 
 - **Payoff strength first** (`launch.payoff_strength`). After the checks, every candidate gets a tier:
   - 3: an impact (crash, explosion or stunt) that its own frames confirmed.
-  - 2: a HUD change with a visible cause (the stars rise with police or a shootout on screen).
+  - 2: an animal attack or an aircraft taken that two checks see (Nov 25, below), or a HUD change with a visible cause (the
+    stars rise with police or a shootout on screen).
   - 1: a HUD change alone, or action with no single event.
   - 0: quiet.
 
@@ -1071,7 +1072,7 @@ moment of every GTA 6 recording**, and footage is locked only when I post it.
 .\.venv\Scripts\python.exe bank.py posted "C:\AI\gta\shorts\launch-2026-11-24\1-my-short"     # or a finished Short's folder
 .\.venv\Scripts\python.exe bank.py rejected 1121-164843-0312 --why "too dark"
 .\.venv\Scripts\python.exe bank.py page         # write bank.html again with today's statuses
-.\.venv\Scripts\python.exe banktest.py          # 50 checks, 9 s
+.\.venv\Scripts\python.exe banktest.py          # 60 checks, 12 s
 ```
 
 It writes, in `C:\AI\gta\bank`: `content_bank.json`, the review page `bank.html`, and `raw\<recording>.json` (below).
@@ -1149,6 +1150,28 @@ deliberate breaks:
   the one of the same footage. An empty build never replaces a full bank.
 - `/footage-short` never picks rejected footage (what was only rendered is still left alone while other footage fits).
 
+## Payoffs two checks see: an animal attack, an aircraft taken (PR 37, Nov 25)
+
+Only a crash, an explosion, a jump or fall, or a star change counted as a payoff, so /launch left out the gator attack and the
+airliner theft (both 1/3). Now an **animal attack** and **taking an aircraft** count as 2/3 when **two checks agree**: the index's
+answers and the safety question's note, the vision model's two looks at the same seconds with different questions and frames
+(`payoffs.py`; `docs/payoffs-pr37.md` has every number and entry).
+
+- **Animal attack:** one of the two says an animal attacks, the other says so too or sees them fight; the same animal, a shared second
+  or more. An animal on screen, shot, aimed at or walked past is none; nor is a denial or a line of dialogue.
+- **Aircraft taken:** the index goes from on foot at an aircraft (walks up to it, opens its door, boards it) straight to flying one, and
+  the note there sees the player in it. Near a plane, a plane that flies over, or already flying is none: the real pink jet, whose stairs
+  he climbs and whose door he never gets through, has none.
+- It changes no label, peak, window or id. A moment of 10 s or more with one is on the action shelf, is a type of its own, passes the
+  quality gate as an action payoff and has the event in its evidence. Impacts still outrank it.
+- On all 23 recordings 4 of 445 entries change (the gator, two list items on the same seconds, the airliner), with 0 model calls.
+- **The review (Nov 27):** wordings that wrongly counted are none now (an attack he avoids or nearly has, one on a billboard or TV,
+  in curly quotes, the animal as the one attacked, a chase; a note that watches a plane fly, "flies off his bike"; an on-foot line
+  that only runs past a plane), and a few it missed count ("alligator that attacks him", "bit by a dog"). Two animals are two
+  events. The same 4 entries change, nothing else. A damaged or locked `content_bank.json` stops every program with an ERROR
+  instead of being read as no bank, and a build copies the old bank to `bank\backups` first. /launch's pool keeps 60 s between
+  two candidates of the same kind (or that share seconds), not between two different payoffs. `docs/payoffs-pr37.md`.
+
 ## No double text under the open card (PR 33, Nov 24)
 
 "Can you SURVIVE this GTA 6 overpass jump?" showed "...OVERPASS?" on the open card and in the caption at the same time
@@ -1175,9 +1198,9 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 36): `--full` | 607 | 8.5 min |
-| now: `--quick` | 530 | 1.9 min |
-| now: `--ci`, on GitHub's Windows machine | 515 | about 2 min |
+| now (PR 37 with its review fixes): `--full` | 624 | 8.7 min |
+| now: `--quick` | 547 | 2.1 min |
+| now: `--ci`, on GitHub's Windows machine | 531 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1195,7 +1218,7 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | indextest | `.venv` | 49 | 49 | 49 | 8 s | 3 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
-| banktest (PR 32, 35) | `.venv` | 50 | 50 | 49 | - | 9 s |
+| banktest (PR 32, 35, 37) | `.venv` | 67 | 67 | 65 | - | 18 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
