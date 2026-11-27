@@ -280,7 +280,7 @@ HANDLE = "@NeonGetawayYT"       # the channel (Nov 26: some end cards left out i
 
 def handle_problem(text):
     """Why an end card's text names the wrong channel (any @handle but HANDLE), or None."""
-    wrong = [h for h in re.findall(r"@[A-Za-z0-9_.]+", str(text or "")) if h != HANDLE]
+    wrong = [h.rstrip(".") for h in re.findall(r"@[A-Za-z0-9_.\-]+", str(text or "")) if h.rstrip(".") != HANDLE]
     if not wrong:
         return None
     return (f"end_pill names {', '.join(wrong)}; the channel is {HANDLE}: write \"{HANDLE} • Subscribe\" (or no "

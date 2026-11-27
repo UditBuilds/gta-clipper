@@ -63,8 +63,9 @@ SPOILERS = (r"\bend(s|ed)?\s+(badly|terribly|horribly|in\s+(a\s+)?(disaster|tear
             r"caught|away)\b", r"\bkill(s|ed)\b", r"\bwreck(s|ed)\b", r"\bescape[sd]\b", r"\b(goes|went)\s+wrong\b")
 # What a hook may name as the thing to watch, and the words the evidence uses for it (the vision model writes
 # "pickup truck", "motorcycle", "police"). The first one the hook names must be on screen at frame 0.
-SUBJECTS = {"suv": ("suv", "suvs"), "car": ("car", "cars", "sedan", "sports car", "coupe"),
-            "truck": ("truck", "trucks", "pickup"), "bike": ("bike", "bikes", "motorbike", "motorcycle", "dirt bike"),
+SUBJECTS = {"suv": ("suv", "suvs"), "car": ("car", "cars", "sedan", "sports car", "coupe", "convertible", "van", "taxi",
+                                          "cab", "limo", "jeep", "hatchback", "supercar", "muscle car"),
+            "truck": ("truck", "trucks", "pickup", "pickup truck", "semi", "tow truck", "fire truck", "firetruck"), "bike": ("bike", "bikes", "motorbike", "motorcycle", "dirt bike"),
             "bus": ("bus",), "boat": ("boat", "boats", "jet ski", "jetski", "speedboat"),
             "helicopter": ("helicopter", "chopper", "heli"), "plane": ("plane", "jet", "airplane"),
             "police": ("cop", "cops", "police", "officer", "officers", "cruiser", "patrol car"),
@@ -427,11 +428,24 @@ def ending_problems(shots, placed):
             f"most {END_AFTER_WORDS_S:g} s after it: end the last shot there, or say the last line later"]
 
 
+QUESTION_WORDS = set("can could will would who what when where why how which is are was were do does did should has have "
+                     "may might".split())
+
+
+def asks(sentence):
+    """Whether a sentence is a real question: it ends with "?" (not "?!" or "!?", which exclaim: "He crashed?!") and opens
+    with a question word ("Can you ...", "Does this ..."; "He crashed?" tells the result)."""
+    s = sentence.rstrip()
+    first = words_of(s)[:1]
+    return s.endswith("?") and not s.endswith(("?!", "!?")) and bool(first) and first[0].lower() in QUESTION_WORDS
+
+
 def spoilers_in(text):
-    """The result words in text, outside questions: [(word, sentence)]. "Can you survive ...?" names no result."""
+    """The result words in text, outside questions: [(word, sentence)]. "Can you survive ...?" names no result; "He
+    crashed?!" and "He crashed?" do (G38 #2)."""
     out = []
     for s in sentences(str(text or "").replace("|", " ")) or []:
-        if s.rstrip().endswith("?"):
+        if asks(s):
             continue
         for pat in SPOILERS:
             hit = re.search(pat, s, re.IGNORECASE)
@@ -475,7 +489,7 @@ def hook_text_problems(short):
 # 1.2K, had STEAL in its title and "take" in its voice):
 # - no filler in a hook, the open card, the title or line 1. "Watch this" is filler only where nothing it names follows
 #   ("Watch this.", "Watch this, you're ..."); "Watch this crash" names what to watch.
-HOOK_FILLER = (r"\bwatch\s+this\s*(?=[.!?,;:…]|$)", r"\bwait\s+for\s+it\b", r"\bthat\s+was\s+close\b", r"\bouch\b",
+HOOK_FILLER = (r"\bwatch\s+this\s*(?:in\s+gta\s*(?:6|vi)\s*)?(?=[.!?,;:…]|$)", r"\bwait\s+for\s+it\b", r"\bthat\s+was\s+close\b", r"\bouch\b",
                r"\blet'?s\s+see\b")
 # - a hook is a statement or a command; a question only when the stakes are readable at frame 0 ("stakes_at_0": the
 #   evidence that shows them at shot 1's start, and why, in a few words);
@@ -483,6 +497,11 @@ STAKES_WHY_WORDS = 3
 # Words every hook, card or title has: as a "key_verb" they would pass anywhere, so they are refused.
 NOT_A_KEY_VERB = set("a an the this that these those it its is are was were be you your you're i we he she they can could "
                      "will would do does did has have had in on at to of for and or but so gta 6 vi".split())
+# (G38 #11) nor any other function word: prepositions, question words, pronouns, conjunctions, quantities
+NOT_A_KEY_VERB |= set("with from what which who whom whose when where why how than then there here about into onto over under "
+                      "up down out off by as if not no yes all any some more most very just only also even still again "
+                      "his her their our my me him them us its it's this's one two three every each both either neither "
+                      "nor yet while until after before because since through across past near behind around".split())
 # - the spoken hook (line 1), the open card and the title say the same key verb ("key_verb", in any of its forms).
 
 
@@ -497,12 +516,18 @@ def filler_of(text):
 
 
 def is_question(text):
-    return str(text or "").replace("|", " ").strip().endswith("?")
+    """Whether a hook asks anywhere: "?!" and a question before or after another sentence too (G38 #2: "Can you survive
+    this?!" and "Can you survive this? Watch." skipped the stakes rule)."""
+    return "?" in str(text or "")
 
 
-def stakes_problems(stakes, shots, evidence):
+ALSO_NAMES = {"animal": {"gator"}, "car": {"suv"}}   # a subject an item supports under its own, nearer name
+
+
+def stakes_problems(stakes, shots, evidence, subject=None):
     """Why "stakes_at_0" doesn't show the stakes at frame 0 (empty when it does): evidence ids of the moment that cover
-    shot 1's start (within FRAME0_S), and a why of STAKES_WHY_WORDS words or more."""
+    shot 1's start (within FRAME0_S), and a why of STAKES_WHY_WORDS words or more. subject: the hook's (subject_of); one of
+    the items must name it (G38 #6: a "driving" item covered frame 0 of any Short)."""
     if not isinstance(stakes, dict) or not isinstance(stakes.get("evidence"), list) or not stakes["evidence"]:
         return ['no "stakes_at_0": {"evidence": ["E1"], "why": "what at 0:00 shows what is at stake"}']
     out = []
@@ -518,6 +543,10 @@ def stakes_problems(stakes, shots, evidence):
             out.append(f"{i} is not this moment's evidence")
         elif not (number(e.get("from_s")) and number(e.get("to_s")) and e["from_s"] <= t + FRAME0_S and e["to_s"] >= t):
             out.append(f"{i} is not on screen at shot 1's start ({t:.2f} s)")
+    cited = [by_id[i] for i in stakes["evidence"] if i in by_id]
+    if subject and cited and not any(({subject} | ALSO_NAMES.get(subject, set())) & item_names(e) for e in cited):
+        out.append(f"none of {', '.join(stakes['evidence'])} names {subject!r}, what the hook is about: cite an item that "
+                   "shows it at 0:00")
     return out
 
 
@@ -546,6 +575,8 @@ def hook_rule_problems(short, shots, evidence):
     out = []
     texts = [(f"hook {k}", h) for k, h in enumerate(hooks, 1)]
     texts += [("open card", short.get("open_card")), ("title", short.get("title")), ("line 1", line1)]
+    if not short.get("open_card"):              # (G38 #3) the card made from the starred hook: "Watch this in GTA 6"
+        texts.append(("the open card it makes", card_words(short)))   # shows "Watch this"
     for where, text in texts:
         f = filler_of(text)
         if f:
@@ -553,7 +584,7 @@ def hook_rule_problems(short, shots, evidence):
     starred = hooks[star] if isinstance(star, int) and 0 <= star < len(hooks) else None
     asking = next(((w, t) for w, t in (("the starred hook", starred), ("line 1", line1)) if is_question(t)), None)
     if asking:
-        why = stakes_problems(short.get("stakes_at_0"), shots, evidence)
+        why = stakes_problems(short.get("stakes_at_0"), shots, evidence, subject_of(short))
         if why:
             out.append(f"{asking[0]} is a question ({asking[1]!r}): a hook is a statement or a command, and a question "
                        "only when the stakes are readable at frame 0 (" + "; ".join(why) + "). Make it a statement, or "
@@ -649,9 +680,9 @@ def gap_problems(placed, shots, payoff):
         for x, y in free:
             pieces = [q for p0, p1 in pieces for q in ([(p0, p1)] if p1 <= x or p0 >= y else
                                                          [(p0, min(p1, x)), (max(p0, y), p1)])]
-        longest = max([p1 - p0 for p0, p1 in pieces] or [0.0])
-        if longest > MAX_GAP_S + 1e-6:
-            out.append(f"no voice for {longest:.1f} s between line {one['line']} and line {two['line']} "
+        silent = sum(p1 - p0 for p0, p1 in pieces)    # (G38 #7: the sum, not the longest piece: 3 s + 3 s round a
+        if silent > MAX_GAP_S + 1e-6:                  # payoff is 6 s of no voice)
+            out.append(f"no voice for {silent:.1f} s between line {one['line']} and line {two['line']} "
                        f"({one['end']:.1f}-{two['start']:.1f} s; the payoff and the replay don't count): at most "
                        f"{MAX_GAP_S:g} s. Add a line, or say one sooner")
     return out

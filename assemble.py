@@ -213,12 +213,23 @@ def caption_lines(words, hidden=(), card_end=None):
     return out
 
 
+def thing_words():
+    """The caption words that are a thing to watch (G38 #12: "PICKUPS", "VAN" and a "dirt bike"'s BIKE were plain): every
+    cutplan.SUBJECTS term's last word, and its plural."""
+    out = set()
+    for terms in cutplan.SUBJECTS.values():
+        for t in terms:
+            head = t.split()[-1]
+            out |= {head, head + "s", head + "es"}
+    return out
+
+
 def accents(texts, keys=()):
     """{position in the line: colour} for its 1-2 accent words. The best word: the key word (one the open card says),
     then a thing to watch or a number, then the longest; a line of plain words ("IT IS") takes its longest. A thing to
     watch (cutplan.SUBJECTS) is cyan, any other accent yellow. A second accent only in a 3-word line, and only a thing
     to watch, a number or the key word."""
-    things = {t for terms in cutplan.SUBJECTS.values() for t in terms if " " not in t}
+    things = thing_words()
     keyed = {f for k in keys for f in cutplan.forms(k) if bare(k) not in PLAIN}
 
     def score(k):
