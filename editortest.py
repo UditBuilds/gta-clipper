@@ -1827,7 +1827,7 @@ def g38_the_voice_gap_is_every_silent_second_between_two_lines():
     pay = {"from": 4.0, "to": 6.5}
     split = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 1.0}, {"line": 2, "start": 9.5, "end": 11.0}], shots, pay)
     fine = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 2.25}, {"line": 2, "start": 8.25, "end": 11.0}], shots, pay)
-    return has(split, "no voice for 6.0 s between line 1 and line 2") and fine == [], (split, fine)
+    return has(split, "no voice for 6.0 s between line 1 and line 2") and fine == []
 
 
 @check
@@ -1839,7 +1839,7 @@ def g38_an_exclaimed_or_second_sentence_question_follows_the_rules():
     told = [cutplan.spoilers_in(t) for t in ("He crashed?!", "He crashed?", "Can you survive this crash?")]
     card = problems_of(short(hooks=["Watch this in GTA 6", "b", "c"], star=0))
     return (all(has(p, "is a question") for p in asked) and told[0] and told[1] and not told[2]
-            and has(card, "the open card it makes")), (asked, told, card)
+            and has(card, "the open card it makes"))
 
 
 @check
@@ -1851,7 +1851,7 @@ def g38_a_caption_thing_is_any_subjects_word_and_its_plural():
     cyan = [assemble.accents(t) for t in (["THE", "PICKUPS"], ["THAT", "VAN"], ["BLUE", "CONVERTIBLE"], ["THE", "TAXI"],
                                           ["RED", "PICKUP"], ["THE", "DIRT", "BIKE"])]
     plain = assemble.accents(["NO", "SLOWING", "DOWN"])
-    return (all(c and set(c.values()) <= {assemble.CYAN} for c in cyan) and set(plain.values()) == {assemble.YELLOW}), (cyan, plain)
+    return all(c and set(c.values()) <= {assemble.CYAN} for c in cyan) and set(plain.values()) == {assemble.YELLOW}
 
 
 @check
@@ -1859,7 +1859,7 @@ def g38_a_key_verb_is_never_a_function_word():
     """G38 #11: "with", "from" and "what" passed as the key verb (any hook says one); refused like "the"; "steal" still
     passes where line 1, the card and the title say it"""
     bad = [cutplan.key_verb_problems(short(key_verb=w)) for w in ("with", "from", "what", "about")]
-    return all(p and "key_verb:" in p[0] for p in bad) and not cutplan.key_verb_problems(short()), bad
+    return all(p and "key_verb:" in p[0] for p in bad) and not cutplan.key_verb_problems(short())
 
 
 def main():

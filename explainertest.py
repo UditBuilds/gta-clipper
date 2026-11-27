@@ -2390,7 +2390,7 @@ def g38_a_handle_with_more_after_it_is_another_channel():
     import explainer
     wrong = [explainer.handle_problem(t) for t in ("@NeonGetawayYT-clips • Subscribe", "@NeonGetawayYT.clips", "@NeonGetaway")]
     right = [explainer.handle_problem(t) for t in ("@NeonGetawayYT • Subscribe", "Follow @NeonGetawayYT.")]
-    return all(wrong) and right == [None, None], (wrong, right)
+    return all(wrong) and right == [None, None]        # (a bool: this suite's main() asks bool() of it)
 
 
 def main():
