@@ -84,3 +84,49 @@ them, NARRATED, and a third look agrees ("Player flying low over airport with al
 - A helicopter or plane taken with no "approaches / opens / boards / climbs" line on foot right before it is not found.
 - "Player flies" is the model's word for being in control of a plane; `_135610`'s jet never leaves the ground. Scripts must not say it flies.
 - The posted boar Short is type "stunt" in the owner's list, so an animal attack right after it isn't held back as "the same type".
+
+## The review (Nov 27)
+
+A read-only review of this PR (G37) listed wordings that wrongly count or wrongly miss, tests that can't fail, the pool gap and the
+bank file. The review's own text was not in the repo or on GitHub; each claim as the owner summed it up was checked against the code
+(the old lines and the new are in the commits) and against made-up lines before anything was changed. 7 checks were written first; each
+failed on the code before the fix.
+
+**Wordings (payoffs.py).** Before, these counted: "Player narrowly avoids being bitten by an alligator", "is almost attacked by a gator",
+"dodges a shark attack", "Alligator is attacked with a knife" (the gator is the one attacked), "chased by a dog" (no contact), "Billboard
+showing a shark attack", a poster, a TV, curly quotes, "Player watches a plane flying low" (the note's player only watches), "talks to
+pilots", "flies off his motorcycle", a helicopter pad, an aircraft carrier, "runs to his car as a plane flies overhead", "walks toward the
+hangar near a plane", "approaches a car with a helicopter overhead". None counts now. These were missed and count now: "shoots alligator that
+attacks him", "aims at the alligator as it attacks", "gets bit by a dog", "snaps at", "pounces". How:
+
+- What only nearly happens or would (avoids, dodges, almost, nearly, tries to, before it can, instead of) is blanked to the end of its part
+  of the line, so "nearly dies after an alligator attack" keeps the attack. What is on a picture (billboard, poster, sign, TV, screen,
+  statue) or said (talks about, news, radio, shouts about) is blanked the same way; curly quotes are quotes.
+- "gets attacked" counts only when the one attacked isn't an animal. "chased" is no attack.
+- The note must have the player fly it or get in it with only words like "is", "now", "then" between, and not watch it; "flies off / out /
+  through the windshield" is a crash. The index's on-foot line must have the aircraft as what he goes at (a few words after "approaches",
+  "runs to", "climbs stairs to"), with no other vehicle or "near/as/while" in between, and no driving in the line.
+- Two attacks a sheet apart are one event only when it is the same animal (a gator and then a dog were one event, with both checks).
+
+Judgment calls: "Player drives up to the plane and approaches it on foot" is not on foot at it (a line that drives is left out; "approaches
+it" names no aircraft). "chased by" is no attack.
+
+**On the real data nothing changes:** the same dry run as above (0 model calls, every write blocked, the same posted list for every run):
+PR 36's code against this code with the rule off, 0 of 445 entries differ; rule off against rule on, the same 4 (`1119-135610-0722`,
+`1119-143644-0069`, `-0077`, `-0077b`) with the same numbers; this PR before the review against after it, 0 of 445.
+
+**Tests that couldn't fail.** The pink jet's first case in `near_a_plane_is_not_taking_it` has no flying sheet at all, so on its own it can't
+catch "a vehicle called plane is enough" (its `stairs` case does). Every rule above now has a negative case of its own, at the text level and
+in the bank (`the_bank_counts_none_of_the_reviewed_wordings`).
+
+**The pool gap (G37 #16).** The runway star rise (`1119-135610-0678`, 11:18-11:35, tier 2) and the airliner (11:58-12:25, tier 2) are 40 s
+apart and share no second; `launch.pool_of`'s 60 s gap kept the airliner out, so it was never checked. Ranking by tier first would change
+nothing (both are 2/3). The smallest fix: the gap keeps out a candidate of the **same kind** (category, as the picker's near-duplicate rule
+reads it) or one that **shares seconds**, not a different payoff. The picker's own rules (near-duplicates, 2 a recording) are unchanged. On
+the live bank (read only): `--count 3`'s pool of 15 swaps `1119-135610-0907` for `1119-135610-0640` (both 2/3); `--count 6`'s pool of 25 swaps
+three 0-1/3 candidates for 0640 and two 1/3 ones. (The airliner itself is posted now, so it isn't offered.)
+
+**The bank file (G37 #10).** `bank.read_bank` read a cut-short, locked or wrong-shaped `content_bank.json` as no bank: a build then gave
+every moment a new id (keep_ids had nothing to keep) and wrote over it, with no copy. Now it is `index.StateError` (every program prints it as
+a plain ERROR) for build, posted, rejected and page, read before any mining; and a build copies the old `content_bank.json` and `bank.html`
+to `bank\backups\<time>` before it writes.

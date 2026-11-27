@@ -1165,6 +1165,12 @@ answers and the safety question's note, the vision model's two looks at the same
 - It changes no label, peak, window or id. A moment of 10 s or more with one is on the action shelf, is a type of its own, passes the
   quality gate as an action payoff and has the event in its evidence. Impacts still outrank it.
 - On all 23 recordings 4 of 445 entries change (the gator, two list items on the same seconds, the airliner), with 0 model calls.
+- **The review (Nov 27):** wordings that wrongly counted are none now (an attack he avoids or nearly has, one on a billboard or TV,
+  in curly quotes, the animal as the one attacked, a chase; a note that watches a plane fly, "flies off his bike"; an on-foot line
+  that only runs past a plane), and a few it missed count ("alligator that attacks him", "bit by a dog"). Two animals are two
+  events. The same 4 entries change, nothing else. A damaged or locked `content_bank.json` stops every program with an ERROR
+  instead of being read as no bank, and a build copies the old bank to `bank\backups` first. /launch's pool keeps 60 s between
+  two candidates of the same kind (or that share seconds), not between two different payoffs. `docs/payoffs-pr37.md`.
 
 ## No double text under the open card (PR 33, Nov 24)
 
@@ -1192,9 +1198,9 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 37): `--full` | 617 | 8.8 min |
-| now: `--quick` | 540 | 1.9 min |
-| now: `--ci`, on GitHub's Windows machine | 524 | about 2 min |
+| now (PR 37 with its review fixes): `--full` | 624 | 8.7 min |
+| now: `--quick` | 547 | 2.1 min |
+| now: `--ci`, on GitHub's Windows machine | 531 | about 2 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1212,7 +1218,7 @@ check and the jet ski: `docs/short-nov24-notes.md`.
 | indextest | `.venv` | 49 | 49 | 49 | 8 s | 3 s |
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
-| banktest (PR 32, 35, 37) | `.venv` | 60 | 60 | 58 | - | 12 s |
+| banktest (PR 32, 35, 37) | `.venv` | 67 | 67 | 65 | - | 18 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
