@@ -1770,6 +1770,151 @@ def the_real_recordings_have_one_attack_and_one_aircraft():
             and boar["payoff"]["tier"] == 3 and boar["label"]["kind"] == "fall"), got
 
 
+# --- 11. The review of PR 37 (Nov 27): wordings that wrongly counted or wrongly missed, and the bank's own file ---
+
+@check
+def an_attack_that_only_nearly_happens_or_is_on_a_picture_is_none():
+    """G37: an attack he avoids, nearly has, that is tried or would come ("before it can attack"), one on a billboard, poster
+    or TV, in curly quotes or talked about, an animal that is the one attacked ("Alligator is attacked with a knife"), a chase
+    with no contact, a hot dog or a bear statue: no attack. The ones the first version missed are attacks: "alligator that
+    attacks him", "as it attacks", "bit by a dog", "snaps at", "pounces"; a near miss in one part of a line leaves the
+    attack in the next ("nearly dies after an alligator attack")"""
+    import payoffs
+    no = ["Player narrowly avoids being bitten by an alligator", "Player is almost attacked by a gator", "Player dodges a shark attack",
+          "Alligator tries to bite the player", "Player shoots the alligator before it can attack", "Alligator stays still instead of attacking",
+          "Alligator is attacked with a knife", "Player chased by a dog down the street", "Billboard showing a shark attack near the highway",
+          "Sign reading 'gator attack' near the swamp", "NPC shouts “gator attack!” at the player",
+          "Player walks past a poster of a crocodile attack", "TV shows a shark attack in the bar",
+          "Player talks about a shark attack with a woman", "Player didn’t get attacked by the gator",
+          "Player gets attacked near a bear statue", "Player bites into a hot dog and gets knocked down", "No alligator attack, player walks on"]
+    yes = ["Player shoots alligator that attacks him", "Player aims at the alligator as it attacks", "Player gets bit by a dog",
+           "Alligator snaps at the player and drags him", "Cougar pounces on the player", "Player gets attacked and falls near an alligator",
+           "Player nearly dies after an alligator attack", "Player talks to a woman, then gets bitten by a dog",
+           "Player aims gun at alligator, then gets attacked and falls", "Player survives crocodile attack, then walks away with gun drawn."]
+    wrong = [x for x in no if payoffs.attack_in(x)[0]] + [x for x in yes if not payoffs.attack_in(x)[0]]
+    return not wrong, wrong
+
+
+@check
+def watching_an_aircraft_or_walking_near_one_is_not_taking_it():
+    """G37: the safety note must see the PLAYER fly it or get in it: not "Player watches a plane flying low", "talks to pilots",
+    "flies off his motorcycle", "watches the pilot enter the helicopter", a helicopter pad. The index's line must have him go AT
+    the aircraft (it is what "approaches", "runs to" is about): not "runs to his car as a plane flies overhead", "walks toward
+    the hangar near a plane", "approaches a car with a helicopter overhead", nor a line that drives up to it"""
+    import payoffs
+    in_no = ["Player watches a plane flying low over the airport", "Player talks to pilots at the hangar",
+             "Player flies off his motorcycle after a crash", "Player flies through the windshield", "Player watches the pilot enter the helicopter",
+             "Player stands near a plane that is flying overhead", "Player enters a helicopter pad area", "Player boards an aircraft carrier"]
+    in_yes = ["Player flies low over airport with aircraft on ground.", "Player is flying a helicopter over the city",
+              "Player takes control of the plane", "Player boards the jet", "Player in the cockpit of a jet"]
+    on = lambda t: {"activity": "on_foot", "vehicle": "none", "notable": t}
+    at_no = ["Player runs to his car as a plane flies overhead", "Player walks toward the hangar near a plane",
+             "Player approaches a car with a helicopter overhead", "Player drives up to the plane and approaches it on foot",
+             "Player's SUV approaches a parked airplane"]
+    at_yes = ["Player approaches airplane, opens door, walks up stairs", "Player runs toward the helicopter", "Player boards the plane",
+              "Player climbs stairs to a pink airplane at airport."]
+    wrong = ([x for x in in_no if payoffs.in_it(x)] + [x for x in in_yes if not payoffs.in_it(x)]
+             + [x for x in at_no if payoffs.at_aircraft(on(x))] + [x for x in at_yes if not payoffs.at_aircraft(on(x))])
+    return not wrong, wrong
+
+
+@check
+def two_animals_seconds_apart_are_two_attacks_never_one():
+    """G37: a gator attack the two checks agree on and a dog 6 s later are two events (the first version made them one and
+    gave the gator's event the dog's checks); a gator line with a dog's note on the same seconds is none"""
+    import payoffs
+    sheets = [{"t": float(t), "notable": "Player walks on a dirt path", "activity": "on_foot", "vehicle": "none"} for t in range(0, 60, 6)]
+    sheets[3]["notable"], sheets[4]["notable"] = "Alligator attacks the player", "A dog bites the player"
+    two = payoffs.events(sheets, 6.0, [look(19.0, 23.0, "Player fights alligator."), look(25.0, 29.0, "Player fights a dog.")])
+    crossed = payoffs.events(sheets[:4], 6.0, [look(19.0, 23.0, "Player fights a dog.")])
+    texts = [{c["text"] for c in e["checks"]} for e in two]
+    return (len(two) == 2 and all("animals" not in e for e in two) and not crossed
+            and texts == [{"Alligator attacks the player", "Player fights alligator."}, {"A dog bites the player", "Player fights a dog."}]), (two, crossed)
+
+
+@check
+def the_bank_counts_none_of_the_reviewed_wordings():
+    """G37, in the bank: the gator with a line that only nearly has it ("narrowly avoids being bitten") or where the gator is
+    the one attacked, with a look that sees them fight, is no payoff; the airliner with on-foot lines that don't go at the plane,
+    or a note that only watches one fly, is no payoff; the real lines still are"""
+    near = {**GATOR_LINES, 78.0: ("Player narrowly avoids being bitten by an alligator", "shootout", "none"),
+            84.0: ("Player walks away with gun drawn.", "on_foot", "none")}
+    victim = {**near, 78.0: ("Alligator is attacked with a knife", "shootout", "none")}
+    away = {**JET_LINES, 714.0: ("Player runs to his car as a plane flies overhead", "on_foot", "none"),
+            720.0: ("Player walks toward the hangar near a plane", "on_foot", "none")}
+    watching = NOT_IN_JET + [look(730.5, 734.5, "Player watches a plane flying low over the airport.")]
+    got = [new_payoffs(made(gator(near), GATOR_LOOKS)[0]), new_payoffs(made(gator(victim), GATOR_LOOKS)[0]),
+           new_payoffs(made(jet(away), JET_LOOKS)[0]), new_payoffs(made(jet(), watching)[0])]
+    real = [new_payoffs(made(gator(), GATOR_LOOKS)[0]), new_payoffs(made(jet(), JET_LOOKS)[0])]
+    return got == [set()] * 4 and all(real), (got, real)
+
+
+@check
+def a_damaged_or_locked_bank_is_never_read_as_empty():
+    """G37 #10: content_bank.json cut short, locked or not a bank was read as no bank, so a build gave every moment a new id and
+    wrote over it with no copy kept. Now build, posted, rejected and page stop with a plain ERROR and every byte stays; a
+    missing bank is still a first one"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        good = build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        path, used = bdir / bank.BANK_FILE, shorts / footage_short.USED_FOOTAGE
+        results = {}
+        for name, data in (("cut short", path.read_bytes()[:200]), ("not a bank", b'{"version": 3}')):
+            path.write_bytes(data)
+            keep = used.read_bytes() if used.exists() else None
+            results[name] = (stops(lambda: build(lib, shorts, bdir, None), "content_bank.json"),
+                             stops(lambda: bank.mark_rejected(good["moments"][0]["id"], shorts_dir=shorts, bank_dir=bdir, log=quiet),
+                                   "content_bank.json"),
+                             stops(lambda: bank.mark_posted(good["moments"][0]["id"], shorts_dir=shorts, bank_dir=bdir,
+                                                            posted_file=tmp / "posted.json", log=quiet), "content_bank.json"),
+                             path.read_bytes() == data, (used.read_bytes() if used.exists() else None) == keep)
+        path.write_bytes(json.dumps(good).encode("utf-8"))
+        real_read = Path.read_text
+
+        def locked(self, *a, **k):
+            if self.name == bank.BANK_FILE:
+                raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+            return real_read(self, *a, **k)
+        Path.read_text = locked
+        try:
+            results["locked"] = (stops(lambda: bank.read_bank(bdir), "content_bank.json"),)
+        finally:
+            Path.read_text = real_read
+        first = bank.read_bank(tmp / "nowhere")
+    return all(all(v) for v in results.values()) and first is None, results
+
+
+@check
+def a_build_copies_the_old_bank_before_writing_over_it():
+    """G37 #10: before a build writes content_bank.json and bank.html it copies the old ones to bank\\backups\\<time>, byte for
+    byte; the first build has nothing to copy"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        first = sorted((bdir / "backups").glob("*/*")) if (bdir / "backups").exists() else []
+        before = {f: (bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)}
+        build(lib, shorts, bdir, None)
+        copies = sorted((bdir / "backups").glob("*/*"))
+        same = {c.name: c.read_bytes() == before.get(c.name) for c in copies}
+    return first == [] and same == {bank.BANK_FILE: True, bank.PAGE_FILE: True}, (first, same)
+
+
+@check
+def a_different_payoff_40_s_on_is_not_kept_out_of_the_pool():
+    """G37 #16: the runway's star rise (1119-135610-0678, 11:18-11:35, it ranks higher) kept the airliner taken (11:58-12:25, 40 s
+    after its start, no second shared) out of /launch's pool, so it was never checked. Both are in it now (the old rule had one:
+    that must fail); a candidate of the same kind 40 s on, or of another kind that shares seconds, is still kept out"""
+    def m(name, a, b, score, category):
+        return {"id": name, "video": "v", "start_s": a, "end_s": b, "score": score, "category": category, "session_s": a}
+    runway, jet_ = m("0678", 678.38, 694.94, 11.65, "star rise"), m("0722", 718.75, 745.5, 11.0, "aircraft taken")
+    both = [p["id"] for p in launch.pool_of([runway, jet_], 10)]
+    same = [p["id"] for p in launch.pool_of([runway, dict(jet_, category="star rise")], 10)]
+    shared = [p["id"] for p in launch.pool_of([runway, dict(jet_, start_s=690.0, session_s=690.0)], 10)]
+    return both == ["0678", "0722"] and same == ["0678"] and shared == ["0678"], (both, same, shared)
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):
