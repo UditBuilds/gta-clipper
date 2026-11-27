@@ -44,14 +44,14 @@ def quiet(*_):
 # --- Made-up recordings ---
 
 def sheets_of(duration, lines=(), activity="driving"):
-    """A sheet every 6 s; lines: {second: (text, activity)}."""
+    """A sheet every 6 s; lines: {second: (text, activity)} or (text, activity, vehicle)."""
     lines = dict(lines)
     out = []
     for k in range(int(duration // 6)):
         t = k * 6.0
-        text, act = lines.get(t, (f"Player drives down a city street", activity))
+        text, act, *vehicle = lines.get(t, (f"Player drives down a city street", activity))
         out.append({"t": t, "file": f"frames/{index.frame_name(t)}", "error": None, "notable": text, "activity": act,
-                    "vehicle": "car", "police_visible": False, "confidence": 0.9, "hud_stars": 0})
+                    "vehicle": vehicle[0] if vehicle else "car", "police_visible": False, "confidence": 0.9, "hud_stars": 0})
     return out
 
 
@@ -1511,6 +1511,460 @@ def building_the_bank_or_posting_warns_about_a_long_lock():
     names = all(len(w) == 3 and "'big'" in w[0] and "400" in w[0] and "'two recordings'" in w[1] and "'no status'" in w[2]
                 for w in (built, on_post, on_page))
     return names and none == [], (built, on_post, on_page, none)
+
+
+# --- 10. Payoffs that are neither an impact nor the HUD (the owner, Nov 25): an animal attack, an aircraft taken ---
+# The lines and the notes are the vision model's own, word for word, from _143644 (the gator) and _135610 (the airport).
+
+GATOR_LINES = {72.0: ("Player aims rifle at deer near water with crocodile nearby", "shootout", "none"),
+               78.0: ("Player aims gun at alligator, then gets attacked and falls", "shootout", "none"),
+               84.0: ("Player survives crocodile attack, then walks away with gun drawn.", "on_foot", "none"),
+               90.0: ("Player aims gun at gator, then walks away on dirt path", "shootout", "none"),
+               96.0: ("Player runs past alligator, then steps on it, then walks away.", "on_foot", "none"),
+               102.0: ("Player walks past alligator, then runs down dirt path.", "on_foot", "none")}
+GATOR_SEGS = [(0, 72, "on_foot"), (72, 84, "shootout"), (84, 90, "on_foot"), (90, 96, "shootout"), (96, 600, "on_foot")]
+FIGHT = look(81.0, 85.0, "Player fights alligator on dirt path.", blood_or_gore=True)
+GATOR_LOOKS = [look(69.0, 73.0, "Player walks through grassy area near water."),
+               look(73.0, 77.0, "Player approaches alligator in grassy area."),
+               look(77.0, 81.0, "Player aims gun at alligator in grassy wetland area.", shooting=True),
+               look(78.0, 82.0, "Player shoots crocodile in grassy wetland area.", shooting=True), FIGHT,
+               look(85.0, 89.0, "Player encounters alligator on dirt path.", blood_or_gore=True),
+               look(89.0, 93.0, "Player aims gun at gator in swampy environment.", shooting=True),
+               look(93.0, 97.0, "Player walks through swampy area with alligator."),
+               look(97.0, 101.0, "Player interacts with alligator in grassy outdoor area."),
+               look(101.0, 105.0, "Player walks near water with alligator.")]
+NO_FIGHT = [s for s in GATOR_LOOKS if s is not FIGHT] + [look(81.0, 85.0, "Player encounters alligator on dirt path.")]
+JET_LINES = {702.0: ("Player drives a black SUV on airport tarmac at dusk.", "driving", "car"),
+             708.0: ("Black SUV drives on airport tarmac near planes at dusk.", "driving", "car"),
+             714.0: ("Player approaches airplane, opens door, walks up stairs", "on_foot", "none"),
+             720.0: ("Player approaches plane, then views airport from above.", "on_foot", "none"),
+             726.0: ("Plane flying low over airport at sunset with altitude warning.", "flying", "plane"),
+             732.0: ("Player flies low over airport with aircraft on ground.", "flying", "plane"),
+             738.0: ("Plane damaged on tarmac, player running near bus", "on_foot", "none"),
+             780.0: ("Man runs near airplane and truck on airport tarmac.", "on_foot", "none"),
+             786.0: ("Player climbs stairs to a pink airplane at airport.", "on_foot", "plane"),
+             792.0: ("Player walks through airport terminal with no visible threats or action.", "on_foot", "none")}
+JET_SEGS = [(0, 20, "driving"), (20, 30, "shootout"), (30, 645, "driving"), (645, 714, "chase"), (714, 726, "on_foot"), (726, 738, "chase"), (738, 840, "on_foot")]
+IN_JET = look(730.5, 734.5, "Player flies low over airport with aircraft on ground.", subtitles=True)
+JET_LOOKS = [look(722.5, 726.5, "Airport scene with planes and sunset lighting."),
+             look(726.5, 730.5, "Airplane flying low over airport runway at dusk.", subtitles=True),
+             look(726.5, 728.5, "Airplane on runway with HUD and text overlay.", every=0.5, subtitles=True), IN_JET,
+             look(734.5, 738.5, "Airplane flying low over airport at dusk with HUD elements."),
+             look(738.5, 742.5, "Airplane on tarmac at dusk with HUD elements."),
+             look(781.0, 785.0, "Player runs near airplane at airport tarmac."),
+             look(785.0, 789.0, "Player runs toward airplane on tarmac at airport."),
+             look(789.0, 793.0, "Player approaches airplane at airport terminal."),
+             look(793.0, 797.0, "Player runs through airport terminal area.")]
+NOT_IN_JET = [s for s in JET_LOOKS if s is not IN_JET]
+
+
+def gator(lines=None, stem="Grand Theft Auto VI_20261119143644"):
+    """The gator attack as the index has it, its loudest second the gunshot (79.0 s) before the bite."""
+    return made_up(stem, 600.0, GATOR_LINES if lines is None else lines, [seg(*s) for s in GATOR_SEGS], loud={79.0: 3.0})
+
+
+def jet(lines=None, stem="Grand Theft Auto VI_20261119135610"):
+    """The airliner as the index has it: 3 stars, the heat icons change as he gets in, the 4th star at 727."""
+    counts = [0] * 1290 + [3] * 164 + [4] * 226
+    return made_up(stem, 840.0, JET_LINES if lines is None else lines, [seg(*s) for s in JET_SEGS], counts, loud={727.0: 3.0},
+                   hud6=[{"kind": "heat", "at_s": 721.5, "before": 2, "after": 3}])
+
+
+def save_looks(cache, stem, looks):
+    """Saved answers of the safety question, as vlm keeps them."""
+    d = Path(cache) / stem
+    d.mkdir(parents=True, exist_ok=True)
+    for k, s in enumerate(looks):
+        (d / f"{stem}_{s['from_s']:.1f}_{k}.json").write_text(json.dumps(
+            {"fields": {"from_ms": round(s["from_s"] * 1000), "to_ms": round(s["to_s"] * 1000), "every_s": s["every_s"],
+                        "prompt_version": safety.PROMPT_VERSION}, "record": {"answer": s["answer"]}}), encoding="utf-8")
+
+
+def made(rec, looks, checker=None):
+    """(every moment of one recording with these saved looks, model calls)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        save_looks(tmp, rec["stem"], looks)
+        ms, _, _, calls = bank.make_moments({rec["stem"]: rec}, checker, tmp, tmp, {"topics": []}, quiet)
+    return ms, calls
+
+
+def held(ms, t):
+    """The moment of the big kinds that holds second t."""
+    return next(m for m in ms if m["family"] == "main" and m["start_s"] <= t <= m["end_s"])
+
+
+def new_payoffs(ms):
+    """{(kind, the moment's first second)} of every moment with one of the new payoffs."""
+    return {(e["kind"], int(m["start_s"])) for m in ms for e in m.get("payoff_events", [])}
+
+
+@check
+def an_animal_attack_two_checks_see_meets_the_payoff_bar():
+    """the gator: the index's line says it attacks ("gets attacked and falls", an alligator in it) and the safety question's
+    note on the same seconds sees them fight: payoff 2/3, type and category "animal attack", on the action shelf, both lines
+    kept as the proof. Its label (the shot at its loudest second), its peak and its seconds stay as they were"""
+    ms, calls = made(gator(), GATOR_LOOKS)
+    m, old = held(ms, 80), held(made(gator(), NO_FIGHT)[0], 80)
+    proof = " | ".join(c["text"] for e in m["payoff_events"] for c in e["checks"])
+    same = all(m[k] == old[k] for k in ("id", "start_s", "end_s", "peak_s", "kinds", "main", "label"))
+    return (calls == 0 and same and m["label"]["kind"] == "shooting" and m["label"]["sure"] and m["peak_s"] == 79.0
+            and m["payoff"]["tier"] == 2 and "animal attack" in m["payoff"]["why"] and m["category"] == "animal attack"
+            and launch.moment_type(m) == "animal attack" and m["shelf"] == "action" and "gets attacked" in proof
+            and "fights alligator" in proof and old["payoff"]["tier"] == 1 and "payoff_events" not in old), (m["payoff"], proof)
+
+
+@check
+def one_check_alone_is_no_animal_attack():
+    """below the bar and no event where only the index says it, only the note says it, nobody looked, the two are of different
+    seconds or different animals, both only see a fight (he may be hunting it), or the same check says it twice"""
+    def tier(lines=None, looks=()):
+        m = held(made(gator(lines), looks)[0], 80)
+        return m["payoff"]["tier"], "payoff_events" in m
+    calm = {**GATOR_LINES, 78.0: ("Player aims gun at alligator near water", "shootout", "none"),
+            84.0: ("Player walks away with gun drawn.", "on_foot", "none")}
+    fights = {**calm, 78.0: ("Player fights alligator on dirt path", "shootout", "none")}
+    cases = {"index only": tier(looks=NO_FIGHT), "nobody looked": tier(), "note only": tier(calm, GATOR_LOOKS),
+             "other seconds": tier(looks=NO_FIGHT + [look(120.0, 124.0, "Player fights alligator on dirt path.")]),
+             "other animal": tier(looks=NO_FIGHT + [look(81.0, 85.0, "Player fights dog on dirt path.")]),
+             "a fight twice": tier(fights, GATOR_LOOKS),
+             "the same check twice": tier(calm, NO_FIGHT + [look(81.0, 85.0, "Alligator attacks the player."), FIGHT])}
+    return all(n < launch.PAYOFF_BAR and not event for n, event in cases.values()), cases
+
+
+@check
+def an_animal_on_screen_is_no_attack():
+    """the index's own lines with an animal and no attack (walks past, aims at it, shoots it, a dog on the beach, sharks and a
+    spear gun, a snake in a tank, a quoted line of dialogue, a denial, a man who attacks), and the player attacking the
+    animal, are no attack; the real attack lines are. And in the bank: a gator he only walks past, aims at and shoots, with a
+    look that sees them fight, is no payoff"""
+    import payoffs
+    no = ["Player aims rifle at deer near water with crocodile nearby", "Player aims gun at gator, then walks away on dirt path",
+          "Player runs past alligator, then steps on it, then walks away.", "Player walks past alligator, then runs down dirt path.",
+          "Player aims gun at gators near dock with American flag.", "Player shoots crocodile in grassy wetland area.",
+          "Diver defends bachelor party from sharks with spear gun", "Diver aims spear gun at shark underwater",
+          "Player interacts with dog on beach near ambulance.", "Player explores house, sees snake in tank, then meets woman.",
+          "Group on boat, dialogue about sharks and eels", "Diver swims near boat, text: 'I was attacked by a shark back there.'",
+          "Protesters block truck with lock, demanding animal rights.", "Player attacks alligator with a knife",
+          "Player walks past a gator, no attack", "Player with dog gets attacked by a man", "A man attacks the player near a dog",
+          "Player near alligator attacks a man", "Player hiding in tall grass near a pig and red vehicle.",
+          "Diver encounters jellyfish underwater in coral reef environment", "Player on jet ski in ocean with police pursuit",
+          "Player gets attacked and falls", "Player bites into a hot dog, then falls", "Player is never attacked by the gator",
+          "Group on boat, dialogue about a shark attack", "Diver near boat, subtitles read attacked by a shark"]
+    yes = ["Player aims gun at alligator, then gets attacked and falls", "Player survives crocodile attack, then walks away with gun drawn.",
+           "Player falls in grass after being attacked by a wild boar.", "Alligator lunges and bites the player", "A shark bites the diver"]
+    wrong = [x for x in no if payoffs.attack_in(x)[0]] + [x for x in yes if not payoffs.attack_in(x)[0]]
+    calm = {**GATOR_LINES, 78.0: ("Player shoots crocodile in grassy wetland area.", "shootout", "none"),
+            84.0: ("Player walks past alligator, then runs down dirt path.", "on_foot", "none")}
+    ms, _ = made(gator(calm), GATOR_LOOKS)
+    return not wrong and not new_payoffs(ms) and not any(m["category"] == "animal attack" for m in ms), wrong
+
+
+@check
+def taking_an_aircraft_two_checks_see_meets_the_payoff_bar():
+    """the airliner: the index goes from on foot at the plane (it opens the door, walks up the stairs) to flying it, and the
+    safety question's note there says the player is in control ("Player flies ..."): payoff 2/3, type and category "aircraft
+    taken", on the action shelf (its payoff is the plane, not the star), also where it answers a question on screen or nothing else was
+    mined there, 10 s or more. The star rise is still its label; a moment that starts after he is in it doesn't get it"""
+    import payoffs
+    ms, calls = made(jet(), JET_LOOKS)
+    m, old = held(ms, 727), held(made(jet(), NOT_IN_JET)[0], 727)
+    proof = " | ".join(c["text"] for e in m["payoff_events"] for c in e["checks"])
+    late = dict(m, start_s=725.5, end_s=732.5)
+    asks = [{"id": "wanted-system", "kind": "topic", "question": "x"}]       # it answers a question on screen, like the real one
+    shelves = [bank.shelf_of(x) for x in (dict(m, questions=asks), dict(old, questions=asks), dict(m, family="calm", main="calm"),
+                                          dict(m, end_s=m["start_s"] + 9.0))]
+    return (calls == 0 and m["payoff"]["tier"] == 2 and "aircraft" in m["payoff"]["why"] and m["category"] == "aircraft taken"
+            and launch.moment_type(m) == "aircraft taken" and m["shelf"] == "action" and m["label"]["kind"] == "star rise"
+            and all(m[k] == old[k] for k in ("id", "start_s", "end_s", "peak_s", "label")) and old["payoff"]["tier"] == 1
+            and "opens door" in proof and "Player flies" in proof and "payoff_events" not in old
+            and shelves == ["action", "proof", "action", "list"] and not any(payoffs.holds(late, e) for e in m["payoff_events"])
+            and new_payoffs(ms) == {("aircraft taken", int(m["start_s"]))}), (m["payoff"], m["category"], proof, new_payoffs(ms))
+
+
+@check
+def near_a_plane_is_not_taking_it():
+    """the pink jet (_135610, 13:02-13:13: he climbs its stairs, stands at its door and walks away) has no payoff, though the index
+    says vehicle "plane" for one sheet: he is on foot there and never flies; not even where a note says he does. A plane flying
+    over while he runs or drives past one is none either (the note must see the PLAYER in it), nor an index that shows him in it
+    with no look that does, nor a look 30 s away"""
+    lines = {t: v for t, v in JET_LINES.items() if t < 714 or t >= 738}
+    pink, _ = made(jet(lines), JET_LOOKS + [look(786.0, 790.0, "Player flies a pink airplane.")])
+    over = {**JET_LINES, 714.0: ("Player runs near airplane and truck on airport tarmac.", "on_foot", "none"),
+            720.0: ("Man runs near airplane and truck on airport tarmac.", "on_foot", "none"),
+            726.0: ("Plane flying low over airport at sunset with altitude warning.", "on_foot", "none"),
+            732.0: ("Van drives on airport tarmac at dusk with helicopter overhead.", "driving", "van")}
+    passing, _ = made(jet(over), JET_LOOKS)
+    driving = {**JET_LINES, 714.0: ("Player drives van near airport at night with planes visible.", "driving", "van"),
+               720.0: ("Black SUV drives on airport tarmac near planes at dusk.", "driving", "car")}
+    drove, _ = made(jet(driving), JET_LOOKS)
+    alone, _ = made(jet(), NOT_IN_JET)
+    far, _ = made(jet(), NOT_IN_JET + [look(768.0, 772.0, IN_JET["answer"]["note"])])
+    # the pink jet again, walked up to first: vehicle "plane" on foot is not in it; an SUV that drives up to a plane is not on foot
+    door = {**lines, 780.0: ("Player approaches pink airplane at airport.", "on_foot", "none")}
+    stairs, _ = made(jet(door), JET_LOOKS + [look(786.0, 790.0, "Player flies a pink airplane.")])
+    parks = {**JET_LINES, 714.0: ("Player's SUV approaches a parked airplane", "driving", "car"),
+             720.0: ("Black SUV approaches plane on airport tarmac", "driving", "car")}
+    parked, _ = made(jet(parks), JET_LOOKS)
+    got = [new_payoffs(x) for x in (pink, passing, drove, alone, far, stairs, parked)]
+    return got == [set()] * 7, got
+
+
+@check
+def already_flying_is_not_taking_an_aircraft():
+    """a biplane (_165142) already in the air as the recording starts, and again after the map screen, is nothing taken; nor is
+    getting out of one, nor a jet ski, nor a plane he walks up to a minute before the index sees one fly"""
+    air = ("Blue biplane flies over hills at dusk with minimal light.", "flying", "plane")
+    lines = {float(t): air for t in range(0, 126, 6)} | {126.0: ("Player views map with multiple counties.", "menu_map", "none"),
+                                                         132.0: ("Player views map of towns near a plane.", "menu_map", "none")}
+    lines |= {float(t): ("Player flies blue biplane over hills and coastal towns at dusk.", "flying", "plane") for t in range(138, 300, 6)}
+    lines |= {300.0: ("Player exits biplane and walks on a dirt field", "on_foot", "none"),
+              306.0: ("Player approaches jet ski on the beach", "on_foot", "none"), 312.0: ("Player rides jet ski", "boat", "boat"),
+              400.0 - 4: ("Player approaches plane on a dirt field", "on_foot", "none")}
+    lines |= {float(t): ("Player walks on a dirt field", "on_foot", "none") for t in range(402, 462, 6)} | {462.0: air, 468.0: air}
+    segs = [seg(0, 126, "flying"), seg(126, 138, "menu_map", never=True), seg(138, 300, "flying"), seg(300, 600, "on_foot")]
+    rec = made_up("Grand Theft Auto VI_20261119165142", 600.0, lines, segs, loud={60.0: 3.0, 150.0: 3.0, 465.0: 3.0})
+    ms, _ = made(rec, [look(float(t), t + 4.0, "Player flies biplane over hills at dusk with city lights below.") for t in range(0, 600, 4)])
+    return len(ms) > 3 and not new_payoffs(ms), new_payoffs(ms)
+
+
+@check
+def the_new_payoffs_go_all_the_way_to_a_pick():
+    """bank -> candidates -> safety and labels -> the quality gate -> pick -> type: the gator is an ACTION clip whose payoff is "animal
+    attack" (the gate said "no clear point" and dropped it), the jet is picked too, each with its event in its evidence; with one
+    check gone neither is picked: the gate drops the gator and the bar keeps the jet out"""
+    def night(gator_looks, jet_looks):
+        recs = {r["stem"]: r for r in (jet(), gator())}
+        looks = {jet()["stem"]: jet_looks, gator()["stem"]: gator_looks}
+        with tempfile.TemporaryDirectory() as tmp:
+            for stem, x in looks.items():
+                save_looks(tmp, stem, x)
+            ms, _, _, _ = bank.make_moments(recs, None, tmp, tmp, {"topics": []}, quiet)
+
+            def safe(m, rec, folder):
+                m["verified"] = safety.seen_spans([dict(s, error=None) for s in looks[rec["stem"]]])
+                return True, []
+            cands = [c for c in bank.candidates(ms, recs)]
+            _, picks, rejected, pool = launch.pick_step(recs, [Path(r["path"]) for r in recs.values()], (), [], safe, tmp, "gta6", 3,
+                                                        False, True, quiet, lambda *a, **k: [], [], cands)
+        return {launch.moment_type(p): p for p in picks}, rejected, pool
+    picks, _, _ = night(GATOR_LOOKS, JET_LOOKS)
+    none, rejected, pool = night(NO_FIGHT, NOT_IN_JET)
+    g, j = picks.get("animal attack"), picks.get("aircraft taken")
+    if not (g and j):
+        return False, sorted(picks)
+    events = [{e["value"] for e in p["evidence"] if e["kind"] == "event"} for p in (g, j)]
+    return (g["type"] == "action" and g["point"]["action_payoff"] == ["animal attack"] and g["payoff_strength"]["tier"] == 2
+            and "animal attack" in events[0] and "aircraft taken" in events[1] and j["payoff_strength"]["tier"] == 2
+            and (g["category"], j["category"]) == ("animal attack", "aircraft taken") and not {"animal attack", "aircraft taken"} & set(none) and any("no clear point" in w for r in rejected for w in r["why"])
+            and any("below the minimum" in str((m.get("checked") or {}).get("not_picked")) for m in pool)), (
+                g["type"], g["point"], events, sorted(none), [r["why"] for r in rejected])
+
+
+@check
+def a_new_look_is_asked_only_where_the_index_says_it():
+    """nobody has looked at the attack's seconds: the safety question is asked about them (its answer is the second check); where
+    they are covered by saved answers, or the index says no attack, nothing more is asked than before the rule"""
+    class Asked(StandIn):
+        def look(self, path, a, b, every, work):
+            self.asked = getattr(self, "asked", []) + [(a, b)]
+            return super().look(path, a, b, every, work)
+
+    def counted(lines, looks, ai):
+        ms, calls = made(gator(lines), looks, ai)
+        return ms, [(a, b) for a, b in ai.asked if b - a > 4.0] if calls else []       # (a peak's look is 4 s)
+    calm = {t: v for t, v in GATOR_LINES.items() if t not in (78.0, 84.0)}
+    ms, more = counted(None, [], Asked("Player fights alligator on dirt path.", only=[(82.5, 86.0)]))
+    _, more_calm = counted(calm, [], Asked("Player walks near water."))
+    _, more_saved = counted(None, [look(float(t), t + 4.0, "Player walks near water.") for t in range(0, 600, 4)],
+                            Asked("Player walks near water."))
+    return (held(ms, 80)["payoff"]["tier"] == 2 and 0 < len(more) <= 2 and all(78.0 <= a and b <= 92.0 for a, b in more)
+            and more_calm == [] and more_saved == []), (held(ms, 80)["payoff"], more, more_calm, more_saved)
+
+
+@check
+def an_impact_still_outranks_the_new_payoffs_and_nothing_else_changes():
+    """payoff_strength: a crash with an attack in it stays 3/3 "impact"; an attack or an aircraft alone is 2/3; a star rise with police
+    2/3, without 1/3, a chase 1/3, as before; the impact kinds are the same three, and the type is the impact's, else the new payoff's,
+    whatever the category says. A recording with no animal and no aircraft gives moments with no payoff_events and no new key in their
+    terms"""
+    s = launch.payoff_strength
+    tiers = [s({"terms": t})[0] for t in ({"crash": 1.5, "animal_attack": 1.0}, {"animal_attack": 1.0, "activity": 2.0},
+                                          {"aircraft_taken": 1.0, "star_rise": 2.5}, {"star_rise": 2.5, "police": 0.5},
+                                          {"star_rise": 2.5}, {"activity": 2.0, "activity_label": "chase"}, {"action": 3.0})]
+    rec = made_up(lines=crash_at(300), loud={303.0: 2.0})
+    ms, _ = made(rec, [look(302.0, 306.0, "Player's car crashes into a wall", crash=True)])
+    crash = held(ms, 303)
+    types = [launch.moment_type({"terms": t, "category": "star rise"}) for t in ({"crash": 1.5, "animal_attack": 1.0}, {"aircraft_taken": 1.0},
+                                                                                 {"animal_attack": 1.0}, {"star_rise": 2.5})]
+    return (tiers == [3, 2, 2, 2, 1, 1, 0] and types == ["crash", "aircraft taken", "animal attack", "star rise"] and launch.IMPACT_TERMS == ("crash", "explosion", "stunt") and crash["payoff"]["tier"] == 3
+            and not any("payoff_events" in m or {"animal_attack", "aircraft_taken"} & set(m["terms"]) for m in ms)), (tiers, types)
+
+
+@check
+@testkit.needs("gta")
+def the_real_recordings_have_one_attack_and_one_aircraft():
+    """the owner's own indexes and saved answers (0 model calls): of _143644, _135610 and _165142 the only moments with a new payoff
+    are the gator's (1:09-1:27, and the list items on the same seconds) and the airliner's (11:58-12:25); the boar (posted) keeps
+    its 3/3; the pink jet, the swamp after the gator and the biplane have none"""
+    stems = {f"Grand Theft Auto VI_{x}" for x in ("20261119143644", "20261119135610", "20261119165142")}
+    with tempfile.TemporaryDirectory() as tmp:
+        recs = bank.load_recs(bank_dir=tmp, stems=stems, hud6=lambda *a, **k: [], log=quiet)
+        ms, _, _, calls = bank.make_moments(recs, None, log=quiet)
+    got = {}
+    for m in ms:
+        for e in m.get("payoff_events", []):
+            got.setdefault((m["video"][-6:], e["kind"]), []).append((m["family"] == "main", m["start_s"], m["end_s"], m["payoff"]["tier"]))
+    boar = next(m for m in ms if m["video"].endswith("143644") and m["family"] == "main" and m["start_s"] <= 422 <= m["end_s"])
+    gator_, jet_ = got.get(("143644", "animal attack"), []), got.get(("135610", "aircraft taken"), [])
+    return (calls == 0 and set(got) == {("143644", "animal attack"), ("135610", "aircraft taken")}
+            and all(60 <= a and b <= 92 for _, a, b, _ in gator_) and [t for main, _, _, t in gator_ if main] == [2]
+            and [(main, t) for main, _, _, t in jet_] == [(True, 2)] and jet_[0][1] <= 721.0 and jet_[0][2] >= 732.0
+            and boar["payoff"]["tier"] == 3 and boar["label"]["kind"] == "fall"), got
+
+
+# --- 11. The review of PR 37 (Nov 27): wordings that wrongly counted or wrongly missed, and the bank's own file ---
+
+@check
+def an_attack_that_only_nearly_happens_or_is_on_a_picture_is_none():
+    """G37: an attack he avoids, nearly has, that is tried or would come ("before it can attack"), one on a billboard, poster
+    or TV, in curly quotes or talked about, an animal that is the one attacked ("Alligator is attacked with a knife"), a chase
+    with no contact, a hot dog or a bear statue: no attack. The ones the first version missed are attacks: "alligator that
+    attacks him", "as it attacks", "bit by a dog", "snaps at", "pounces"; a near miss in one part of a line leaves the
+    attack in the next ("nearly dies after an alligator attack")"""
+    import payoffs
+    no = ["Player narrowly avoids being bitten by an alligator", "Player is almost attacked by a gator", "Player dodges a shark attack",
+          "Alligator tries to bite the player", "Player shoots the alligator before it can attack", "Alligator stays still instead of attacking",
+          "Alligator is attacked with a knife", "Player chased by a dog down the street", "Billboard showing a shark attack near the highway",
+          "Sign reading 'gator attack' near the swamp", "NPC shouts “gator attack!” at the player",
+          "Player walks past a poster of a crocodile attack", "TV shows a shark attack in the bar",
+          "Player talks about a shark attack with a woman", "Player didn’t get attacked by the gator",
+          "Player gets attacked near a bear statue", "Player bites into a hot dog and gets knocked down", "No alligator attack, player walks on"]
+    yes = ["Player shoots alligator that attacks him", "Player aims at the alligator as it attacks", "Player gets bit by a dog",
+           "Alligator snaps at the player and drags him", "Cougar pounces on the player", "Player gets attacked and falls near an alligator",
+           "Player nearly dies after an alligator attack", "Player talks to a woman, then gets bitten by a dog",
+           "Player aims gun at alligator, then gets attacked and falls", "Player survives crocodile attack, then walks away with gun drawn."]
+    wrong = [x for x in no if payoffs.attack_in(x)[0]] + [x for x in yes if not payoffs.attack_in(x)[0]]
+    return not wrong, wrong
+
+
+@check
+def watching_an_aircraft_or_walking_near_one_is_not_taking_it():
+    """G37: the safety note must see the PLAYER fly it or get in it: not "Player watches a plane flying low", "talks to pilots",
+    "flies off his motorcycle", "watches the pilot enter the helicopter", a helicopter pad. The index's line must have him go AT
+    the aircraft (it is what "approaches", "runs to" is about): not "runs to his car as a plane flies overhead", "walks toward
+    the hangar near a plane", "approaches a car with a helicopter overhead", nor a line that drives up to it"""
+    import payoffs
+    in_no = ["Player watches a plane flying low over the airport", "Player talks to pilots at the hangar",
+             "Player flies off his motorcycle after a crash", "Player flies through the windshield", "Player watches the pilot enter the helicopter",
+             "Player stands near a plane that is flying overhead", "Player enters a helicopter pad area", "Player boards an aircraft carrier"]
+    in_yes = ["Player flies low over airport with aircraft on ground.", "Player is flying a helicopter over the city",
+              "Player takes control of the plane", "Player boards the jet", "Player in the cockpit of a jet"]
+    on = lambda t: {"activity": "on_foot", "vehicle": "none", "notable": t}
+    at_no = ["Player runs to his car as a plane flies overhead", "Player walks toward the hangar near a plane",
+             "Player approaches a car with a helicopter overhead", "Player drives up to the plane and approaches it on foot",
+             "Player's SUV approaches a parked airplane"]
+    at_yes = ["Player approaches airplane, opens door, walks up stairs", "Player runs toward the helicopter", "Player boards the plane",
+              "Player climbs stairs to a pink airplane at airport."]
+    wrong = ([x for x in in_no if payoffs.in_it(x)] + [x for x in in_yes if not payoffs.in_it(x)]
+             + [x for x in at_no if payoffs.at_aircraft(on(x))] + [x for x in at_yes if not payoffs.at_aircraft(on(x))])
+    return not wrong, wrong
+
+
+@check
+def two_animals_seconds_apart_are_two_attacks_never_one():
+    """G37: a gator attack the two checks agree on and a dog 6 s later are two events (the first version made them one and
+    gave the gator's event the dog's checks); a gator line with a dog's note on the same seconds is none"""
+    import payoffs
+    sheets = [{"t": float(t), "notable": "Player walks on a dirt path", "activity": "on_foot", "vehicle": "none"} for t in range(0, 60, 6)]
+    sheets[3]["notable"], sheets[4]["notable"] = "Alligator attacks the player", "A dog bites the player"
+    two = payoffs.events(sheets, 6.0, [look(19.0, 23.0, "Player fights alligator."), look(25.0, 29.0, "Player fights a dog.")])
+    crossed = payoffs.events(sheets[:4], 6.0, [look(19.0, 23.0, "Player fights a dog.")])
+    texts = [{c["text"] for c in e["checks"]} for e in two]
+    return (len(two) == 2 and all("animals" not in e for e in two) and not crossed
+            and texts == [{"Alligator attacks the player", "Player fights alligator."}, {"A dog bites the player", "Player fights a dog."}]), (two, crossed)
+
+
+@check
+def the_bank_counts_none_of_the_reviewed_wordings():
+    """G37, in the bank: the gator with a line that only nearly has it ("narrowly avoids being bitten") or where the gator is
+    the one attacked, with a look that sees them fight, is no payoff; the airliner with on-foot lines that don't go at the plane,
+    or a note that only watches one fly, is no payoff; the real lines still are"""
+    near = {**GATOR_LINES, 78.0: ("Player narrowly avoids being bitten by an alligator", "shootout", "none"),
+            84.0: ("Player walks away with gun drawn.", "on_foot", "none")}
+    victim = {**near, 78.0: ("Alligator is attacked with a knife", "shootout", "none")}
+    away = {**JET_LINES, 714.0: ("Player runs to his car as a plane flies overhead", "on_foot", "none"),
+            720.0: ("Player walks toward the hangar near a plane", "on_foot", "none")}
+    watching = NOT_IN_JET + [look(730.5, 734.5, "Player watches a plane flying low over the airport.")]
+    got = [new_payoffs(made(gator(near), GATOR_LOOKS)[0]), new_payoffs(made(gator(victim), GATOR_LOOKS)[0]),
+           new_payoffs(made(jet(away), JET_LOOKS)[0]), new_payoffs(made(jet(), watching)[0])]
+    real = [new_payoffs(made(gator(), GATOR_LOOKS)[0]), new_payoffs(made(jet(), JET_LOOKS)[0])]
+    return got == [set()] * 4 and all(real), (got, real)
+
+
+@check
+def a_damaged_or_locked_bank_is_never_read_as_empty():
+    """G37 #10: content_bank.json cut short, locked or not a bank was read as no bank, so a build gave every moment a new id and
+    wrote over it with no copy kept. Now build, posted, rejected and page stop with a plain ERROR and every byte stays; a
+    missing bank is still a first one"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        good = build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        path, used = bdir / bank.BANK_FILE, shorts / footage_short.USED_FOOTAGE
+        results = {}
+        for name, data in (("cut short", path.read_bytes()[:200]), ("not a bank", b'{"version": 3}')):
+            path.write_bytes(data)
+            keep = used.read_bytes() if used.exists() else None
+            results[name] = (stops(lambda: build(lib, shorts, bdir, None), "content_bank.json"),
+                             stops(lambda: bank.mark_rejected(good["moments"][0]["id"], shorts_dir=shorts, bank_dir=bdir, log=quiet),
+                                   "content_bank.json"),
+                             stops(lambda: bank.mark_posted(good["moments"][0]["id"], shorts_dir=shorts, bank_dir=bdir,
+                                                            posted_file=tmp / "posted.json", log=quiet), "content_bank.json"),
+                             path.read_bytes() == data, (used.read_bytes() if used.exists() else None) == keep)
+        path.write_bytes(json.dumps(good).encode("utf-8"))
+        real_read = Path.read_text
+
+        def locked(self, *a, **k):
+            if self.name == bank.BANK_FILE:
+                raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+            return real_read(self, *a, **k)
+        Path.read_text = locked
+        try:
+            results["locked"] = (stops(lambda: bank.read_bank(bdir), "content_bank.json"),)
+        finally:
+            Path.read_text = real_read
+        first = bank.read_bank(tmp / "nowhere")
+    return all(all(v) for v in results.values()) and first is None, results
+
+
+@check
+def a_build_copies_the_old_bank_before_writing_over_it():
+    """G37 #10: before a build writes content_bank.json and bank.html it copies the old ones to bank\\backups\\<time>, byte for
+    byte; the first build has nothing to copy"""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        lib, shorts, bdir = bank_of(tmp, {"GTA_20261119120000": crash_at(300)}, used={"shorts": []})
+        build(lib, shorts, bdir, StandIn("Player's car crashes into a wall", crash=True))
+        first = sorted((bdir / "backups").glob("*/*")) if (bdir / "backups").exists() else []
+        before = {f: (bdir / f).read_bytes() for f in (bank.BANK_FILE, bank.PAGE_FILE)}
+        build(lib, shorts, bdir, None)
+        copies = sorted((bdir / "backups").glob("*/*"))
+        same = {c.name: c.read_bytes() == before.get(c.name) for c in copies}
+    return first == [] and same == {bank.BANK_FILE: True, bank.PAGE_FILE: True}, (first, same)
+
+
+@check
+def a_different_payoff_40_s_on_is_not_kept_out_of_the_pool():
+    """G37 #16: the runway's star rise (1119-135610-0678, 11:18-11:35, it ranks higher) kept the airliner taken (11:58-12:25, 40 s
+    after its start, no second shared) out of /launch's pool, so it was never checked. Both are in it now (the old rule had one:
+    that must fail); a candidate of the same kind 40 s on, or of another kind that shares seconds, is still kept out"""
+    def m(name, a, b, score, category):
+        return {"id": name, "video": "v", "start_s": a, "end_s": b, "score": score, "category": category, "session_s": a}
+    runway, jet_ = m("0678", 678.38, 694.94, 11.65, "star rise"), m("0722", 718.75, 745.5, 11.0, "aircraft taken")
+    both = [p["id"] for p in launch.pool_of([runway, jet_], 10)]
+    same = [p["id"] for p in launch.pool_of([runway, dict(jet_, category="star rise")], 10)]
+    shared = [p["id"] for p in launch.pool_of([runway, dict(jet_, start_s=690.0, session_s=690.0)], 10)]
+    return both == ["0678", "0722"] and same == ["0678"] and shared == ["0678"], (both, same, shared)
 
 
 def main():

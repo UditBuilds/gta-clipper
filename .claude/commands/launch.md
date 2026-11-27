@@ -39,8 +39,8 @@ Every candidate is checked: no cutscene, menu, map, phone, loading screen, blood
 swearing in the subtitles, and **never a child near guns, shooting, a body or blood, or a body with blood**, anywhere
 in it (the Nov 20 dock shootout); and its **labels are checked against what the vision model sees in its own frames** (a
 "crash", "shootout", "police" or "jump" that isn't seen is dropped). Mission dialogue costs points. Then the picks
-(PR 29): **the clearest payoff first** (`payoff_strength`: 3 an impact the frames confirmed, 2 a HUD change with a
-visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **a payoff below 2/3 is never
+(PR 29): **the clearest payoff first** (`payoff_strength`: 3 an impact the frames confirmed, 2 an animal attack or an
+aircraft taken that two checks see (`payoffs.py`), or a HUD change with a visible cause, 1 a HUD change alone or action with no single event, 0 quiet), then points; **a payoff below 2/3 is never
 picked, by any route** (the owner, Nov 22: a star rise with no cause shown, or plain driving, is not a Short; there are
 fewer picks, or none, rather than a weak one, and each moment left out says so in `candidates.json`); **no
 near-duplicates** (two picks of one recording must be a different kind of moment or 10+ min apart) and **at most 2
