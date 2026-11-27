@@ -1270,7 +1270,7 @@ The rules with their functions, the Nov 27 candidates and the samples are in [do
 | PR 38 with PR 37 and both reviews: `--full` / `--quick` | 651 / 572 | 9.5 / 2.2 min |
 | now (PR 39, meme Shorts): `--full` | 677 | 9.7 min |
 | now: `--quick` | 598 | 2.5 min |
-| now: `--ci`, on GitHub's Windows machine | 583 (counted, not run here) | about 3 min |
+| now: `--ci`, on GitHub's Windows machine | 582 (run on PR 39; the 557 above was counted, not run) | 3.9 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
