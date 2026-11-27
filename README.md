@@ -1218,6 +1218,42 @@ Every claim was checked in the code first; what each change guarantees, and the 
 - `testdata/v4_commands.json` was re-recorded on purpose four times; its `history` lists what changed each time (the
   captions' measuring run, the fixture's title and shorter ending, the first second's frames, the punch-in).
 
+## Meme Shorts (PR 39, Nov 27)
+
+My narrated Shorts went flat (the last three: 203-1,241 views); my hits were physics chaos with a quick payoff. A channel of funny
+GTA 6 character moments gets millions of views a Short with the game's own sound, one caption and almost no editing. `meme_short.py`
+is that kind of Short, as a separate mode: /launch and the narrated Shorts don't change.
+
+```powershell
+.\.venv\Scripts\python.exe meme_short.py find --top 15                     # funny candidates from the index and bank (read only)
+.\.venv-tts\Scripts\python.exe meme_short.py hear "<recording>" 196 228     # what is said in a window (Whisper on that window only)
+.\.venv\Scripts\python.exe meme_short.py check examples\meme\2-free-the-bear.json
+.\.venv-tts\Scripts\python.exe meme_short.py render examples\meme\2-free-the-bear.json --out C:\AI\gta\shorts\meme-<date>\2-free-the-bear
+.\.venv\Scripts\python.exe memetest.py                                     # 26 checks, about 20 s
+```
+
+- **A spec** names a stretch of one recording, its kind (`gag` or `dialogue`), the first motion, the punchline and the last reaction,
+  the layout (`full` or `letterbox`) and the subject, 3 caption options with one starred, an optional swap, at most one edit and an
+  optional music bed.
+- **The rules are checks** (`problems()`, before anything renders):
+  - **length:** a gag 7-12 s, dialogue 15-24 s, never over 30 s;
+  - **the start:** motion by 1.0 s or a line by 0.5 s, and a gag's punchline at 2-6 s;
+  - **the caption:** one, 2-6 words (10 for "... tried ... and this happens..."), never "Watch the" or "Can you", swears
+    written fkng and sht, no emoji in v1, and one swap after the payoff;
+  - **the layout:** full-bleed or letterbox, never a blur;
+  - **edits:** none, or one punch-in (1.20-1.35x for 1-2 s) or one 0.5x replay;
+  - **the end:** a hard cut 0.5-1.5 s after the punchline;
+  - **the title:** short, with no hashtags.
+- **The render** keeps the game's sound at -14 LUFS under the true-peak guard, with no voice. The caption is one Arial Bold line in
+  white with a 4 px black outline, on from the first frame to the last. The render then measures the file: its length, its loudness,
+  and where the caption sits on its first and last frames.
+- **The repo's safety checks stay**: clean footage in the index, nothing used, posted, rejected or never shown, the safety question
+  (blood in the first 7 s, cutscenes, menus, the phone) and the true peak. Swearing in the game's sound is allowed and flagged.
+- **What it leaves alone:** it writes `meme.json` and never `render.json`, and nothing in `_used_footage.json`,
+  `posted_topics.json`, the bank or the index.
+
+The rules with their functions, the Nov 27 candidates and the samples are in [docs/meme-shorts.md](docs/meme-shorts.md).
+
 ## Tests (PR 31, Nov 23)
 
 ```powershell
@@ -1231,9 +1267,10 @@ Every claim was checked in the code first; what each change guarantees, and the 
 |---|---:|---:|
 | before (the suites one by one, Nov 23) | 522 | 75.5 min |
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
-| now (PR 38 with PR 37 and both reviews): `--full` | 651 | 9.5 min |
-| now: `--quick` | 572 | 2.2 min |
-| now: `--ci`, on GitHub's Windows machine | 557 (counted, not run here) | about 3 min |
+| PR 38 with PR 37 and both reviews: `--full` / `--quick` | 651 / 572 | 9.5 / 2.2 min |
+| now (PR 39, meme Shorts): `--full` | 677 | 9.7 min |
+| now: `--quick` | 598 | 2.5 min |
+| now: `--ci`, on GitHub's Windows machine | 583 (counted, not run here) | about 3 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1252,6 +1289,7 @@ Every claim was checked in the code first; what each change guarantees, and the 
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
 | banktest (PR 32, 35, 37, 38) | `.venv` | 69 | 69 | 67 | - | 13 s |
+| memetest (PR 39) | `.venv` | 26 | 26 | 26 | - | 17 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.
