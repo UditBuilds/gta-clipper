@@ -42,7 +42,7 @@ voice, lines) with footage beats:
   "description": "One or two plain sentences. No hashtags here.",
   "hashtags": ["#GTA5", "#GTA6", "#Shorts"],
   "voice": "am_puck", "speed": 1.05, "music": "auto", "sfx": true,
-  "end_pill": "@NeonGetaway • Subscribe",
+  "end_pill": "@NeonGetawayYT • Subscribe",
   "footage": {"game_audio": true, "profile": "gta5"},
   "lines": [
     {"say": "What the voice says.", "facts": [],

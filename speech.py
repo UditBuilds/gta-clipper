@@ -108,7 +108,8 @@ def first_words_problem(say, heard):
     if got == want:
         return None
     return (f"the hook is misheard: the first words are \"{' '.join(want)}\" but Whisper hears \"{' '.join(got)}\"; a viewer "
-            "may too. Use another opener (\"Can anyone ...\" is heard right, \"Can you ...\" as \"And you ...\")")
+            "may too. Reword line 1 and test the new words on the voice alone before rendering: an opener can be heard "
+            "right with one verb and wrong with another (\"Can anyone take\" held on Nov 25, \"Can anyone steal\" didn't)")
 
 
 def swearing(path, transcribe=None, first_s=FIRST_S):

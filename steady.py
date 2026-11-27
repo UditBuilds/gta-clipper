@@ -295,6 +295,35 @@ def make_shot(video, a, frames, out, info=None, focus=0.5, grade="", log=print, 
     return {"camera_cuts": cuts, "pieces": report}
 
 
+PUNCH_TO = 1.2                            # Nov 26 (rule 5): over the payoff the picture punches in from ZOOM (1.05) to
+                                          # this much of the recording's, and holds it to the shot's end and over the replay
+
+
+def punch_filter(n0, n1, rel):
+    """ffmpeg's perspective filter zooming into the middle of the picture: 1 up to frame n0, rel from frame n1 on, eased
+    between (smoothstep); n0 None: rel on every frame. Sub-pixel (cubic), the size kept, so nothing judders."""
+    if n0 is None:
+        z = f"{rel:.6f}"
+    else:
+        e = f"clip((in-{n0})/{max(1, n1 - n0)}\\,0\\,1)"
+        z = f"(1+{rel - 1:.6f}*{e}*{e}*(3-2*{e}))"
+    lo_x, hi_x, lo_y, hi_y = (f"W/2-W/(2*{z})", f"W/2+W/(2*{z})", f"H/2-H/(2*{z})", f"H/2+H/(2*{z})")
+    return (f"perspective=x0='{lo_x}':y0='{lo_y}':x1='{hi_x}':y1='{lo_y}':x2='{lo_x}':y2='{hi_y}':x3='{hi_x}':"
+            f"y3='{hi_y}':interpolation=cubic:sense=source:eval=frame")
+
+
+def punch_in(clip, out, t0, t1, to=PUNCH_TO):
+    """A made shot's clip punched in (rule 5): from t0 to t1 s into it (the payoff) the picture zooms from as made (ZOOM
+    of the recording) to `to`, and holds; t0 None: `to` all through (the replay). The same frames, size and encoding."""
+    frames = count_frames(clip)
+    n0, n1 = (None, None) if t0 is None else (round(t0 * FPS), round(t1 * FPS))
+    run(["-i", Path(clip).resolve(), "-an", "-vf", punch_filter(n0, n1, to / ZOOM) + ",format=yuv420p", "-frames:v",
+         frames, *PIECE_ARGS, *COLOUR_TAGS, Path(out).resolve()])
+    if count_frames(out) != frames:
+        raise SteadyError(f"{Path(out).name}: the punch-in made {count_frames(out)} frames, wanted {frames}")
+    return out
+
+
 def add_inset(clip_path, video, inset, out, info, prof):
     """A shot clip with a HUD close-up on top (proof's geometry: inside the safe area, off the captions, zoom capped):
     inset = {"zoom": "stars"|..., "box": "stars"|"icons"|None, "from_s": recording s, "t0", "t1": s into the clip}."""

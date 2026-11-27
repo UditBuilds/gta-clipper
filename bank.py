@@ -988,7 +988,17 @@ def build(lib_dir=None, shorts_dir=None, bank_dir=None, checker=None, shotlist=N
         backup([bank_dir / BANK_FILE, bank_dir / PAGE_FILE], bank_dir)
     write(bank, bank_dir)
     log(f"Bank: {bank['totals']['moments']} moments in {bank_dir / BANK_FILE}")
+    footage_short.warn_long_locks(shorts_dir, log)
     return bank
+
+
+def page_command(bank_dir=None, shorts_dir=None, log=log_line):
+    """bank.py page: bank.html again with today's statuses (and a WARNING for an entry that locks too much)."""
+    bank = read_bank(bank_dir)
+    if not bank:
+        raise BankError("there is no bank yet: run bank.py build")
+    log(str(write(refresh(bank, shorts_dir), bank_dir)))
+    footage_short.warn_long_locks(shorts_dir or launch.SHORTS_DIR, log)
 
 
 def write(bank, bank_dir=None):
@@ -1294,6 +1304,7 @@ def mark_posted(what, name=None, kind=None, words_=None, on=None, url=None, shor
     spans = [s for _, sp in locks for s in sp]
     log(f"Posted: {name} ({on}). {len(spans)} span(s) locked as {', '.join(n for n, _ in locks)}; topic added to "
         f"{posted_file.name}. Copies of both files as they were: {saved}")
+    footage_short.warn_long_locks(shorts_dir, log)
     return topic, spans
 
 
@@ -1528,10 +1539,7 @@ def main():
                     if checker is not None:
                         vlm.unload(checker.model)
         elif args.do == "page":
-            bank = read_bank()
-            if not bank:
-                raise BankError("there is no bank yet: run bank.py build")
-            print(write(refresh(bank)))
+            page_command()
         elif args.do == "posted":
             mark_posted(args.what, args.name, args.type, args.words, args.on, args.url)
         elif args.do == "rejected":

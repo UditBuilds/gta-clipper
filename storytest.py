@@ -69,7 +69,7 @@ def script_on(video, lines, window=(5.0, 50.0), action=12.0, brk=None, pill=True
     s = {"title": "story test", "music": None, "game_audio": False, "profile": "gta5",
          "moment": {"file": str(video), "window": list(window), "focus": 0.5, "action_s": action}, "lines": lines}
     if pill:
-        s["end_pill"] = "@NeonGetaway • Subscribe"
+        s["end_pill"] = "@NeonGetawayYT • Subscribe"
     if brk:
         s["break"] = brk
     return s

@@ -49,7 +49,7 @@ to Short" in `README.md`) with these parts:
   "description": "One or two plain sentences. No hashtags here.",
   "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
   "voice": "am_puck", "speed": 1.1, "music": "auto", "sfx": true,
-  "end_pill": "@NeonGetaway • Subscribe",
+  "end_pill": "@NeonGetawayYT • Subscribe",
   "lines": [
     {"say": "What the voice says.", "facts": ["release-date"],
      "beats": [{"beat": "full", "query": "city skyline night", "region": "Vice City"},

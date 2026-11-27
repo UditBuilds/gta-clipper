@@ -1806,7 +1806,7 @@ def beats_are_read():
     snippet = ex.parse_visual({"beat": "snippet", "text": "Pre-load opens on  November 10, nine days early.",
                                "highlight": ["november 10", "nine days"], "bg": "b.mp4@2"}, ROOT)
     banner = settled({"beat": "banner", "text": "the  catch", "file": "ps5.webm", "at": "1"})
-    script = ex.load_script(write_script("beats_alias.json", title="Alias", end_pill=" @Test \u2022  Subscribe ", lines=[
+    script = ex.load_script(write_script("beats_alias.json", title="Alias", end_pill=" @NeonGetawayYT \u2022  Subscribe ", lines=[
         {"say": "One two three.", "beats": [{"beat": "full", "file": "shot.png"}, {"file": "shot.png"}]}]), ROOT)
     first, second = script["lines"][0]["visuals"]
     return (full["beat"] == "full" and full["layout"] == "full" and (full["focus"], full["focus_y"]) == (0.55, 0.3)
@@ -1824,7 +1824,7 @@ def beats_are_read():
             and banner["banner"]["text"] == "THE CATCH" and banner["banner"]["style"] == "number"
             and banner["kind"] == "video" and banner["layout"] == "full" and banner["size"] == (1280, 720)
             and first["beat"] == "full" and "beat" not in second and second["layout"] == "framed"
-            and script["end_pill"]["text"] == "@Test \u2022 Subscribe")
+            and script["end_pill"]["text"] == "@NeonGetawayYT \u2022 Subscribe")      # Nov 26: the only handle a pill may name
 
 
 @check
@@ -1984,7 +1984,7 @@ def banner_and_pill_stay_in_the_safe_area():
         ok &= (visual["banner"]["font"] == ex.BANNER_SIZE if text == "The catch"
                else ex.BANNER_MIN_SIZE <= visual["banner"]["font"] < ex.BANNER_SIZE)
     total = 150
-    script = ex.load_script(write_script("pill.json", title="Pill", end_pill="@NeonGetaway \u2022 Subscribe",
+    script = ex.load_script(write_script("pill.json", title="Pill", end_pill="@NeonGetawayYT \u2022 Subscribe",
                                          lines=[{"say": "One two three.", "visuals": ["shot.png"]}]), ROOT)
     pill = script["end_pill"]
     plain_slot = {"start": 0, "end": total, "visual": script["lines"][0]["visuals"][0]}
@@ -2129,7 +2129,7 @@ def beats_run():
     H.264 clip in a compare's bottom card), an opening on a 1 s clip used from its start, and the subscribe pill. The
     grade is off so that colours can be told apart exactly; the look's own render checks the grade."""
     beat_assets()
-    script = write_script("beats.json", title="Beats test", grade=False, end_pill="@Test \u2022 Subscribe", lines=[
+    script = write_script("beats.json", title="Beats test", grade=False, end_pill="@NeonGetawayYT \u2022 Subscribe", lines=[
         {"say": "A short clip opens this test, and then a red box locks on to the white square.",
          "beats": [{"beat": "full", "file": "stops.mp4"},
                    {"beat": "lockon", "file": "shot.png", "box": LOCK_BOX, "label": {"text": "Here", "style": "info"},
@@ -2337,12 +2337,60 @@ def beat_example_scripts_read():
     print(f"       demo: {len(shots(demo))} shots, beats {sorted({v['beat'] for v in shots(demo)})}, {words} words, "
           f"{len(demo_files)} files; video test: {len(shots(test))} shots from {sorted(test_files)}; "
           f"nov10 v2: {len(shots(old))} shots, {sum(1 for v in shots(old) if 'beat' in v)} with a beat")
-    return ({v["beat"] for v in shots(demo)} == set(ex.BEATS) and demo["end_pill"]["text"] == "@NeonGetaway \u2022 Subscribe"
+    return ({v["beat"] for v in shots(demo)} == set(ex.BEATS) and demo["end_pill"]["text"] == "@NeonGetawayYT \u2022 Subscribe"
             and shots(demo)[0]["kind"] == "video" and all("rockstar" in f for f in demo_files) and 95 <= words <= 110
             and {v["beat"] for v in shots(test)} == set(ex.BEATS) and test_files == {"test1.webm"}
             and "TEST ONLY" in test["title"] and "TEST ONLY" in test["end_pill"]["text"]
             and any(v.get("banner", {}).get("text") == "TEST ONLY" for v in shots(test))
             and all("beat" not in v for v in shots(old)) and old["end_pill"] is None and len(shots(old)) == 23)
+
+
+@check
+def an_end_pill_names_the_channels_real_handle():
+    """rule 8 (Nov 26): the channel is @NeonGetawayYT, and some end cards said @NeonGetaway. A pill that names any other
+    @handle is refused by explainer and by edit2, the right handle named; @NeonGetawayYT and a pill with no handle ("TEST
+    ONLY ...") pass; /launch's own pill, every example script and the commands' examples say @NeonGetawayYT"""
+    import edit2
+    import launch
+    assets()
+
+    def problems(pill):
+        try:
+            ex.load_script(write_script("handle.json", title="Handle", end_pill=pill,
+                                        lines=[{"say": "One two three.", "visuals": ["shot.png"]}]), ROOT)
+            return ""
+        except ex.ScriptError as e:
+            return str(e)
+
+    def v2(pill):
+        raw = json.loads((HERE / "examples" / "s4_sample.json").read_text(encoding="utf-8"))
+        raw["end_pill"] = pill
+        try:
+            edit2.load(raw)
+            return ""
+        except edit2.EditError as e:
+            return str(e)
+    wrong, right = problems("@NeonGetaway • Subscribe"), problems("@NeonGetawayYT • Subscribe")
+    plain, other = problems("TEST ONLY • not for posting"), problems("@SomeoneElse • Subscribe")
+    v2_wrong = v2("@NeonGetaway • Subscribe")
+    files = [*(HERE / "examples").rglob("*.json"), *(HERE / ".claude" / "commands").glob("*.md"), HERE / "launch.py",
+             HERE / "explainer.py", HERE / "edit2.py"]
+    stale = [f.name for f in files if re.search(r"@NeonGetaway(?!YT)", f.read_text(encoding="utf-8"))]
+    print(f"       wrong: {wrong[-120:]!r}; files still naming @NeonGetaway: {stale}")
+    return ("the channel is @NeonGetawayYT" in wrong and "names @NeonGetaway;" in wrong and right == "" and plain == ""
+            and "@SomeoneElse" in other and "the channel is @NeonGetawayYT" in v2_wrong
+            and "the channel is" not in v2("@NeonGetawayYT • Subscribe")
+            and launch.END_PILL == "@NeonGetawayYT • Subscribe" and stale == [])
+
+
+@check
+def g38_a_handle_with_more_after_it_is_another_channel():
+    """G38 #10: "@NeonGetawayYT-clips" read as @NeonGetawayYT and passed; it is another channel: refused. The handle itself,
+    with a full stop after it, passes"""
+    import explainer
+    wrong = [explainer.handle_problem(t) for t in ("@NeonGetawayYT-clips • Subscribe", "@NeonGetawayYT.clips", "@NeonGetaway")]
+    right = [explainer.handle_problem(t) for t in ("@NeonGetawayYT • Subscribe", "Follow @NeonGetawayYT.")]
+    return all(wrong) and right == [None, None]        # (a bool: this suite's main() asks bool() of it)
 
 
 def main():

@@ -33,6 +33,8 @@
    "rules": [{"term": ["stunt"], "words": ["overpass", "bridge"]}, {"all_words": ["overpass", "jump"]},
              {"all_words": ["overpass", "fall"]}, {"all_words": ["bridge", "jump"]},
              {"all_words": ["bridge", "falls off"]}, {"all_words": ["bridge", "falls from"]}]},
-  {"name": "Which GTA 6 animal takes you DOWN first?", "type": "stunt", "posted": "2026-11-24", "added": "2026-11-24T19:36:16", "rules": [{"term": ["stunt"], "words": ["which", "animal", "takes"]}, {"all_words": ["which", "animal", "takes"]}]}
+  {"name": "Which GTA 6 animal takes you DOWN first?", "type": "stunt", "posted": "2026-11-24", "added": "2026-11-24T19:36:16", "rules": [{"term": ["stunt"], "words": ["which", "animal", "takes"]}, {"all_words": ["which", "animal", "takes"]}]},
+  {"name": "Can you STEAL this GTA 6 airliner?", "type": "aircraft taken", "posted": "2026-11-25", "added": "2026-11-25T21:51:17", "rules": [{"all_words": ["airplane", "stairs"]}]},
+  {"name": "red pickup traffic crash", "type": "crash", "posted": "2026-11-26", "added": "2026-11-26T22:01:45", "rules": [{"term": ["crash"], "words": ["red", "pickup", "traffic"]}, {"all_words": ["red", "pickup", "traffic"]}]}
  ]
 }

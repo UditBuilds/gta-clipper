@@ -11,7 +11,8 @@ never fill a night with a weak clip. If not one moment qualifies, `prepare` stop
 **The bar (the owner's rule, Nov 19):** every Short is at least as good as the posted Step 0 sample, "How to make GTA 6
 cops FORGET you" (`C:\AI\gta\shorts\2026-11-19-how-to-make-gta-6-cops-forget-you`, its script in
 `C:\AI\gta\shorts\_drafts\gta-6-make-cops-forget-you.json`): the hook on screen from frame 0, the am_puck voice with
-yellow word captions, music and sound effects, a setup -> payoff, and the owner's footage as the **proof**. **No Short
+captions (since Nov 26: 2-3 white words a line, 1-2 accent words in yellow or cyan), music and sound effects, a setup ->
+payoff, and the owner's footage as the **proof**. **No Short
 ever ships as raw gameplay**: if a pick can't be made that way, leave it out and say why.
 
 **Topic first.** The main output teaches the viewer one thing about GTA 6 (a mechanic, a detail, a "wait, really?"),
@@ -96,7 +97,8 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    or **`hype`**: at most 5 words that claim nothing but raise the tension ("Nowhere to go now."). Anything a line
    names (a truck, the police, stars) needs evidence that shows it. Voice: am_puck at **1.2** (the owner's pick;
    `"speed"` changes it).
-6. **One slow-mo replay, action Shorts only** (the only second shown twice): `"replay": {"from": s, "to": s}` names
+6. **One slow-mo replay, action Shorts and (Nov 26) crash or stunt Shorts typed narrated** (the only second shown
+   twice): `"replay": {"from": s, "to": s}` names
    the **impact itself** (inside the payoff, holding the loudest moment, under 1.5 s; read it off a 30 fps strip). It
    plays once at 0.5x, right after the payoff (at most 2 s on screen: a longer impact shows the 1 s round the hit),
    with the game's sound slowed and no voice. Use it when the hit is too fast to see; skip it otherwise. No ring is
@@ -123,9 +125,12 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
      action, for 2 s.
    - **The Short ends as the talking ends**: at most 0.5 s after the last word, unless its last shot is the slow-mo
      replay (rule 6). There is no subscribe pill.
-   - **The first 3 words are heard as you wrote them** (PR 34): the render transcribes the first 2 s with Whisper and
-     the Short FAILS when the first 3 words it hears are not line 1's ("Can you ..." comes out of Kokoro as "And you
-     ...", "Could you ..." as "You ..."). Then pick another opener: "Can anyone ...", "Will ...", "What ...".
+   - **The first 3 words are heard as you wrote them** (PR 34; Nov 26: on the clean voice): the render cuts voice.wav at
+     the end of line 1 (`first_words.wav`, 0.08 s of silence before word 1) and the Short FAILS when the first 3 words
+     Whisper hears there are not line 1's; misheard only in the mixed Short it is a FIRST WORDS IN THE MIX flag.
+     ("Can you ..." comes out of Kokoro as "And you ...", "Could you ..." as "You ...".) An opener holds with one
+     verb and not another ("Can anyone take" held, "Can anyone steal" didn't): test line 1 on the voice alone
+     (`launch.v4_voice` + `speech.first_words`) before rendering.
 9. **Ask what nobody can answer, and say what the picture doesn't** (the owner, Nov 24: "Can anyone survive crashing this
    bike?" has an obvious answer in GTA, and its lines only described the picture; "Can you SURVIVE this GTA 6 overpass
    jump?" worked because nobody knew):
@@ -137,6 +142,27 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
      "That was close", "Ouch", "Let's see" are refused by code (truth.FILLER), and so is anything else like them by you.
    - **The payoff line states the surprising answer in a few words.**
    - **At most 4 spoken lines.**
+10. **The first second and the hook (the owner, Nov 26; code refuses a Short that breaks these):** the hits showed what
+    was at stake at 0:00 (the overpass jump, 20.7K; the black SUV, 12K); the flops opened on empty grass (the animal
+    Short, 203), on filler ("Watch this. Wait for it.", 1.2K) or said one verb in the title and another in the voice
+    (STEAL / "take", the airliner, 1.2K).
+   - **A hook is a statement or a command** ("This pickup has one lane left", "Watch the black SUV"). **A question only
+     when the stakes are readable at frame 0**: then `"stakes_at_0": {"evidence": ["E1"], "why": "what at 0:00 shows
+     what is at stake"}`, with evidence on screen at shot 1's start (`cutplan.hook_rule_problems`). It still poses a
+     real unknown and never tells the result.
+   - **No filler** anywhere in a hook, the open card, the title or a line: "Watch this." / "Watch this, ..." (nothing it
+     names follows), "Wait for it". "Watch this crash" names what to watch and is fine.
+   - **One key verb**: `"key_verb": "steal"` is said, in any form, by line 1 (the spoken hook), the open card and the
+     title.
+   - **The subject is on screen at 0:00, never walking, running or empty scenery** (`cutplan.subject_of`: the starred
+     hook's subject, else `"subject"`, else what the payoff names: a car, truck, bike, the police, an animal ...). The
+     render asks the vision model about shot 1's first second: empty, the character's back or too dark fails, and so
+     does no vehicle for a car (an animal is a flag to look by hand). Start shot 1 where the subject is.
+   - **No more than 3.5 s without voice** between two lines, except over the payoff and the slow-mo replay
+     (`cutplan.gap_problems`).
+   - **The payoff punches in** from 1.05 to 1.2 by itself (eased over the payoff, held to its shot's end and over the
+     replay). **A crash or stunt Short may have its slow-mo replay even when typed narrated**; no line talks over the
+     replay, and there is no whoosh into it.
 
 ```json
 {"shorts": [
@@ -144,12 +170,13 @@ blurry first frame, a slow AI-sounding voice). Code refuses what breaks them (cu
    "format_why": "a black SUV bounces off a truck into the player's lane: setup, the hit, the reaction",
    "payoff": {"from": 268.6, "to": 270.2, "what": "the black SUV hits the truck and you plough straight through it"},
    "hooks": ["This lane closed FAST", "Watch the black SUV", "GTA 6 traffic is brutal"], "star": 1,
-   "title": "Watch the black SUV in GTA 6", "description": "Sentence one. Sentence two.",
+   "key_verb": "watch", "subject": "suv",
+   "title": "WATCH the black SUV in GTA 6", "description": "Sentence one. Sentence two.",
    "hashtags": ["#GTA6", "#GTAVI", "#Shorts", "#GTA6Gameplay"],
    "shots": [{"from": 265.0, "to": 271.6}, {"from": 278.4, "to": 280.4}, {"from": 282.0, "to": 287.6},
              {"from": 288.0, "to": 291.6}],
    "lines": [
-     {"say": "Watch this, you're flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
+     {"say": "Watch the black SUV, it's flying through traffic.", "claim": "on_screen", "evidence": ["E1"],
       "teaches": "the setup: a fast weave through traffic", "at": 265.0},
      {"say": "Nowhere to go now.", "claim": "hype", "at": 267.45},
      {"say": "And the truck didn't even notice.", "claim": "on_screen", "evidence": ["E3"],
@@ -169,8 +196,10 @@ time order; no story spoilers, no names but Jason and Lucia, no dialogue quotes;
 `"mission_ok"`; F2 never says why something happened unless the change and the result are both cited, in order; no
 spoken call to action (and since PR 30 no subscribe pill either: the Short ends as the talking ends).
 
-**Title** 32-46 characters with 1-2 words in ALL CAPS (Title Case is fine), description exactly 2 sentences, 3-5
-hashtags (`#GTA6`, `#GTAVI`, `#Shorts`; a `--game gta5` trial uses `#GTA5`).
+**Title** 32-46 characters with 1-2 words in ALL CAPS (Title Case is fine), **no hashtags** (they go in `"hashtags"`,
+printed under the description in upload.txt), its key verb the hook's (rule 10); description exactly 2 sentences, 3-5
+hashtags (`#GTA6`, `#GTAVI`, `#Shorts`; a `--game gta5` trial uses `#GTA5`). The channel is **@NeonGetawayYT**: an
+end card naming any other handle is refused.
 
 Leave a pick out of `shorts.json` if it can't keep these rules; say why in the report. (`--engine v3` renders the old
 beat format, with its loop ending, for comparison only.)
@@ -182,9 +211,10 @@ beat format, with its loop ending, for comparison only.)
 ```
 
 It checks shorts.json (the payoff, the shots, truth and timing rules), finds a clear first frame, makes every shot
-(one fixed window, steadied where that measures calmer, a dark shot's shadows gently lifted, HUD close-ups), places the voice, renders every Short (engine
-v4: the hook card, am_puck at 1.2, yellow captions, music, whooshes on the cuts, the game's own sound up for an action
-payoff; no subscribe pill, no loop ending; true peak under -1.0 dBTP), checks every caption against its frame, logs
+(one fixed window, steadied where that measures calmer, a dark shot's shadows gently lifted, HUD close-ups), punches in on the payoff, looks at the first second, places the voice, renders every Short (engine
+v4: the hook card, am_puck at 1.2, captions of 2-3 white words with accents, music, whooshes on the cuts but not into
+the replay, the game's own sound up for an action payoff and any replay; no subscribe pill, no loop ending; true peak
+under -1.0 dBTP), checks every caption against its frame and the hook's first words on the clean voice, logs
 the footage as used and writes `review.html`. A Short marked **FAILED** lists its problems: fix only that Short
 and render it alone with `--short N`. At most 3 tries per Short; after that leave it FAILED and go on.
 

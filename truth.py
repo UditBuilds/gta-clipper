@@ -304,9 +304,14 @@ CAUSE = (r"\bbecause\b", r"\bso (?:the|they|it|he|she|i|we)\b", r"\bmade (?:them
 
 
 def filler_in(text):
-    """The first FILLER phrase a line says (whole words, whatever the case, the punctuation and the spaces), or None."""
+    """The first FILLER phrase a line says (whole words, whatever the case, the punctuation and the spaces), or None.
+    Nov 26 (the owner: no "Watch this"): "watch this" too, where nothing it names follows (a full stop, a comma, the
+    end); "Watch this crash" names what to watch."""
     said = " ".join(w.strip("'") for w in re.findall(r"[a-z0-9']+", str(text or "").lower().replace("’", "'")))
-    return next((f for f in FILLER if f" {f} " in f" {said} "), None)
+    found = next((f for f in FILLER if f" {f} " in f" {said} "), None)
+    if found is None and re.search(r"\bwatch\s+this\s*(?=[.!?,;:…]|$)", str(text or ""), re.IGNORECASE):
+        return "watch this"
+    return found
 
 
 def spoken_numbers(text):

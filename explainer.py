@@ -275,6 +275,18 @@ COLOUR_OUT = "out_color_matrix=bt709:out_range=tv"
 COLOUR_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
 
 
+HANDLE = "@NeonGetawayYT"       # the channel (Nov 26: some end cards left out its "YT", another handle)
+
+
+def handle_problem(text):
+    """Why an end card's text names the wrong channel (any @handle but HANDLE), or None."""
+    wrong = [h.rstrip(".") for h in re.findall(r"@[A-Za-z0-9_.\-]+", str(text or "")) if h.rstrip(".") != HANDLE]
+    if not wrong:
+        return None
+    return (f"end_pill names {', '.join(wrong)}; the channel is {HANDLE}: write \"{HANDLE} • Subscribe\" (or no "
+            "handle at all)")
+
+
 class ScriptError(Exception):
     """Something the owner has to fix. The message says what, and nothing further has been rendered."""
 
@@ -806,7 +818,10 @@ def load_script(path, root):
     if end_pill is not None and (not isinstance(end_pill, str) or not end_pill.strip()
                                  or len(" ".join(end_pill.split())) > PILL_CHARS):
         problems.append(f"end_pill is the subscribe pill's text, up to {PILL_CHARS} characters, such as "
-                        '"@NeonGetaway \u2022 Subscribe", or null for none')
+                        f'"{HANDLE} \u2022 Subscribe", or null for none')
+        end_pill = None
+    elif end_pill is not None and handle_problem(end_pill):
+        problems.append(handle_problem(end_pill))
         end_pill = None
 
     lines = script.get("lines")

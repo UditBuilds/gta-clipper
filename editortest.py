@@ -50,14 +50,16 @@ def short(**over):
     s = {"short": 1, "moment": "M1", "type": "action", "format": "A1", "format_why": "a crash: setup, then the hit",
          "payoff": {"from": 20.0, "to": 22.5, "what": "the car slams into the wall"},
          "hooks": ["Watch this crash", "This crash came fast", "Wait for the crash"], "star": 0,
-         "title": "This GTA 6 CRASH came out of nowhere", "description": "A car speeds down the road. Then it crashes.",
+         "key_verb": "watch",                                                 # Nov 26: the hook, card and title share it
+         "title": "WATCH this GTA 6 car on the highway",                      # (was "This GTA 6 CRASH came out of nowhere")
+         "description": "A car speeds down the road. Then it crashes.",
          "hashtags": ["#GTA6", "#GTAVI", "#Shorts"],
-         "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
-         "lines": [{"say": "Watch this.", "claim": "hype", "at": 14.0},           # PR 30: on frame 0 (was 14.3)
+         "shots": [{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 34.2}],    # Nov 26: no 5.7 s quiet (was to 36.0)
+         "lines": [{"say": "Watch closely.", "claim": "hype", "at": 14.0},        # Nov 26: "Watch this." is filler now
                    {"say": "Hold for it.", "claim": "hype", "at": 17.5},          # PR 34: "Wait for it." is filler now
                    {"say": "That crash was huge.", "claim": "on_screen", "evidence": ["E2"],
                     "teaches": "the crash is the point", "at": 23.0},
-                   {"say": "You just keep going.", "claim": "hype", "at": 34.8}]}  # PR 30: ends the Short (was 30.3)
+                   {"say": "You just keep going.", "claim": "hype", "at": 32.6}]}  # Nov 26: 3.48 s after line 3 (was 34.8)
     s.update(over)
     return s
 
@@ -80,9 +82,10 @@ def has(problems, text):
 
 @check
 def a_good_plan_passes():
-    """the made-up action Short keeps every rule: payoff whole in shot 1, 17 s, lines before their cuts"""
+    """the made-up action Short keeps every rule: payoff whole in shot 1, 15.2 s (17 s until its 5.7 s quiet ending was
+    cut, Nov 26), lines before their cuts"""
     p, problems, _ = cutplan.plan(short(), moment(), secs(short()), 21.0)
-    return not problems and p["total_s"] == 17.0 and len(p["placed"]) == 4 and p["payoff"]["what"]
+    return not problems and abs(p["total_s"] - 15.2) < 1e-6 and len(p["placed"]) == 4 and p["payoff"]["what"]
 
 
 @check
@@ -320,8 +323,8 @@ def an_action_short_may_replay_its_impact_once_right_after_the_payoff():
     p, problems, _ = cutplan.plan(short(replay=dict(REPLAY)), moment(), secs(short()), 21.0)
     shots = [(s["from"], s["to"], s.get("speed", 1.0)) for s in p["shots"]]
     r = p["replay"]
-    return (not problems and shots == [(14.0, 22.5, 1.0), (20.6, 21.4, 0.5), (22.5, 25.0, 1.0), (30.0, 36.0, 1.0)]
-            and abs(p["total_s"] - 18.6) < 1e-6 and (r["start"], r["end"]) == (8.5, 10.1)
+    return (not problems and shots == [(14.0, 22.5, 1.0), (20.6, 21.4, 0.5), (22.5, 25.0, 1.0), (30.0, 34.2, 1.0)]
+            and abs(p["total_s"] - 16.8) < 1e-6 and (r["start"], r["end"]) == (8.5, 10.1)
             and cutplan.to_short(20.0, p["shots"]) == 6.0 and cutplan.to_short(21.0, p["shots"]) == 7.0
             and has(problems_of(short(replay=dict(REPLAY), shots=[{"from": 14.0, "to": 25.0},
                                                                  {"from": 24.0, "to": 31.0}])), "both show"))
@@ -450,12 +453,17 @@ def render_short(name, s, heard=None, **parts):
     tmp = ROOT / name
     tmp.mkdir()
     speeds, commands, run, first = [], [], subprocess.run, launch.first_words_check
+    listened = []
 
     def recorder(args, *a, **k):
         commands.append([str(x) for x in args])
         return run(args, *a, **k)
+
+    def hears(path, say):                       # heard: words, or a function of the file listened to
+        listened.append(Path(path).name)
+        return (heard(path) if callable(heard) else heard) or say.split()
     subprocess.run = recorder
-    launch.first_words_check = lambda path, say, log=print: first(path, say, log, lambda p: heard or say.split())
+    launch.first_words_check = lambda path, say, log=print: first(path, say, log, lambda p: hears(p, say))
     try:
         folder = run_folder_with(tmp, [moment(v)], [s])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", v)], facts=FACTS,
@@ -463,7 +471,8 @@ def render_short(name, s, heard=None, **parts):
                              v4_parts={"synth": fake_voice(speeds), "build": no_music_build, **parts})
     finally:
         subprocess.run, launch.first_words_check = run, first
-    return SimpleNamespace(folder=folder, entry=data["shorts"][0], speeds=speeds, commands=commands, name=name)
+    return SimpleNamespace(folder=folder, entry=data["shorts"][0], speeds=speeds, commands=commands, name=name,
+                           listened=listened)
 
 
 def ready(made):
@@ -493,7 +502,7 @@ def replay_render():
 @check
 @testkit.full
 def end_to_end_a_v4_short_names_its_payoff():
-    """launch.render with engine v4 on a made-up 40 s recording: READY, 17 s, the payoff named in render.json and on
+    """launch.render with engine v4 on a made-up 40 s recording: READY, 15.2 s, the payoff named in render.json and on
     the review page, every shot once, the voice at 1.2, no word over a cut or over the payoff, the crash sound up"""
     made = plain_render()
     e, log, speeds = made.entry, made.log, made.speeds
@@ -502,16 +511,16 @@ def end_to_end_a_v4_short_names_its_payoff():
     pay = e["payoff"]
     words_ok = all(not (w["start_s"] < c < w["end_s"]) for w in log["word_times"] for c in cuts)
     quiet = all(not (pay["at_s"] < w["start_s"] < pay["at_s"] + 2.5) for w in log["word_times"])
-    return (abs(e["length_s"] - 17.0) < 0.1 and pay["what"] == "the car slams into the wall"
+    return (abs(e["length_s"] - 15.2) < 0.1 and pay["what"] == "the car slams into the wall"
             and "slams into the wall" in page and speeds == [1.2] and words_ok and quiet
-            and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 36.0]]
+            and e["shown"] == [["synth", 14.0, 25.0], ["synth", 30.0, 34.2]]
             and (log["game_audio"].get("quiet_lift_db") is not None))
 
 
 @check
 @testkit.full
 def end_to_end_a_v4_short_with_its_replay():
-    """launch.render engine v4 with "replay": READY, 18.6 s, the replay shot made at half speed (48 frames for 0.8 s
+    """launch.render engine v4 with "replay": READY, 16.8 s, the replay shot made at half speed (48 frames for 0.8 s
     of the recording) right after the payoff, its sound slowed, the crash sound up over the payoff and the replay, no
     word over either, the replay in render.json and as a flag that says no ring was drawn, and the used footage
     counted once"""
@@ -521,10 +530,10 @@ def end_to_end_a_v4_short_with_its_replay():
     made = steady.count_frames(play["clip"]) if Path(play["clip"]).is_file() else None
     r = e["replay"]
     silent = all(not (w["start_s"] < r["end"] and w["end_s"] > e["payoff"]["at_s"]) for w in log["word_times"])
-    return (abs(e["length_s"] - 18.6) < 0.1 and play["frames"] == 48 and play["speed"] == 0.5
+    return (abs(e["length_s"] - 16.8) < 0.1 and play["frames"] == 48 and play["speed"] == 0.5
             and (made in (None, 48)) and (r["start"], r["end"]) == (8.5, 10.1) and silent
             and any("No highlight ring" in f for f in e["flags"])
-            and e["shown"] == [["synth", 14.0, 22.5], ["synth", 22.5, 25.0], ["synth", 30.0, 36.0]]
+            and e["shown"] == [["synth", 14.0, 22.5], ["synth", 22.5, 25.0], ["synth", 30.0, 34.2]]
             and log["game_audio"].get("quiet_lift_db") is not None)
 
 
@@ -552,11 +561,13 @@ def made_again(name, early=(), heard=None):
         shutil.copy(next(x["clip"] for x in first.log["shots"] if x["n"] == s["n"]), path)
         return {"pieces": []}
 
-    def build(out_dir, *rest):
-        for name in ("short.mp4", "captions.ass"):
+    def build(out_dir, *rest):                 # what assemble.build leaves: the Short, its captions, voice and log
+        for name in ("short.mp4", "captions.ass", "voice.wav"):
             shutil.copy(first.out / name, out_dir)
         there, here = (json.dumps(str(x))[1:-1] for x in (first.out, out_dir))
-        return json.loads((first.out / "log.json").read_text(encoding="utf-8").replace(there, here))
+        text = (first.out / "log.json").read_text(encoding="utf-8").replace(there, here)
+        (Path(out_dir) / "log.json").write_text(text, encoding="utf-8")
+        return json.loads(text)
     old = launch.speech_check
     launch.speech_check = lambda path, log=print, check=None: {"early": list(early), "later": [], "words": 9}
     try:
@@ -621,11 +632,79 @@ def only_the_first_two_seconds_are_transcribed_for_it():
 @check
 @testkit.full
 def a_short_whose_hook_is_misheard_fails_and_one_heard_right_is_ready():
-    """PR 34, through launch.render: line 1 is "Watch this."; heard as "Wash this" the Short is FAILED with both named and
-    keeps its metadata; heard right it is READY (the shots and the finished Short are plain_render's, copied in)"""
-    bad, good = made_again("misheard", heard=["Wash", "this."]), made_again("heard", heard=["watch", "This"])
-    return (bad["status"] == "FAILED" and has(bad["problems"], "watch this") and has(bad["problems"], "wash this")
+    """PR 34, through launch.render: line 1 is "Watch closely." (it was "Watch this.", filler since Nov 26); heard as
+    "Wash closely" the Short is FAILED with both named and keeps its metadata; heard right it is READY (the shots and
+    the finished Short are plain_render's, copied in)"""
+    bad, good = made_again("misheard", heard=["Wash", "closely."]), made_again("heard", heard=["watch", "Closely"])
+    return (bad["status"] == "FAILED" and has(bad["problems"], "watch closely") and has(bad["problems"], "wash closely")
             and bad.get("moment") == "M1" and bad.get("folder") and good["status"] == "READY")
+
+
+def voice_folder(tmp, lines=((0.0, 1.0), (1.5, 2.5)), rate=48000):
+    """A Short's folder as assemble.build leaves it, as far as the first-word check reads it: voice.wav (16-bit stereo,
+    a tone where each line is, its first 0.02 s quiet as Kokoro's trimmed lead) and log.json with the lines' times."""
+    import wave
+    import numpy as np
+    total = lines[-1][1] + 0.5
+    v = np.zeros(int(total * rate), np.float32)
+    for k, (a, b) in enumerate(lines):
+        n0, n1 = int((a + 0.02) * rate), int(b * rate)
+        v[n0:n1] = 0.3 * np.sin(2 * np.pi * (220 + 110 * k) * np.arange(n1 - n0) / rate)
+    with wave.open(str(Path(tmp) / "voice.wav"), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.repeat((v * 32767).astype("<i2"), 2).tobytes())
+    log = {"durations": {"lines": [{"line": k, "start_s": a, "end_s": b} for k, (a, b) in enumerate(lines, 1)]}}
+    (Path(tmp) / "log.json").write_text(json.dumps(log), encoding="utf-8")
+    return v
+
+
+@check
+def the_first_word_check_hears_the_clean_voice_up_to_the_end_of_line_1():
+    """rule 6 (Nov 26: on the mixed Short, Whisper misheard "Can", and "steal" became "take"): launch.hook_voice cuts
+    voice.wav, the voice alone (no music, game sound or whoosh), from line 1's start to its end, with 0.06 s of silence
+    in front, 0.08 s before the first word with the line's own trimmed lead; nothing of line 2 is in it, and every sample
+    of line 1 is; a folder with no voice.wav or log.json gives None (the Short is then flagged, never passed)"""
+    import wave
+    import numpy as np
+    with tempfile.TemporaryDirectory() as tmp:
+        v = voice_folder(tmp)
+        clip = launch.hook_voice(tmp)
+        with wave.open(str(clip)) as w:
+            rate, ch = w.getframerate(), w.getnchannels()
+            got = np.frombuffer(w.readframes(w.getnframes()), "<i2").reshape(-1, ch)[:, 0].astype(np.float32) / 32767
+        lead = int(launch.HOOK_LEAD_S * rate)
+        quiet = np.abs(got[:lead + int(0.02 * rate)]).max()
+        same = np.abs(got[lead:] - v[:len(got) - lead]).max()
+        (Path(tmp) / "voice.wav").unlink()
+        gone = launch.hook_voice(tmp)
+    import assemble
+    import speech
+    advice = speech.first_words_problem("Can anyone steal this?", ["Can", "anyone", "still"])
+    print(f"       {len(got) / rate:.3f} s, silent first {(lead / rate + 0.02):.2f} s (peak {quiet:.4f}), off by {same:.5f}; "
+          f"{advice}")
+    return (clip.name == "first_words.wav" and abs(len(got) / rate - (launch.HOOK_LEAD_S + 1.0)) < 1e-3 and quiet == 0
+            and same < 1e-3 and abs(launch.HOOK_LEAD_S + assemble.LEAD_KEEP_S - 0.08) < 1e-9 and gone is None
+            and "is heard right" not in advice and "can anyone steal" in advice and "can anyone still" in advice)
+
+
+@check
+@testkit.full
+def the_render_fails_on_the_clean_voice_and_only_flags_the_mix():
+    """through launch.render: the first-word check hears first_words.wav first, the clean hook. Heard right there and
+    wrong in the mix (music or a whoosh over "Can"), the Short is READY with a FIRST WORDS IN THE MIX flag; heard wrong
+    on the clean voice it is FAILED, whatever the mix says; the message no longer says "Can anyone ..." is heard right
+    (in the real mix it wasn't, Nov 25)"""
+    def mix_only(path):
+        return ["Wash", "closely."] if Path(path).name == "short.mp4" else ["watch", "closely"]
+
+    def clean_only(path):
+        return ["Wash", "closely."] if Path(path).name == "first_words.wav" else ["watch", "closely"]
+    ready, failed = made_again("mixheard", heard=mix_only), made_again("cleanheard", heard=clean_only)
+    return (ready["status"] == "READY" and any(f.startswith("FIRST WORDS IN THE MIX") for f in ready["flags"])
+            and failed["status"] == "FAILED" and has(failed["problems"], "wash closely")
+            and not has(failed["problems"], "is heard right"))
 
 
 @check
@@ -792,15 +871,337 @@ def the_open_card_is_5_words_at_most_small_and_above_the_action():
             and assemble.CARD_Y + assemble.CARD_ROOM / 2 <= 600)
 
 
+# --- 13. The first second and the voice gaps (the owner's rules 3 and 4, Nov 26) ---
+
+@check
+def no_voice_gap_over_3_5_s_but_on_the_payoff_or_the_replay():
+    """rule 4 (the Shorts had 4-8 s with no voice): between two lines at most 3.5 s with no voice, the payoff's seconds
+    and the slow-mo replay left out. The fixture's 4.66 s between lines 2 and 3 is 1.66 + 0.5 s outside its payoff, so
+    it passes, and so does its 3.48 s ending; its old ending (line 4 at 34.8 s in a 17 s Short: 5.68 s) is refused; line 2
+    at 15.0 s leaves 4.16 s before the payoff, refused (G38 #7: with the 0.5 s after it, 4.7 s of no voice in all; the old
+    "4.2 s", the longest piece alone, must not be said any more); with the replay the quiet replay is left out too; 3.5 s
+    passes, 3.6 s doesn't"""
+    old = short(shots=[{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
+                lines=short()["lines"][:3] + [dict(short()["lines"][3], at=34.8)])
+    early = short(lines=short()["lines"][:1] + [dict(short()["lines"][1], at=15.0)] + short()["lines"][2:])
+    shots = [{"n": 1, "from": 0.0, "to": 20.0, "start": 0.0, "end": 20.0}]
+    edge = [cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 1.0}, {"line": 2, "start": 1.0 + g, "end": 9.0}],
+                                 shots, None) for g in (3.5, 3.6)]
+    replayed = problems_of(short(replay=dict(REPLAY)))
+    word = "no voice for"
+    return (not has(problems_of(short()), word) and has(problems_of(old), "no voice for 5.7 s between line 3 and line 4")
+            and has(problems_of(early), "no voice for 4.7 s between line 2 and line 3")
+            and not has(problems_of(early), "no voice for 4.2 s") and not has(replayed, word)
+            and edge[0] == [] and len(edge[1]) == 1)
+
+
+@check
+def a_short_names_the_subject_it_opens_on():
+    """rule 3 (the animal Short opened on empty grass): every Short knows what is on screen at 0:00: the thing its starred
+    hook names, else "subject", else what its payoff names (the fixture: "the car slams ..."). Nothing named is refused;
+    a subject the rules don't know ("a spaceship") is refused; "Which GTA 6 animal ..." names an animal, which, like any
+    subject a hook names, must be in the evidence at shot 1's start"""
+    nothing = dict(payoff={"from": 20.0, "to": 22.5, "what": "he lands hard on the road"})
+    none = problems_of(short(**nothing))
+    given = problems_of(short(**nothing, subject="bike"))
+    unknown = problems_of(short(**nothing, subject="a spaceship"))
+    animal = problems_of(short(hooks=["Which GTA 6 animal takes you DOWN first?", "b", "c"], star=0))
+    return (has(none, "subject:") and not has(given, "subject:") and has(unknown, "subject:")
+            and cutplan.subject_of(short()) == "car" and cutplan.subject_of(short(**nothing, subject="bike")) == "bike"
+            and has(animal, "the hook names 'animal'") and not has(problems_of(short()), "subject:"))
+
+
+class FirstLook(FakeChecker):
+    """The vision model, answering the first-second question with these fields changed."""
+    def __init__(self, **first):
+        self.first, self.asked = first, []
+
+    def frame(self, jpg, meta):
+        answer, error = super().frame(jpg, meta)
+        self.asked.append(meta.get("use"))
+        return (dict(answer, **self.first) if meta.get("use") == "first frame" else answer), error
+
+
+@check
+def the_first_second_must_show_the_subject():
+    """rule 3, on the made shot 1 (its frames at 0.0 and 0.5 s, the vision model's frame question): empty, only the
+    character's back, too dark, or no vehicle when the subject is a car each fail with what it saw; a subject the
+    question has no field for (an animal) passes as a flag to look at 0:00 by hand; through launch.render an empty
+    first second makes the Short FAILED before it is put together"""
+    with tempfile.TemporaryDirectory() as tmp:
+        clip = Path(tmp) / "shot1.mp4"
+        make_video(clip, 2, size="108x192")
+        look = {k: launch.first_frame_check(clip, "car", FirstLook(**{k: True}), tmp)
+                for k in ("empty", "back_only", "dark")}
+        novehicle = launch.first_frame_check(clip, "car", FirstLook(vehicle=False), tmp)
+        fine = launch.first_frame_check(clip, "car", FirstLook(), tmp)
+        animal = launch.first_frame_check(clip, "animal", FirstLook(), tmp)
+        cop = launch.first_frame_check(clip, "police", FirstLook(), tmp)       # FakeChecker sees no police
+
+        def make_shot(video, s, path, grade, log):
+            make_video(path, 12, size="108x192")
+            return {"pieces": []}
+        video = Path(tmp) / "x.webm"
+        folder = run_folder_with(tmp, [moment(video)], [short()])
+        data = launch.render(folder, engine="v4", checker=FirstLook(empty=True), indexes=[made_up_idx("synth", video)],
+                             facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                             v4_parts={"synth": fake_voice([]), "make_shot": make_shot,
+                                       "light": lambda v, s: __import__("numpy").full((16, 480, 270), 150, "uint8"),
+                                       "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+        e = data["shorts"][0]
+    print(f"       {[(k, v[0]) for k, v in look.items()]}; animal flag {animal[1]}")
+    return (all(len(v[0]) == 1 for v in look.values()) and has(look["empty"][0], "almost nothing to look at")
+            and has(look["back_only"][0], "only the character's back") and has(look["dark"][0], "too dark")
+            and has(novehicle[0], "doesn't show the car") and fine[0] == [] and fine[1] == [] and fine[2]["ok"]
+            and animal[0] == [] and len(animal[1]) == 1 and "look at 0:00" in animal[1][0]
+            and has(cop[0], "doesn't show the police")
+            and e["status"] == "FAILED" and has(e["problems"], "the first second shows almost nothing to look at"))
+
+
+# --- 14. The payoff: a punch-in, slow-mo on any crash or stunt, no whoosh into it (the owner's rule 5, Nov 26) ---
+
+def square_clip(path, frames=60):
+    """A 216x384 clip: a 60 px white square in the middle of black, for measuring a zoom."""
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    f"color=black:s=216x384:r=30:d={frames / 30},drawbox=x=78:y=162:w=60:h=60:color=white:t=fill",
+                    "-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p", str(path)], check=True)
+
+
+def square_widths(path):
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                         capture_output=True).stdout
+    f = np.frombuffer(raw, np.uint8).reshape(-1, 384, 216)
+    return [int(np.ptp(np.nonzero((x > 128).any(axis=0))[0])) + 1 for x in f]
+
+
+@check
+def the_payoff_gets_a_punch_in_from_1_05_to_1_2():
+    """steady.punch_in on a made shot: before the payoff the picture is as made (the shot is 1.05 in already); over the
+    payoff it zooms in smoothly to 1.2 of the recording's picture (1.2 / 1.05 of the made shot) and holds there to the
+    shot's end; the frame count and size don't change; with no payoff times (the replay) it holds 1.2 from the first
+    frame"""
+    with tempfile.TemporaryDirectory() as tmp:
+        src, out, held = Path(tmp) / "sq.mp4", Path(tmp) / "punched.mp4", Path(tmp) / "held.mp4"
+        square_clip(src)
+        steady.punch_in(src, out, 20 / 30, 40 / 30)
+        steady.punch_in(src, held, None, None)
+        w, h = square_widths(out), square_widths(held)
+        frames = steady.count_frames(out)
+    rel = steady.PUNCH_TO / steady.ZOOM
+    print(f"       widths at 0/19/30/40/59: {[w[k] for k in (0, 19, 30, 40, 59)]}; held {h[0]}, {h[-1]}; x{rel:.4f}")
+    return (abs(steady.PUNCH_TO - 1.2) < 1e-9 and abs(steady.ZOOM - 1.05) < 1e-9 and frames == 60 and len(w) == 60
+            and w[0] == w[19] == 60 and 60 < w[30] < 60 * rel and all(abs(x - 60 * rel) <= 2 for x in w[40:])
+            and all(a <= b for a, b in zip(w, w[1:])) and all(abs(x - 60 * rel) <= 2 for x in h))
+
+
+@check
+def render_punches_in_on_the_payoffs_shot_and_holds_it_over_the_replay():
+    """launch.render_v4: the shot that holds the payoff (14-25 s, payoff 20.0-22.5) is punched in over 6.0-8.5 s of its
+    clip, before any HUD inset goes on; shot 2 isn't; with the replay, the payoff's shot (14-22.5 s) is punched over
+    6.0-8.5 s, the replay holds the punch-in, and the rest of shot 1 after it doesn't"""
+    import numpy as np
+
+    def run(s):
+        calls = []
+
+        def make_shot(video, x, path, grade, log):
+            make_video(path, 2, size="108x192")
+            return {"pieces": []}
+
+        def punch(clip, out, t0, t1):
+            calls.append((Path(clip).stem, t0 if t0 is None else round(t0, 3), t1 if t1 is None else round(t1, 3)))
+            shutil.copy(clip, out)
+
+        def build(*a, **k):
+            raise launch.RenderProblem("stopped after the shots (test)")
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "x.webm"
+            folder = run_folder_with(tmp, [moment(video)], [s])
+            launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)], facts=FACTS,
+                          today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                          v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "punch": punch, "build": build,
+                                    "light": lambda v, x: np.full((16, 480, 270), 150, np.uint8),
+                                    "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
+                                    "clear": lambda v, a, latest, focus: (a, [], [])})
+        return calls
+    plain, replayed = run(short()), run(short(replay=dict(REPLAY)))
+    print(f"       plain {plain}; with the replay {replayed}")
+    return plain == [("shot1", 6.0, 8.5)] and replayed == [("shot1", 6.0, 8.5), ("shot2", None, None)]
+
+
+def narrated_crash(evidence_kind="crash"):
+    m = moment()
+    m["type"] = "narrated"
+    if evidence_kind != "crash":
+        m["evidence"] = [e for e in m["evidence"] if e["id"] != "E2"] + [
+            {"id": "E2", "kind": "stars", "value": "2", "from_s": 20.0, "to_s": 23.0, "source": "made up"}]
+    return m
+
+
+@check
+def a_narrated_crash_or_stunt_may_replay_its_impact():
+    """rule 5: the slow-mo replay was for action Shorts only; a crash or stunt Short typed narrated may have it too (its
+    evidence has a crash, a stunt, a jump or a fall); a narrated Short with no impact still may not; no line, of any
+    Short, talks over the replay"""
+    crash = cutplan.plan(short(replay=dict(REPLAY)), narrated_crash(), secs(short()), 21.0)
+    stars = cutplan.plan(short(replay=dict(REPLAY)), narrated_crash("stars"), secs(short()), 21.0)
+    over = short(replay=dict(REPLAY), lines=short()["lines"][:2] + [dict(short()["lines"][2], at=22.0)]
+                 + short()["lines"][3:])
+    talks = problems_of(over) + problems_of(over, m=narrated_crash())
+    return (not has(crash[1], "only an action Short") and crash[0]["replay"] is not None
+            and has(stars[1], "only an action Short or a crash or stunt") and stars[0]["replay"] is None
+            and len([p for p in talks if "talks over the slow-mo replay" in p]) == 2)
+
+
+@check
+def no_whoosh_into_the_slow_mo_replay():
+    """rule 5: every cut gets its whoosh but the one into the replay (the slow-mo starts on the game's own sound); the
+    cut out of it keeps its whoosh"""
+    import assemble
+    shots = [{"n": 1, "start": 0.0}, {"n": 2, "start": 8.5, "replay": True}, {"n": 3, "start": 10.1},
+             {"n": 4, "start": 12.6}]
+    return ([x["at_s"] for x in assemble.cut_sfx(shots)] == [10.1, 12.6]
+            and [x["at_s"] for x in assemble.cut_sfx([dict(s, replay=False) for s in shots])] == [8.5, 10.1, 12.6])
+
+
+@check
+def a_narrated_replay_gets_the_games_sound_and_the_loudest_moment():
+    """launch.render_v4, a narrated crash Short with its replay: the payoff's shot is measured for its loudest moment (the
+    replay must hold the hit), and the replay is a quiet stretch where the game's own sound comes up, as in an action
+    Short"""
+    import numpy as np
+    seen = {}
+
+    def make_shot(video, x, path, grade, log):              # as long as the shot, so every shot check finds its frames
+        make_video(path, x["frames"] / 30 + 0.5, size="108x192")
+        return {"pieces": []}
+
+    def build(out_dir, video, shots, lines, spoken, placed, hook, kind, quiet, *rest):
+        seen.update(kind=kind, quiet=quiet)
+        raise launch.RenderProblem("stopped at the build (test)")
+
+    def loudest(v, a, b):
+        seen["loudest"] = (a, b)
+        return 21.0
+    with tempfile.TemporaryDirectory() as tmp:
+        video = Path(tmp) / "x.webm"
+        folder = run_folder_with(tmp, [dict(narrated_crash(), path=str(video))],
+                                 [short(replay=dict(REPLAY), type="narrated")])
+        launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", video)], facts=FACTS,
+                      today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
+                      v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "build": build,
+                                "punch": lambda c, o, a, b: shutil.copy(c, o),
+                                "light": lambda v, x: np.full((16, 480, 270), 150, np.uint8), "loudest": loudest,
+                                "cuts": lambda v, a, b: [], "clear": lambda v, a, latest, focus: (a, [], [])})
+    print(f"       {seen}")
+    return seen.get("kind") == "narrated" and seen.get("loudest") == (14.0, 25.0) and seen.get("quiet") == (8.5, 10.1)
+
+
+# --- 12. Hooks, the open card and the title (the owner's rules of Nov 26) ---
+
+@check
+def a_trailing_in_gta_6_comes_off_the_card_before_a_question_mark_too():
+    """rule 7: the open card leaves out a trailing "in GTA 6" before "?" as it does before "." or "!" ("Can you survive
+    this bridge in GTA 6?" made a 7-word card, so it was refused); "GTA 6" in the middle stays, and so does a card given
+    by hand"""
+    def card(h):
+        return cutplan.card_words(short(hooks=[h, "b", "c"], star=0))
+    return (card("Can you survive this bridge in GTA 6?") == "Can you survive this bridge?"
+            and card("Can you STEAL this in GTA VI?!") == "Can you STEAL this?!"
+            and card("Watch the black SUV in GTA 6") == "Watch the black SUV"
+            and card("Which GTA 6 animal takes you DOWN first?") == "Which GTA 6 animal takes you DOWN first?"
+            and cutplan.card_words(short(open_card="Steal it in GTA 6?")) == "Steal it in GTA 6?"
+            and not has(problems_of(short(hooks=["Can you survive this bridge in GTA 6?", "b", "c"], star=0)), "7 words"))
+
+
+@check
+def filler_hooks_are_refused_and_named_hooks_are_not():
+    """rule 2: no filler in a hook, the open card, the title or a line: "Watch this.", "Watch this!", "Watch this, you're
+    flying through traffic." and "Wait for it" (the 1.2K bike Short opened "Watch this. Wait for it.") are refused
+    wherever they are; "Watch this crash", "Watch the black SUV", "Watch this car go" and "Wait for the cops" name
+    something to watch and pass"""
+    def hit(**over):
+        return has(problems_of(short(**over)), "is filler")
+
+    def line(say):
+        return has(truth.story_problems(short(lines=[{"say": say, "claim": "hype", "at": 14.0}]), moment(), FACTS, "v4"),
+                   "is filler")
+    bad = [hit(hooks=["Watch this. Wait for it.", "b", "c"]), hit(hooks=["Watch this crash", "Watch this!", "c"]),
+           hit(open_card="Wait for it"), hit(title="WATCH this, GTA 6 traffic is wild"), line("Watch this."),
+           line("Watch this, you're flying through traffic."), line("Okay, watch this")]
+    good = [hit(hooks=["Watch this crash", "Watch the black SUV", "Watch this car go"]),
+            hit(hooks=["Wait for the cops", "b", "c"]), line("Watch this car go."), line("Watch the black SUV.")]
+    print(f"       refused {bad}; passed {[not g for g in good]}")
+    return all(bad) and not any(good)
+
+
+@check
+def a_question_hook_needs_its_stakes_on_screen_at_frame_0():
+    """rule 2: a hook is a statement or a command; a question only when the stakes are readable at frame 0. The starred
+    hook asking with no "stakes_at_0" is refused, and so is line 1 asking; "stakes_at_0" passes when its evidence covers
+    shot 1's start (E5, the car seen 13-19 s) and it says why in 3+ words; E2 (the crash, 20-23 s), an id the moment hasn't,
+    or a one-word why are refused; a statement needs nothing. G38 #6 (Nov 27): E1 ("driving", 10-40 s) passed for any hook;
+    it names no car, so it is refused now (it was the "ok" case: it must fail)"""
+    q = dict(hooks=["Can you stop this car?", "b", "c"], star=0)
+    none = problems_of(short(**q))
+    car = suv_moment(extra=[{"id": "E5", "kind": "seen", "value": "A red car races down the road.", "from_s": 13.0,
+                             "to_s": 19.0, "source": "made up"}])
+    ok = problems_of(short(**q, stakes_at_0={"evidence": ["E5"], "why": "the car is already racing down the road"}), m=car)
+    generic = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "the car is already racing down the road"}))
+    late = problems_of(short(**q, stakes_at_0={"evidence": ["E2"], "why": "the crash comes soon"}))
+    unknown = problems_of(short(**q, stakes_at_0={"evidence": ["E9"], "why": "the car is racing"}))
+    terse = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "car"}))
+    spoken = problems_of(short(lines=[dict(short()["lines"][0], say="Watch it go?")] + short()["lines"][1:]))
+    word = "is a question"
+    return (has(none, word) and not has(ok, word) and has(late, word) and has(unknown, word) and has(terse, word)
+            and has(spoken, word) and not has(problems_of(short()), word) and has(generic, "names 'car', what the hook is about"))
+
+
+@check
+def the_spoken_hook_the_card_and_the_title_share_the_key_verb():
+    """rules 2 and 8 (the airliner Short: its title said STEAL, its voice "take", 1.2K views): "key_verb" is said by line
+    1, the open card and the title, in any form (steal, stealing); where it isn't, that place is named; no key_verb is
+    refused; the fixture's (watch) passes"""
+    air = dict(key_verb="steal", title="Can you STEAL this GTA 6 airliner?", hooks=["Steal this airliner", "b", "c"],
+               star=0)
+
+    def with_line(say, **over):
+        return problems_of(short(**dict(air, **over), lines=[dict(short()["lines"][0], say=say)] + short()["lines"][1:]))
+    took = with_line("Take this airliner.")
+    said = with_line("Stealing an airliner.")
+    card = with_line("Steal this airliner.", open_card="Take the airliner")
+    title = with_line("Steal this airliner.", title="Can you TAKE this GTA 6 airliner?")
+    none = problems_of(short(key_verb=None))
+    k = "the key verb"
+    return (has(took, "line 1 (the spoken hook) doesn't say the key verb \"steal\"") and not has(said, k)
+            and has(card, "the open card doesn't say the key verb") and not has(card, "line 1 (the spoken hook)")
+            and has(title, "the title doesn't say the key verb") and has(none, "key_verb:")
+            and not has(problems_of(short()), k) and not has(problems_of(short()), "key_verb"))
+
+
+@check
+def a_key_verb_must_be_a_real_word_not_the_or_this():
+    """the key verb check would pass with "the" or "this" (every hook, card and title has one): a key verb that is a
+    word every line has ("the", "this", "you", "GTA", "can") is refused; "watch", "steal" and "survive" are fine"""
+    plain = [problems_of(short(key_verb=w)) for w in ("the", "This", "you", "GTA", "can")]
+    real = [problems_of(short(key_verb=w, title=f"{w.upper()} this GTA 6 car on the highway",
+                              hooks=[f"{w.title()} this crash", "b", "c"],
+                              lines=[dict(short()["lines"][0], say=f"{w.title()} closely.")] + short()["lines"][1:]))
+            for w in ("watch", "steal", "survive")]
+    return all(has(p, "key_verb:") for p in plain) and not any(has(p, "key_verb:") for p in real)
+
+
 @check
 def the_short_ends_as_the_talking_ends_or_on_the_replay():
-    """no dead air at the end: the last word 4.6 s before the end is refused; the fixture's last word ends 0.08 s
+    """no dead air at the end: the last word 2.8 s before the end is refused; the fixture's last word ends 0.48 s
     before; an ending on the slow-mo replay is allowed however long after the last word"""
     early = short(lines=short()["lines"][:3] + [dict(short()["lines"][3], at=30.3)])
     shots = [{"n": 1, "from": 0.0, "to": 6.0, "start": 0.0, "end": 6.0},
              {"n": 2, "from": 5.0, "to": 5.8, "start": 6.0, "end": 7.6, "speed": 0.5, "replay": True}]
     placed = [{"line": 1, "start": 0.0, "end": 1.0}]
-    return (has(problems_of(early), "goes on 4.6 s after the last word") and not problems_of(short())
+    return (has(problems_of(early), "goes on 2.8 s after the last word") and not problems_of(short())
             and not cutplan.ending_problems(shots, placed)
             and cutplan.ending_problems(shots[:1], placed))
 
@@ -913,7 +1314,8 @@ def captions_it_cannot_test_are_flagged_never_silent():
                        {"say": "Wait for it.", "claim": "hype", "at": 17.5},
                        {"say": "Yes, you get right back up.", "claim": "on_screen", "evidence": ["E2"], "at": 23.0},
                        {"say": "You just run off like nothing happened.", "claim": "on_screen", "evidence": ["E2"],
-                        "at": 33.9}])
+                        "at": 33.9}],
+                shots=[{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}])     # its own (the fixture's ends at 34.2)
     with tempfile.TemporaryDirectory() as tmp:
         checks, report, bad, flags = v4_captions(tmp, m24)
     page = launch.checks_block({"caption_checks": checks, "captions": report})
@@ -963,12 +1365,43 @@ def built_captions(tmp):
 
 
 def captions_in(ass):
-    """[(start, end, word)] of the word captions in an .ass file."""
+    """[(start, end, word)] of the captions in an .ass file: each word with the times of the caption it is in (one word
+    a caption until Nov 26, 2-3 since)."""
     def s(t):
         h, m, x = t.split(":")
         return int(h) * 3600 + int(m) * 60 + float(x)
-    return [(s(f[1]), s(f[2]), re.sub(r"\{[^}]*\}", "", f[9])) for line in ass.splitlines() if ",Caption," in line
-            for f in [line.split(",", 9)] if line.startswith("Dialogue")]
+    return [(s(f[1]), s(f[2]), w) for line in ass.splitlines() if ",Caption," in line
+            for f in [line.split(",", 9)] if line.startswith("Dialogue")
+            for w in re.sub(r"\{[^}]*\}", " ", f[9]).split()]
+
+
+def caption_lines_in(ass):
+    """[(start, end, text)] of each caption event (the words it shows, tags left out)."""
+    out = []
+    for line in ass.splitlines():
+        words = captions_in(line)
+        if words:
+            out.append((words[0][0], words[0][1], " ".join(w for _, _, w in words)))
+    return out
+
+
+def edited_caption(line, word, new=None):
+    """One caption event of captions.ass with `word` taken out (new=None) or put in its place; None when no word is
+    left in it."""
+    head, text = line.split(",", 9)[:9], line.split(",", 9)[9]
+    pieces, done = re.split(r"(\{[^}]*\})", text), False
+    for k, piece in enumerate(pieces):
+        if piece.startswith("{") or done:
+            continue
+        ws = piece.split(" ")
+        if word in ws:
+            i = ws.index(word)
+            ws = ws[:i] + ws[i + 1:] if new is None else ws[:i] + [new] + ws[i + 1:]
+            pieces[k], done = " ".join(ws), True
+    joined = "".join(pieces)
+    if not re.sub(r"\{[^}]*\}", " ", joined).split():
+        return None
+    return ",".join(head) + "," + joined
 
 
 @check
@@ -981,9 +1414,15 @@ def no_caption_repeats_a_word_the_open_card_shows():
         report, why = judge(ass)
     caps = captions_in(ass)
     under = [w for a, b, w in caps if a < 2.0]
+    lines = caption_lines_in(ass)
+    print(f"       captions {lines}")
+    # Nov 26: captions are lines of 2-3 words. CAN YOU is up from its first word until a moment after YOU (0.53 + 0.25 s):
+    # the card words said next get no caption, so it doesn't stay up over them (it was YOU alone, 0.28-0.56); and no
+    # caption shown under the card runs past the card's end, so OVERPASS never shows while the card does
     return (under == ["CAN", "YOU", "OR", "THE"] and [w for a, b, w in caps if a >= 2.0] == ["OVERPASS", "THAT", "OVERPASS",
                                                                                           "JUMP", "HURT"]
-            and caps[1][:2] == (0.28, 0.56) and not why
+            and lines[0] == (0.0, 0.78, "CAN YOU") and all(b <= 2.0 + 1e-6 for a, b, _ in lines if a < 2.0)
+            and not why
             and report == {"shown": 9, "over_a_shot": 9, "tested": 0, "unknown_things": ["OVERPASS"], "on_card": 4})
 
 
@@ -996,12 +1435,18 @@ def the_caption_check_allows_only_what_the_card_shows():
         ass, judge = built_captions(tmp)
         lines = ass.splitlines()
 
+        def holding(word, after=0.0):            # the caption event that shows this word (one word or a line of them)
+            return next(k for k, x in enumerate(lines) if ",Caption," in x
+                        and word in [w for *_, w in captions_in(x)] and captions_in(x)[0][0] >= after)
+
         def without(word, after):
-            k = next(k for k, x in enumerate(lines) if ",Caption," in x and x.endswith("}" + word)
-                     and captions_in(x)[0][0] >= after)
-            return "\n".join(lines[:k] + lines[k + 1:])
-        twice = next(x for x in lines if x.endswith("}THE")).replace("}THE", "}SURVIVE")
-        at = next(k for k, x in enumerate(lines) if x.endswith("}OR"))
+            k = holding(word, after)
+            left = edited_caption(lines[k], word)
+            return "\n".join(lines[:k] + ([left] if left else []) + lines[k + 1:])
+        at = holding("OR")
+        twice = lines[holding("THE")]            # SURVIVE alone, captioned under the card, just before OR's caption
+        for w in [w for *_, w in captions_in(twice)]:
+            twice = edited_caption(twice, w, "SURVIVE") if w == "THE" else edited_caption(twice, w)
         both = judge("\n".join(lines[:at] + [twice] + lines[at:]))[1]
         bare = judge("\n".join(x for x in lines if ",Title," not in x))[1]
         or_gone, late_gone = judge(without("OR", 0.0))[1], judge(without("JUMP", 3.0))[1]
@@ -1011,18 +1456,157 @@ def the_caption_check_allows_only_what_the_card_shows():
             and bare == ["the caption is 'or' where the line says 'survive'"])
 
 
+# --- 11. The captions (the owner, Nov 22; built Nov 26): 2-3 white words a line, 1-2 accent words, in the safe area ---
+
+LINE_TEST = [{"say": "Watch the red pickup on the bridge."}, {"say": "It has one lane left, then the traffic stops."},
+             {"say": "Nope."}, {"say": "Watch that pickup again."}]
+WHITE_ASS, YELLOW_ASS, CYAN_ASS = "&HFFFFFF&", "&H00E6FF&", "&HFFE500&"
+
+
+def line_words(lines=LINE_TEST, pause_after=("left,",)):
+    """assemble's word times for these lines, one after the other (0.28 s a word, 0.3 s between lines); a word in
+    pause_after is followed by a pause (a comma), as Kokoro's tokens mark it."""
+    import assemble
+    spoken = fake_voice([])(lines, 1.2)
+    marks = [w.lower() for w in pause_after]
+    for sp, line in zip(spoken, lines):
+        toks = line["say"].split()
+        for w, tok in zip(sp["words"], toks):
+            w["pause"] = tok.lower() in marks
+    placed, t = [], 0.0
+    for n, sp in enumerate(spoken, 1):
+        placed.append({"line": n, "start": round(t, 3), "end": round(t + sp["seconds"], 3)})
+        t += sp["seconds"] + 0.3
+    return assemble.voice_track(spoken, placed, t)[2], t
+
+
+def line_events_of(ass):
+    """[(start, end, [(word, colour)], override tags)] of the caption events in an .ass file."""
+    out = []
+    for raw in ass.splitlines():
+        if not raw.startswith("Dialogue") or ",Caption," not in raw:
+            continue
+        f = raw.split(",", 9)
+        h1, m1, s1 = f[1].split(":")
+        h2, m2, s2 = f[2].split(":")
+        tags = re.match(r"\{([^}]*)\}", f[9]).group(1)
+        words, colour = [], None
+        for block, text in re.findall(r"\{([^}]*)\}([^{]*)", f[9]):
+            c = re.findall(r"\\c(&H[0-9A-F]{6}&)", block)
+            colour = c[-1] if c else colour
+            words += [(w, colour) for w in text.split()]
+        out.append((int(h1) * 3600 + int(m1) * 60 + float(s1), int(h2) * 3600 + int(m2) * 60 + float(s2), words, tags))
+    return out
+
+
+@check
+def captions_are_two_or_three_white_words_with_one_or_two_accents():
+    """assemble's captions for 4 lines (21 words): every word once, in order; each caption 2-3 words, never across a
+    sentence, broken at the comma, one word only for the one-word sentence (NOPE.); every word white but 1-2 accent
+    words a caption, yellow or cyan: PICKUP (a thing to watch) cyan, the key word (WATCH, which the open card and the
+    hook share) yellow; a thick black outline (12), Lilita One at 120 at most, centred on x 510 and the old word line (y 1260); each
+    caption is up from its first word until the next one starts, or a moment after a pause"""
+    import assemble
+    import explainer as ex
+    words, total = line_words()
+    events = line_events_of(ex.ass_document(assemble.caption_events(words, total, None, keys=["watch"])))
+    flat = [w for _, _, ws, _ in events for w, _ in ws]
+    sizes = [len(ws) for _, _, ws, _ in events]
+    said = [w["text"] for w in words]
+    k, crossing = 0, False
+    for _, _, ws, _ in events:
+        crossing |= len({words[k + j]["sentence"] for j in range(len(ws))}) > 1
+        k += len(ws)
+    accents = [[(w, c) for w, c in ws if c != WHITE_ASS] for _, _, ws, _ in events]
+    colours = {w: c for _, _, ws, _ in events for w, c in ws}
+    styled = all(re.search(r"\\bord1[2-9]", t) and "\\3c&H000000&" in t and "\\pos(510," in t
+                 and int(re.search(r"\\fs(\d+)", t).group(1)) <= 120 and "\\fnLilita One" in t for *_, t in events)
+    ys = [int(re.search(r"\\pos\(510,(\d+)\)", t).group(1)) for *_, t in events]
+    comma = next(ws for _, _, ws, _ in events if any(w == "LEFT" for w, _ in ws))
+    timed = all(abs(a - words[sum(sizes[:i])]["start"]) < 0.011 for i, (a, *_) in enumerate(events))
+    print(f"       captions {[' '.join(w for w, _ in ws) for _, _, ws, _ in events]}; accents {accents}; y {set(ys)}")
+    return (flat == said and len(said) == 21 and not crossing and timed
+            and all(2 <= n <= 3 for n, (_, _, ws, _) in zip(sizes, events) if ws[0][0] != "NOPE")
+            and [ws for _, _, ws, _ in events if ws[0][0] == "NOPE"][0] == [("NOPE", YELLOW_ASS)]
+            and comma[-1][0] == "LEFT"
+            and all(1 <= len(a) <= 2 and all(c in (YELLOW_ASS, CYAN_ASS) for _, c in a) for a in accents)
+            and colours["PICKUP"] == CYAN_ASS and colours["WATCH"] == YELLOW_ASS and colours["THE"] == WHITE_ASS
+            and styled and all(abs(y - 1260) <= 40 for y in ys))
+
+
+@check
+def a_short_word_never_flashes_alone_when_its_line_is_a_little_wide():
+    """the first real render (Nov 26) captioned "No slowing down." as NO alone for 0.2 s, then SLOWING DOWN: the opposite
+    of what was said, because the 3 words were a little wider (13.9) than a comfortable line (13.5). A line a little
+    wide is drawn a little smaller instead; a word is alone only when no partner fits even then (here: a 30-letter word)"""
+    import assemble
+    import explainer as ex
+    words, total = line_words([{"say": "No slowing down."}, {"say": "Watch the red pickup."},
+                               {"say": "Supercalifragilisticexpialidocious crash."}])
+    lines = [" ".join(w for w, _ in ws) for _, _, ws, _ in
+             line_events_of(ex.ass_document(assemble.caption_events(words, total, None, keys=["watch"])))]
+    print(f"       captions {lines}")
+    return (lines[0] == "NO SLOWING DOWN" and "NO" not in lines
+            and lines[-2:] == ["SUPERCALIFRAGILISTICEXPIALIDOCIOUS", "CRASH"])
+
+
+@check
+def caption_lines_stay_inside_the_safe_area_on_real_pixels():
+    """burnt onto a black 1080x1920 frame at each caption's middle, the ink (outline and shadow in) stays inside x 60-960
+    and y 1185-1345, the band the word captions had, even for the widest line; white, yellow and cyan are all there
+    (the key word SURVIVE, the thing to watch PICKUP)"""
+    import numpy as np
+    import assemble
+    import explainer as ex
+    words, total = line_words([{"say": "Survive this overpass jump."}, {"say": "Nobody expected this pickup."}])
+    events = assemble.caption_events(words, total, None, keys=["survive"])
+    with tempfile.TemporaryDirectory() as tmp:
+        for font in ex.FONT_FILES:
+            shutil.copy(font, tmp)
+        Path(tmp, "c.ass").write_text(ex.ass_document(events), encoding="utf-8")
+        boxes, seen = [], set()
+        for a, b, ws, _ in line_events_of(ex.ass_document(events)):
+            t = (a + b) / 2
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=black:s=1080x1920:r=30:d={total + 1}",
+                                  "-vf", "ass=c.ass:fontsdir=.", "-ss", f"{t:.2f}", "-frames:v", "1", "-f", "rawvideo",
+                                  "-pix_fmt", "rgb24", "-"], cwd=tmp, capture_output=True).stdout
+            f = np.frombuffer(raw, np.uint8).reshape(1920, 1080, 3).astype(int)
+            ys, xs = np.nonzero(f.max(axis=2) > 24)
+            boxes.append((xs.min(), ys.min(), xs.max(), ys.max()))
+            if ((f > 230).all(axis=2)).sum() > 200:
+                seen.add("white")
+            if ((f[..., 0] > 230) & (f[..., 1] > 200) & (f[..., 2] < 60)).sum() > 200:
+                seen.add("yellow")
+            if ((f[..., 0] < 60) & (f[..., 1] > 200) & (f[..., 2] > 230)).sum() > 200:
+                seen.add("cyan")
+    print(f"       ink boxes {boxes}; colours {sorted(seen)}")
+    return (all(60 <= x0 and x1 <= 960 and 1185 <= y0 and y1 <= 1345 for x0, y0, x1, y1 in boxes)
+            and seen == {"white", "yellow", "cyan"})
+
+
+@check
+@testkit.full
+def a_real_v4_render_looks_at_its_first_second():
+    """plain_render, a whole Short: its checks say what the first second showed (the subject, the car: a vehicle, seen)
+    and the review page has it; no first-frame flag"""
+    made = plain_render()
+    look = made.entry["checks"].get("first_second") or {}
+    return (look.get("subject") == "car" and look.get("field") == "vehicle" and look.get("ok") is True
+            and not any(f.startswith("FIRST FRAME: the vision check") for f in made.entry["flags"]))
+
+
 @check
 @testkit.full
 def a_real_v4_render_counts_its_captions():
-    """plain_render, a whole Short: render.json's checks say its 11 captions were seen (of 13 words: WATCH THIS is on the
-    open card, PR 33), each over a shot, and the one the check knows was asked about its frame and passed; the review
-    page says so too"""
+    """plain_render, a whole Short: render.json's checks say its 12 captioned words were seen (of 13 words: WATCH is on
+    the open card, PR 33; line 1 is "Watch closely." since Nov 26, it was "Watch this." with 2 on the card), each over a
+    shot, and the one the check knows was asked about its frame and passed; the review page says so too"""
     made = plain_render()
     checks = made.entry["checks"]
-    return (checks["captions"] == {"shown": 11, "over_a_shot": 11, "tested": 1, "unknown_things": [], "on_card": 2}
+    return (checks["captions"] == {"shown": 12, "over_a_shot": 12, "tested": 1, "unknown_things": [], "on_card": 1}
             and len(made.log["word_times"]) == 13 and [c["word"] for c in checks["caption_checks"]] == ["CRASH"]
             and all(c["ok"] for c in checks["caption_checks"])
-            and "11 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
+            and "12 words shown" in (made.folder / "review.html").read_text(encoding="utf-8"))
 
 
 @check
@@ -1176,14 +1760,16 @@ def render_grades_each_shot_by_its_own_light_and_the_replay_like_its_payoff():
         grades.append((s["n"], bool(s.get("replay")), grade))
         return {"pieces": []}
     with tempfile.TemporaryDirectory() as tmp:
-        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 36.0}], replay={"from": 20.6, "to": 21.4},
-                    lines=short()["lines"][:2] + [{"say": "Hold for it.", "claim": "hype", "at": 30.2}] + short()["lines"][3:])
+        one = short(shots=[{"from": 14.0, "to": 22.5}, {"from": 30.0, "to": 35.0}], replay={"from": 20.6, "to": 21.4},
+                    lines=short()["lines"][:2] + [{"say": "Hold for it.", "claim": "hype", "at": 30.2},
+                                                  dict(short()["lines"][3], at=33.4)])   # Nov 26: no quiet ending
         folder = run_folder_with(tmp, [moment(Path(tmp) / "x.webm")], [one])
         data = launch.render(folder, engine="v4", checker=FakeChecker(), indexes=[made_up_idx("synth", Path(tmp) / "x.webm")],
                              facts=FACTS, today=TODAY, shorts_dir=Path(tmp), log=lambda m: None,
                              v4_parts={"synth": fake_voice([]), "make_shot": make_shot, "light": light,
                                        "loudest": lambda v, a, b: 21.0, "cuts": lambda v, a, b: [],
-                                       "clear": lambda v, a, latest, focus: (a, [], [])})
+                                       "clear": lambda v, a, latest, focus: (a, [], []),
+                                       "punch": lambda clip, out, t0, t1: None})     # Nov 26: no clip is made here
         e = data["shorts"][0]
     if len(grades) != 3:
         raise AssertionError("; ".join(e["problems"]))
@@ -1220,14 +1806,60 @@ def v4_commands():
 @testkit.needs("nvenc")
 def v4_runs_the_same_commands_as_before_the_speed_work():
     """every ffmpeg and ffprobe command that engine v4 builds with its default settings, for the fixture Short plain and
-    with its replay, is the one main built before PR 31 (testdata/v4_commands.json, recorded from main 31d6ab7):
-    sizes, crops, filter graphs, encoder settings, all of it, in order"""
+    with its replay, is the one pinned in testdata/v4_commands.json (recorded from main 31d6ab7 before PR 31; PR 38
+    re-recorded it on purpose four times, each change listed in its "history"): sizes, crops, filter graphs, encoder
+    settings, all of it, in order"""
     got, want = v4_commands(), json.loads(GOLDEN.read_text(encoding="utf-8"))["commands"]
     for name in want:
         for k, (a, b) in enumerate(zip(got[name], want[name])):
             if a != b:
                 raise AssertionError(f"{name}, command {k + 1}: {' '.join(a)[:400]} (main: {' '.join(b)[:400]})")
     return got == want and all(len(v) > 20 for v in want.values())
+
+
+# --- The review of PR 38 (Nov 27) ---
+
+@check
+def g38_the_voice_gap_is_every_silent_second_between_two_lines():
+    """G38 #7: 3 s of no voice, the payoff (game sound), then 3 s more was max(3, 3) = 3 s and passed; it is 6 s of no voice
+    between two lines: refused. 3.5 s in all still passes, the payoff's own seconds still don't count"""
+    shots = [{"n": 1, "from": 0.0, "to": 20.0, "start": 0.0, "end": 20.0}]
+    pay = {"from": 4.0, "to": 6.5}
+    split = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 1.0}, {"line": 2, "start": 9.5, "end": 11.0}], shots, pay)
+    fine = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 2.25}, {"line": 2, "start": 8.25, "end": 11.0}], shots, pay)
+    return has(split, "no voice for 6.0 s between line 1 and line 2") and fine == []
+
+
+@check
+def g38_an_exclaimed_or_second_sentence_question_follows_the_rules():
+    """G38 #2/#3: "Can you survive this?!" and "Can you steal it? Watch." asked and skipped the stakes rule; "He crashed?!" and
+    "He crashed?" told the result as questions; "Watch this in GTA 6" made the open card "Watch this", filler, unseen. All
+    refused now; "Can you survive this crash?" names no result"""
+    asked = [problems_of(short(hooks=[h, "b", "c"], star=0)) for h in ("Can you survive this?!", "Can you steal it? Watch.")]
+    told = [cutplan.spoilers_in(t) for t in ("He crashed?!", "He crashed?", "Can you survive this crash?")]
+    card = problems_of(short(hooks=["Watch this in GTA 6", "b", "c"], star=0))
+    return (all(has(p, "is a question") for p in asked) and told[0] and told[1] and not told[2]
+            and has(card, "the open card it makes"))
+
+
+@check
+def g38_a_caption_thing_is_any_subjects_word_and_its_plural():
+    """G38 #12: "PICKUPS", "VAN", "CONVERTIBLE" and "TAXI" were plain yellow words; a thing to watch is cyan: every
+    cutplan.SUBJECTS term's last word and its plural ("pickup truck", "dirt bike" give TRUCK, BIKE), the vehicles the index
+    names. "RED PICKUP" stays cyan, a plain word stays yellow"""
+    import assemble
+    cyan = [assemble.accents(t) for t in (["THE", "PICKUPS"], ["THAT", "VAN"], ["BLUE", "CONVERTIBLE"], ["THE", "TAXI"],
+                                          ["RED", "PICKUP"], ["THE", "DIRT", "BIKE"])]
+    plain = assemble.accents(["NO", "SLOWING", "DOWN"])
+    return all(c and set(c.values()) <= {assemble.CYAN} for c in cyan) and set(plain.values()) == {assemble.YELLOW}
+
+
+@check
+def g38_a_key_verb_is_never_a_function_word():
+    """G38 #11: "with", "from" and "what" passed as the key verb (any hook says one); refused like "the"; "steal" still
+    passes where line 1, the card and the title say it"""
+    bad = [cutplan.key_verb_problems(short(key_verb=w)) for w in ("with", "from", "what", "about")]
+    return all(p and "key_verb:" in p[0] for p in bad) and not cutplan.key_verb_problems(short())
 
 
 def main():

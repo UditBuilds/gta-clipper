@@ -1870,6 +1870,8 @@ def prepare(game="gta6", profile=None, videos=None, every=index.EVERY_S, dry_run
     log(heavy.ram_line() + " (before the safety checks)")
     t = time.perf_counter()
     used = [] if dry_run else [tuple(s) for s in all_used_spans(shorts_dir)]
+    if not dry_run:
+        footage_short.warn_long_locks(shorts_dir, lambda w: log("  " + w))
     posted = load_posted(posted_file, log=log)
     recs, offset = {}, 0.0
     for v in recordings if not use_bank else []:
@@ -2075,7 +2077,7 @@ def repick(run, count=None, posted_now=False, shorts_dir=SHORTS_DIR, safety="aut
 GTA_ROOT = footage_short.make_short.GTA_ROOT
 SHORTS_FILE = "shorts.json"              # in the run folder: what Claude wrote
 RENDER_LOG = "render.json"               # in the run folder: what render made of it
-END_PILL = "@NeonGetaway • Subscribe"
+END_PILL = "@NeonGetawayYT • Subscribe"   # Nov 26: the channel's handle (explainer.HANDLE)
 NARRATED_LENGTH = (20.0, 35.0)
 GAME_LUFS, MUSIC_LUFS = -14.0, -28.0     # an ACTION CLIP: the game's sound (as loud as every Short), the music bed 14 LU under it
 MIX_LIMIT_DB = -1.5                      # the final mix goes through a true-peak limiter at this; the guard wants < -1
@@ -3231,6 +3233,42 @@ def render_v3(short, m, out_dir, facts, today, indexes, used=(), log=print, timi
             "shown": [list(x) for x in used_spans], "engine": "v3", "game_sound": sound, "checks": checks}
 
 
+# Rule 3 (Nov 26: the animal Short, 203 views, opened on empty grass; the overpass jump, 20.7K, showed the stakes at
+# 0:00): the first second shows the subject, never walking, running or empty scenery. The frame question's field for
+# each subject (prompts/frame_v1.txt); one it has none for (an animal, a gator) is a flag to look by hand.
+FIRST_SECOND_AT = (0.0, 0.5)                 # s into shot 1: what the viewer sees before the first second is over
+FIRST_SECOND_FIELD = {"suv": "vehicle", "car": "vehicle", "truck": "vehicle", "bike": "vehicle", "bus": "vehicle",
+                      "boat": "vehicle", "helicopter": "vehicle", "plane": "vehicle", "train": "vehicle",
+                      "police": "police", "bridge": "street", "highway": "street", "beach": "water"}
+
+
+def first_frame_check(clip, subject, checker, out_dir, inset=False):
+    """(problems, flags, look) for shot 1's first second (its frames at FIRST_SECOND_AT, the HUD inset blurred out):
+    empty, only the character's back or too dark fails; so does a subject whose field the vision model doesn't see.
+    look: what goes in checks.json."""
+    import proof
+    field = FIRST_SECOND_FIELD.get(subject)
+    jpg = frame_jpeg(clip, list(FIRST_SECOND_AT), Path(out_dir) / "checks" / "first_second.jpg",
+                     hide=proof.inset_screen_rect() if inset else None)
+    answer, error = (checker.frame(jpg, {"clip": Path(clip).name, "at": list(FIRST_SECOND_AT), "use": "first frame"})
+                     if jpg else (None, "no frame"))
+    look = {"subject": subject, "field": field, "note": (answer or {}).get("note"), "ok": False}
+    if answer is None:
+        return [f"the first second: the vision model couldn't judge it ({error})"], [], look
+    problems = [f"the first second shows {text} (vision model: \"{answer.get('note')}\"): open on the {subject}"
+                for key, text in (("empty", "almost nothing to look at"), ("back_only", "only the character's back"),
+                                  ("dark", "a picture too dark to see")) if answer.get(key)]
+    flags = []
+    if field is None:
+        flags.append(f"FIRST FRAME: the vision check has no question for the {subject}: look at 0:00 yourself that it is "
+                     f"on screen (it saw: \"{answer.get('note')}\")")
+    elif not answer.get(field):
+        problems.append(f"the first second doesn't show the {subject} (the vision model sees no {field}: "
+                        f"\"{answer.get('note')}\"): start shot 1 where it is on screen")
+    look["ok"] = not problems
+    return problems, flags, look
+
+
 def v4_insets(plan_shots):
     """(insets, problems): each shot's HUD close-up as it will be made, or None. A shot's own "inset": {"zoom":
     "stars" | "tip" | "minimap" | [x, y, w, h], "box": "stars" | "icons", "start": s into the shot, "length": 0.5-2 s}."""
@@ -3266,7 +3304,7 @@ def v4_voice(lines, speed):
 
 
 def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, checker=None, hud6=None, synth=None,
-              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None):
+              make_shot=None, add_inset=None, build=None, loudest=None, cuts=None, clear=None, light=None, punch=None):
     """One Short with engine v4 (editor-v3, Nov 20): payoff first. Before anything is made: the Short's one payoff
     (the interest gate: none, no Short), its shots as spans of the recording (the payoff whole inside one, no second
     twice, 15 s or more), an action payoff on the loudest moment (the hit), a hook about the HUD shown from frame 0.
@@ -3292,6 +3330,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                                                                                 speed=s.get("speed", 1.0)))
     light = light or (lambda v, s: steady().light_frames(v, s["from"], s["to"], steady().info_of(v), s["focus"]))
     add_inset = add_inset or (lambda c, v, ins, out, prof: steady().add_inset(c, v, ins, out, steady().info_of(v), prof))
+    punch = punch or (lambda clip, out, t0, t1: steady().punch_in(clip, out, t0, t1))
     hud_words = set(HUD_NOUNS)
     w0, w1 = m["window"]
     pay0 = short.get("payoff") if isinstance(short.get("payoff"), dict) else {}
@@ -3300,7 +3339,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
                    and cutplan.number(pay0.get("to")) and x["from"] <= pay0["from"] and pay0["to"] <= x["to"]), None)
     # the loudest moment of the payoff's own shot (a horn or gunshots elsewhere in the window must not fail it)
     loud = (loudest(m["path"], *((holder["from"], holder["to"]) if holder else (w0, w1)))
-            if kind == "action" else None)
+            if kind == "action" or short.get("replay") else None)     # Nov 26: a narrated crash's replay holds the hit
     plan, problems, flags = cutplan.plan(short, m, None, loud, (), hud_words)
     if problems:
         raise RenderProblem("\n  ".join(problems))
@@ -3365,6 +3404,12 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
         if grade is None or not s.get("replay"):  # the replay shows the payoff's shot again: the same grade
             grade, lit = steady().shot_grade(light(m["path"], s), normal)
         rep = dict(make_shot(m["path"], s, path, grade, log), light=lit)
+        holds = not s.get("replay") and s["from"] - 1e-6 <= pay["from"] and pay["to"] <= s["to"] + 1e-6
+        if holds or s.get("replay"):              # rule 5 (Nov 26): punch in over the payoff, hold it over the replay
+            punched = path.with_name(f"shot{s['n']}_punch.mp4")
+            punch(path, punched, pay["from"] - s["from"] if holds else None, pay["to"] - s["from"] if holds else None)
+            path = punched
+            rep["punch_in"] = ([round(pay["from"] - s["from"], 3), round(pay["to"] - s["from"], 3)] if holds else "held")
         if lit["low_light"]:
             flags.append(f"LOW LIGHT: shot {s['n']} is dark (ungraded {lit['level']:.0f} of 255): no contrast or "
                          f"vignette, shadows lifted (gamma {lit['gamma']:.2f}); look that it isn't washed out")
@@ -3380,17 +3425,23 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     cplan = [[{"clip": s["clip"], "video": m["video"], "from_s": s["from"], "inset": ins}]
              for s, ins in zip(plan["shots"], insets)]
     times = {"lines": [[s["frames"] / cutplan.FPS] for s in plan["shots"]]}
+    first_problems, first_flags, first_second = first_frame_check(plan["shots"][0]["clip"], cutplan.subject_of(short),
+                                                                  checker, out_dir, bool(insets[0]))
     more, rejected, bflags = beat_checks(cplan, times, out_dir, checker, log, what="shot", max_s=0)
-    flags += bflags
+    more = first_problems + more
+    flags += first_flags + bflags
     pay_at = cutplan.to_short(pay["from"], plan["shots"]), cutplan.to_short(pay["to"], plan["shots"])
     replay = plan.get("replay")
     quiet = (pay_at[0], replay["end"]) if replay else pay_at     # no voice over the payoff and its replay: the game's
-    if replay:                                                    # own sound comes up for both
+    if kind != "action":                                          # own sound comes up for both; a narrated Short's
+        quiet = (replay["start"], replay["end"]) if replay else None   # payoff has its voice, its replay doesn't
+    if replay:
         flags.append(f"REPLAY: the impact {hms(replay['from'])}-{hms(replay['to'])} again at {replay['speed']:g}x, "
                      f"{replay['start']:.1f}-{replay['end']:.1f} s into the Short, right after the payoff. No highlight "
                      "ring: nothing tracks the object, so a ring can't be placed reliably")
     checks = {"rejected_shots": rejected, "caption_checks": [], "full_screen": 1.0,
-              "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "steady": report,
+              "payoff": dict(pay, at_s=round(pay_at[0], 2)), "first_frame": tried, "first_second": first_second,
+              "steady": report,
               "replay": replay,
               "lines": plan["placed"], "camera_cuts": cams,
               "cuts": cutplan.cut_reasons(plan["shots"], plan["placed"], cutplan.events_of(m, pay, cams))}
@@ -3403,7 +3454,7 @@ def render_v4(short, m, out_dir, facts, today, indexes, used=(), log=print, chec
     card = cutplan.card_words(short)              # PR 30: at most 5 words (cutplan.hook_text_problems)
     card = open_card_text(card, assemble.CARD_CHARS) if card else None
     run_log = (build or assemble.build)(out_dir, m["path"], plan["shots"], lines, spoken, plan["placed"], card, kind,
-                                        quiet if kind == "action" else None, "auto",
+                                        quiet, "auto",
                                         footage_short.make_short.slug_of(short.get("title") or "short"), speed,
                                         "am_puck", log)
     checks["caption_checks"] = caption_checks(run_log, cplan, lines, checker, v3_hud(cplan, m, prof, hud6), out_dir, log)
@@ -3528,12 +3579,21 @@ def render_one(short, cand, folder, facts, today, indexes, hook_choice=None, no_
         if game_sound and not heard["later"]:
             flags.append(f"SOUND: the game's own sound is in; the speech check heard no swearing "
                          f"({heard['words']} words). Listen once anyway: it can miss mumbled words")
-    if engine == "v4":                        # PR 34: the hook's first words are heard as they were written
-        bad, note = first_words_check(out / "short.mp4", short["lines"][0].get("say"), log)
-        if bad:
-            entry["problems"] = [bad]
-            return entry
-        flags += [note] if note else []
+    if engine == "v4":                        # PR 34: the hook's first words are heard as they were written; Nov 26: on
+        say = short["lines"][0].get("say")    # the clean voice (that fails the Short), then in the mix (a flag only)
+        clip = hook_voice(out)
+        if clip is None:
+            flags.append("FIRST WORDS: not checked (no clean voice track): listen to the first second before uploading")
+        else:
+            bad, note = first_words_check(clip, say, log)
+            if bad:
+                entry["problems"] = [bad]
+                return entry
+            flags += [note] if note else []
+            mixed, _ = first_words_check(out / "short.mp4", say, log)
+            if mixed:
+                flags.append(f"FIRST WORDS IN THE MIX: {mixed.replace('the hook is misheard: ', '')} (the voice alone is "
+                             "heard right, so music or game sound covers it): listen to the first second")
     entry.update(status="READY", flags=entry["flags"] + flags, true_peak=tp, peak_s=peak, hook=hook, **done,
                  files={k: str(out / k) for k in ("short.mp4", "upload.txt", "claims.txt") if (out / k).is_file()})
     return entry
@@ -3552,6 +3612,35 @@ def speech_check(path, log=print, check=None):
     except Exception as e:                      # a broken speech check must not stop the night
         log(f"  Note: the speech check failed ({e}); listen to this Short once")
         return None
+
+
+HOOK_LEAD_S = 0.06          # silence put before line 1 in first_words.wav: with the line's own trimmed lead (0.02 s,
+                            # assemble.LEAD_KEEP_S) the first word starts 0.08 s in, so Whisper hears its start
+
+
+def hook_voice(out_dir, lead_s=HOOK_LEAD_S):
+    """first_words.wav in the Short's folder: voice.wav (the voice alone: no music, game sound or whoosh) from line 1's
+    start to its end (log.json), with lead_s of silence in front. The first-word check listens to this (rule 6, Nov 26:
+    on the mixed Short Whisper misheard "Can", and the airliner's "steal" became "take"). None without voice.wav or
+    log.json."""
+    import wave
+    out_dir = Path(out_dir)
+    run_log = index.read_json(out_dir / "log.json") or {}
+    one = next((x for x in (run_log.get("durations") or {}).get("lines") or [] if x.get("line") == 1), None)
+    if one is None or not (out_dir / "voice.wav").is_file():
+        return None
+    out = out_dir / "first_words.wav"
+    with wave.open(str(out_dir / "voice.wav")) as w:
+        rate, width, channels = w.getframerate(), w.getsampwidth(), w.getnchannels()
+        a, b = round(one["start_s"] * rate), round(one["end_s"] * rate)
+        w.setpos(min(a, w.getnframes()))
+        frames = w.readframes(max(0, b - a))
+    with wave.open(str(out), "wb") as o:
+        o.setnchannels(channels)
+        o.setsampwidth(width)
+        o.setframerate(rate)
+        o.writeframes(b"\x00" * (round(lead_s * rate) * width * channels) + frames)
+    return out
 
 
 def first_words_check(path, say, log=print, listen=None):
