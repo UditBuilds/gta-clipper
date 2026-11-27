@@ -2383,6 +2383,16 @@ def an_end_pill_names_the_channels_real_handle():
             and launch.END_PILL == "@NeonGetawayYT • Subscribe" and stale == [])
 
 
+@check
+def g38_a_handle_with_more_after_it_is_another_channel():
+    """G38 #10: "@NeonGetawayYT-clips" read as @NeonGetawayYT and passed; it is another channel: refused. The handle itself,
+    with a full stop after it, passes"""
+    import explainer
+    wrong = [explainer.handle_problem(t) for t in ("@NeonGetawayYT-clips • Subscribe", "@NeonGetawayYT.clips", "@NeonGetaway")]
+    right = [explainer.handle_problem(t) for t in ("@NeonGetawayYT • Subscribe", "Follow @NeonGetawayYT.")]
+    return all(wrong) and right == [None, None], (wrong, right)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ok = True

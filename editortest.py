@@ -878,8 +878,9 @@ def no_voice_gap_over_3_5_s_but_on_the_payoff_or_the_replay():
     """rule 4 (the Shorts had 4-8 s with no voice): between two lines at most 3.5 s with no voice, the payoff's seconds
     and the slow-mo replay left out. The fixture's 4.66 s between lines 2 and 3 is 1.66 + 0.5 s outside its payoff, so
     it passes, and so does its 3.48 s ending; its old ending (line 4 at 34.8 s in a 17 s Short: 5.68 s) is refused; line 2
-    at 15.0 s leaves 4.16 s before the payoff, refused; with the replay the quiet replay is left out too; 3.5 s passes,
-    3.6 s doesn't"""
+    at 15.0 s leaves 4.16 s before the payoff, refused (G38 #7: with the 0.5 s after it, 4.7 s of no voice in all; the old
+    "4.2 s", the longest piece alone, must not be said any more); with the replay the quiet replay is left out too; 3.5 s
+    passes, 3.6 s doesn't"""
     old = short(shots=[{"from": 14.0, "to": 25.0}, {"from": 30.0, "to": 36.0}],
                 lines=short()["lines"][:3] + [dict(short()["lines"][3], at=34.8)])
     early = short(lines=short()["lines"][:1] + [dict(short()["lines"][1], at=15.0)] + short()["lines"][2:])
@@ -889,7 +890,8 @@ def no_voice_gap_over_3_5_s_but_on_the_payoff_or_the_replay():
     replayed = problems_of(short(replay=dict(REPLAY)))
     word = "no voice for"
     return (not has(problems_of(short()), word) and has(problems_of(old), "no voice for 5.7 s between line 3 and line 4")
-            and has(problems_of(early), "no voice for 4.2 s between line 2 and line 3") and not has(replayed, word)
+            and has(problems_of(early), "no voice for 4.7 s between line 2 and line 3")
+            and not has(problems_of(early), "no voice for 4.2 s") and not has(replayed, word)
             and edge[0] == [] and len(edge[1]) == 1)
 
 
@@ -1139,18 +1141,22 @@ def filler_hooks_are_refused_and_named_hooks_are_not():
 def a_question_hook_needs_its_stakes_on_screen_at_frame_0():
     """rule 2: a hook is a statement or a command; a question only when the stakes are readable at frame 0. The starred
     hook asking with no "stakes_at_0" is refused, and so is line 1 asking; "stakes_at_0" passes when its evidence covers
-    shot 1's start (E1, driving, 10-40 s) and it says why in 3+ words; E2 (the crash, 20-23 s), an id the moment hasn't,
-    or a one-word why are refused; a statement needs nothing"""
+    shot 1's start (E5, the car seen 13-19 s) and it says why in 3+ words; E2 (the crash, 20-23 s), an id the moment hasn't,
+    or a one-word why are refused; a statement needs nothing. G38 #6 (Nov 27): E1 ("driving", 10-40 s) passed for any hook;
+    it names no car, so it is refused now (it was the "ok" case: it must fail)"""
     q = dict(hooks=["Can you stop this car?", "b", "c"], star=0)
     none = problems_of(short(**q))
-    ok = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "the car is already racing down the road"}))
+    car = suv_moment(extra=[{"id": "E5", "kind": "seen", "value": "A red car races down the road.", "from_s": 13.0,
+                             "to_s": 19.0, "source": "made up"}])
+    ok = problems_of(short(**q, stakes_at_0={"evidence": ["E5"], "why": "the car is already racing down the road"}), m=car)
+    generic = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "the car is already racing down the road"}))
     late = problems_of(short(**q, stakes_at_0={"evidence": ["E2"], "why": "the crash comes soon"}))
     unknown = problems_of(short(**q, stakes_at_0={"evidence": ["E9"], "why": "the car is racing"}))
     terse = problems_of(short(**q, stakes_at_0={"evidence": ["E1"], "why": "car"}))
     spoken = problems_of(short(lines=[dict(short()["lines"][0], say="Watch it go?")] + short()["lines"][1:]))
     word = "is a question"
     return (has(none, word) and not has(ok, word) and has(late, word) and has(unknown, word) and has(terse, word)
-            and has(spoken, word) and not has(problems_of(short()), word))
+            and has(spoken, word) and not has(problems_of(short()), word) and has(generic, "names 'car', what the hook is about"))
 
 
 @check
@@ -1809,6 +1815,51 @@ def v4_runs_the_same_commands_as_before_the_speed_work():
             if a != b:
                 raise AssertionError(f"{name}, command {k + 1}: {' '.join(a)[:400]} (main: {' '.join(b)[:400]})")
     return got == want and all(len(v) > 20 for v in want.values())
+
+
+# --- The review of PR 38 (Nov 27) ---
+
+@check
+def g38_the_voice_gap_is_every_silent_second_between_two_lines():
+    """G38 #7: 3 s of no voice, the payoff (game sound), then 3 s more was max(3, 3) = 3 s and passed; it is 6 s of no voice
+    between two lines: refused. 3.5 s in all still passes, the payoff's own seconds still don't count"""
+    shots = [{"n": 1, "from": 0.0, "to": 20.0, "start": 0.0, "end": 20.0}]
+    pay = {"from": 4.0, "to": 6.5}
+    split = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 1.0}, {"line": 2, "start": 9.5, "end": 11.0}], shots, pay)
+    fine = cutplan.gap_problems([{"line": 1, "start": 0.0, "end": 2.25}, {"line": 2, "start": 8.25, "end": 11.0}], shots, pay)
+    return has(split, "no voice for 6.0 s between line 1 and line 2") and fine == [], (split, fine)
+
+
+@check
+def g38_an_exclaimed_or_second_sentence_question_follows_the_rules():
+    """G38 #2/#3: "Can you survive this?!" and "Can you steal it? Watch." asked and skipped the stakes rule; "He crashed?!" and
+    "He crashed?" told the result as questions; "Watch this in GTA 6" made the open card "Watch this", filler, unseen. All
+    refused now; "Can you survive this crash?" names no result"""
+    asked = [problems_of(short(hooks=[h, "b", "c"], star=0)) for h in ("Can you survive this?!", "Can you steal it? Watch.")]
+    told = [cutplan.spoilers_in(t) for t in ("He crashed?!", "He crashed?", "Can you survive this crash?")]
+    card = problems_of(short(hooks=["Watch this in GTA 6", "b", "c"], star=0))
+    return (all(has(p, "is a question") for p in asked) and told[0] and told[1] and not told[2]
+            and has(card, "the open card it makes")), (asked, told, card)
+
+
+@check
+def g38_a_caption_thing_is_any_subjects_word_and_its_plural():
+    """G38 #12: "PICKUPS", "VAN", "CONVERTIBLE" and "TAXI" were plain yellow words; a thing to watch is cyan: every
+    cutplan.SUBJECTS term's last word and its plural ("pickup truck", "dirt bike" give TRUCK, BIKE), the vehicles the index
+    names. "RED PICKUP" stays cyan, a plain word stays yellow"""
+    import assemble
+    cyan = [assemble.accents(t) for t in (["THE", "PICKUPS"], ["THAT", "VAN"], ["BLUE", "CONVERTIBLE"], ["THE", "TAXI"],
+                                          ["RED", "PICKUP"], ["THE", "DIRT", "BIKE"])]
+    plain = assemble.accents(["NO", "SLOWING", "DOWN"])
+    return (all(c and set(c.values()) <= {assemble.CYAN} for c in cyan) and set(plain.values()) == {assemble.YELLOW}), (cyan, plain)
+
+
+@check
+def g38_a_key_verb_is_never_a_function_word():
+    """G38 #11: "with", "from" and "what" passed as the key verb (any hook says one); refused like "the"; "steal" still
+    passes where line 1, the card and the title say it"""
+    bad = [cutplan.key_verb_problems(short(key_verb=w)) for w in ("with", "from", "what", "about")]
+    return all(p and "key_verb:" in p[0] for p in bad) and not cutplan.key_verb_problems(short()), bad
 
 
 def main():
