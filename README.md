@@ -1165,6 +1165,12 @@ answers and the safety question's note, the vision model's two looks at the same
 - It changes no label, peak, window or id. A moment of 10 s or more with one is on the action shelf, is a type of its own, passes the
   quality gate as an action payoff and has the event in its evidence. Impacts still outrank it.
 - On all 23 recordings 4 of 445 entries change (the gator, two list items on the same seconds, the airliner), with 0 model calls.
+- **The review (Nov 27):** wordings that wrongly counted are none now (an attack he avoids or nearly has, one on a billboard or TV,
+  in curly quotes, the animal as the one attacked, a chase; a note that watches a plane fly, "flies off his bike"; an on-foot line
+  that only runs past a plane), and a few it missed count ("alligator that attacks him", "bit by a dog"). Two animals are two
+  events. The same 4 entries change, nothing else. A damaged or locked `content_bank.json` stops every program with an ERROR
+  instead of being read as no bank, and a build copies the old bank to `bank\backups` first. /launch's pool keeps 60 s between
+  two candidates of the same kind (or that share seconds), not between two different payoffs. `docs/payoffs-pr37.md`.
 
 ## No double text under the open card (PR 33, Nov 24)
 
