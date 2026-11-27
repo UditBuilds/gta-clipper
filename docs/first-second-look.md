@@ -124,3 +124,33 @@ render (`launch-2026-11-26`) captioned NO alone; it is left as it was, not poste
 - FIRST WORDS IN THE MIX on today's Short: the voice alone is heard "watch the red pickup", the mix "watch the room".
 - explainer.py's own captions (/new-short, /footage-short) are still one yellow word at a time: rule 1 was built for /launch.
 - The proof moments above the payoff bar all repeat the posted star topics, so today's options are all action.
+
+## The review of this PR (G38, Nov 27), and PR 37 merged in
+
+**PR 37 is merged into this branch** (merge commits, no rebase; the base stays main). On its own this branch would have dropped PR 37's
+payoff scores at the next bank rebuild. A dry run of the merged code (0 model calls, every write blocked) gives PR 37's bank: 0 of 445
+entries differ, 27 at 2/3 or more. This branch before the merge gave PR 36's (23).
+
+A read-only review (G38) was summed up by the owner; its own text was not in the repo or on GitHub. Each claim was checked in the code,
+written as a check that fails on the code before the fix, then fixed:
+
+- **#7 voice gaps** (`cutplan.gap_problems`): the silent seconds between two lines add up. Before, only the longest piece counted, so 3 s,
+  the payoff, then 3 s more passed. The fixture's "line 2 at 15 s" is 4.7 s in all now (it said 4.2 s, the piece before the payoff).
+- **#2/#3** (`cutplan.is_question`, `asks`, `spoilers_in`, `hook_rule_problems`): a "?" anywhere makes a hook ask, so "Can you survive
+  this?!" and "Can you steal it? Watch." need their stakes at 0:00. A result word is exempt only in a real question that opens with a
+  question word: "He crashed?!" and "He crashed?" tell the result. The open card made from the starred hook is checked for filler:
+  "Watch this in GTA 6" showed "Watch this".
+- **#6 stakes_at_0** (`stakes_problems`): a cited item must name the hook's subject. The old check's own "ok" case cited E1 ("driving")
+  for "Can you stop this car?"; it is refused now and kept as a must-fail case.
+- **#12 caption accents** (`assemble.thing_words`): a thing to watch is every `SUBJECTS` term's last word and its plural. `SUBJECTS`
+  also knows van, taxi, cab, convertible, limo, jeep, hatchback, supercar, muscle car, pickup truck, semi, tow truck and fire truck
+  (so the first-frame check does too).
+- **#11 key_verb**: no function word ("with", "from", "what", "about" ...).
+- **#10 the handle** (`explainer.handle_problem`): a handle runs on through "-" and "."; "@NeonGetawayYT-clips" is another channel.
+
+**Not done (out of time on Nov 27):** #4/#5, the sound under the voice. Today the game sound already sits at `GAME_LUFS` under the voice
+and rises in pauses (`assemble`, `explainer.duck_curve`). The fix asked for: duck the game and the music further under every spoken line,
+have Whisper hear the whole hook line on the clean voice (today: 2 s, 3 words), and fail only when the key verb or the subject is still
+misheard. It needs real renders and Whisper runs to set and prove the levels (`testdata/v4_commands.json` may be re-recorded). SHOULDs not
+started: #16 (punch-in toward the subject), #8 (one-word lines, lines with no white word), #9 (first-frame AND logic, an animal check),
+#15 (test sampling and minimum counts).
