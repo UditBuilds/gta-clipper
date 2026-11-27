@@ -101,10 +101,12 @@ def a_gag_lands_its_punchline_at_2_to_6_s():
 
 @check
 def a_caption_has_2_to_6_words_or_10_for_a_tried_setup():
-    """Rule 3: 2-6 words; up to 10 only for "<Subject> tried <X> and this happens..."; 1, 7 and 11 words are refused"""
+    """Rule 3: 2-6 words; up to 10 only for "<Subject> tried <X> and this happens..."; 1, 7 and 11 words are refused;
+    "a", "an" and "the" don't count, so the owner's four real examples pass"""
     c = meme_short.caption_problems
     good = ["I'm sorry Lucia", "Bro is a missile now", "Jason tried parking and this happens...",
-            "Jason tried to park on a hill and this happens..."]
+            "Jason tried to park on a hill and this happens...", "Jason Became a Gorilla for a Sec",
+            "Didn't know Jason was this strong", "The slowest robbery in history"]
     bad = ["Wow", "Jason really did not see that car coming", "Jason tried to park his truck on a hill and this happens...",
            "This is a very long caption that is not a setup"]
     got = {t: c(t) for t in good + bad}
@@ -331,11 +333,17 @@ def the_finder_skips_used_footage_and_never_use_parts():
 
 # --- Real renders (tiny, made-up footage) ---
 
-def made_up(folder, seconds=12.0, box=False):
+BAR_PX_S = 50                   # the "bar" video's white bar moves this many source pixels a second
+
+
+def made_up(folder, seconds=12.0, box=False, bar=False):
     """A 640x360 30 fps video with a 440 Hz tone. box: a white 80 px square in the middle on grey (for the punch-in);
-    else its brightness is the time (25 levels a second), so a frame says which second of the source it shows."""
-    out = Path(folder) / ("box.mp4" if box else "ramp.mp4")
+    bar: a white 8 px bar on grey whose left edge is at BAR_PX_S x the time, so a frame says which second of the source it
+    shows; else a dark picture that gets lighter with time and is never white (under the caption)."""
+    out = Path(folder) / ("box.mp4" if box else "bar.mp4" if bar else "ramp.mp4")
     picture = ("color=c=0x404040:s=640x360:r=30,drawbox=x=280:y=140:w=80:h=80:color=white:t=fill" if box else
+               f"color=c=black:s=640x360:r=30,geq=lum='if(between(X\\,T*{BAR_PX_S}\\,T*{BAR_PX_S}+7)\\,235\\,71)'"
+               ":cb=128:cr=128" if bar else
                "color=c=black:s=640x360:r=30,geq=lum='clip(16+T*15\\,0\\,235)':cb=128:cr=128")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture},format=yuv420p", "-f", "lavfi",
                     "-i", "sine=f=440:sample_rate=48000", "-t", f"{seconds}", "-c:v", "libx264", "-preset", "ultrafast",
@@ -344,8 +352,10 @@ def made_up(folder, seconds=12.0, box=False):
 
 
 def gray(video, t, w=1080, h=1920):
-    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(video), "-frames:v", "1", "-f",
-                          "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
+    """The gray pixels of the frame on screen at t (picked by its number: a seek by time can land a frame off)."""
+    n = int(round(t * 30))
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-vf", f"select=eq(n\\,{n})", "-frames:v", "1",
+                          "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True, check=True).stdout
     return raw[:w * h]
 
 
@@ -445,22 +455,24 @@ def a_punch_in_zooms_toward_the_subject_by_its_factor():
 
 @check
 def a_replay_jumps_back_and_plays_at_half_speed():
-    """A real replay: after the main part it shows the source from 0.8 s before the punchline at 0.5x for 2.8 s (the
-    source's brightness says which second each frame shows), and the Short is that much longer"""
+    """A real replay: after the main part it shows the source from 0.8 s before the punchline at 0.5x for 2.8 s (a
+    moving bar says which second of the source each frame shows, to about a frame), and the Short is that much longer"""
     tmp = tempfile.mkdtemp(prefix="memetest_")
-    src = made_up(tmp)
+    src = made_up(tmp, bar=True)
     s = spec(recording=str(src), from_s=1.0, to_s=5.5, motion_s=1.2, punchline_s=5.0, reaction_end_s=None,
-             edit={"type": "replay", "back_s": 0.8, "for_s": 2.8})
+             layout="letterbox", edit={"type": "replay", "back_s": 0.8, "for_s": 2.8})
     log = render(tmp, s, source=src)
     v = Path(log["short"])
 
     def source_second(t):
         raw = gray(v, t)
-        vals = [raw[y * 1080 + x] for y in range(1300, 1700, 9) for x in range(100, 980, 9)]
-        return (sum(vals) / len(vals) - 16) / 15
+        xs = [x for x in range(1080) if raw[960 * 1080 + x] >= 235]    # the bar, through the picture's middle
+        return min(xs) / (1080 / 640) / BAR_PX_S if xs else None
     main, r0, r1 = source_second(2.0), source_second(4.6), source_second(6.6)
-    # main part: 2.0 s in is source 3.0 s; the replay starts at 4.5 s on source 4.2 s and runs at half speed
-    return (abs(main - 3.0) <= 0.15 and abs(r0 - (4.2 + 0.05)) <= 0.15 and abs(r1 - (4.2 + 1.05)) <= 0.15
+    # 2.0 s in is source 3.0 s; the replay starts at 4.5 s on source 4.2 s and runs at half speed: 3 frames in it is
+    # source frame 1 (4.233 s), 63 frames in source frame 31 (5.233 s)
+    near = (lambda got, want: got is not None and abs(got - want) <= 1.5 / 30)
+    return (near(main, 3.0) and near(r0, 4.2 + 1 / 30) and near(r1, 4.2 + 31 / 30)
             and abs(log["measured"]["duration_s"] - 7.3) <= 1 / 30 + 1e-6), (main, r0, r1, log["measured"])
 
 
