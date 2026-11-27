@@ -173,7 +173,20 @@ def log_line(m):
 
 
 def read_bank(bank_dir=None):
-    return index.read_json(Path(bank_dir or BANK) / BANK_FILE)
+    """The bank, or None when there is none yet. One that is there and can't be read (cut short, locked, not a bank) is never
+    no bank (G37 #10: a build then gave every moment a new id and wrote over it): index.StateError, and nothing is written."""
+    path = Path(bank_dir or BANK) / BANK_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        raise index.StateError(f"{path} can't be read ({type(e).__name__}: {e}). Nothing was changed. Close what has it open, "
+                               f"or put back the newest copy in {path.parent / 'backups'}, and try again") from None
+    if not isinstance(data, dict) or not isinstance(data.get("moments"), list):
+        raise index.StateError(f"{path} isn't a bank (no \"moments\" list). Nothing was changed. Put back the newest copy in "
+                               f"{path.parent / 'backups'} and try again")
+    return data
 
 
 # --- The recordings and their saved data ---
@@ -953,9 +966,9 @@ def build(lib_dir=None, shorts_dir=None, bank_dir=None, checker=None, shotlist=N
     lib_dir, bank_dir = Path(lib_dir or index.LIBRARY), Path(bank_dir or BANK)
     shorts_dir = Path(shorts_dir or launch.SHORTS_DIR)
     bank_dir.mkdir(parents=True, exist_ok=True)
+    old = read_bank(bank_dir)                      # (first: a damaged one stops the build before any mining)
     recs = recs if recs is not None else load_recs(lib_dir, shorts_dir, bank_dir, stems, hud6, log)
     moments, dropped, left, calls = make_moments(recs, checker, lib_dir / "_cache", bank_dir / "peaks", shotlist, log)
-    old = read_bank(bank_dir)
     if not moments and (old["moments"] if old else (bank_dir / BANK_FILE).exists()):
         raise launch.LaunchError(f"no recording of the library gave any moments, so {bank_dir / BANK_FILE} was left as it is "
                                  f"({len(old['moments']) if old else 'some'} moments). Are the recordings still where they were "
@@ -971,6 +984,8 @@ def build(lib_dir=None, shorts_dir=None, bank_dir=None, checker=None, shotlist=N
             "moments": moments, "never_used": dropped, "left_out": left, "vision_calls": calls}
     refresh(bank, shorts_dir)
     bank["moments"].sort(key=rank_key)
+    if old is not None:                            # (G37 #10) the bank it replaces is kept: bank\backups\<time>
+        backup([bank_dir / BANK_FILE, bank_dir / PAGE_FILE], bank_dir)
     write(bank, bank_dir)
     log(f"Bank: {bank['totals']['moments']} moments in {bank_dir / BANK_FILE}")
     return bank

@@ -721,13 +721,18 @@ POOL_APART_S = 60.0           # two candidates of one recording keep this far ap
 def pool_of(moments, size, apart=POOL_APART_S, rank=None):
     """launch-fixes: the candidates worth checking: the best moments, spread over the recordings. Best first (by
     rank(m), the score by default; PR 29: pool_rank), a moment joins when it is POOL_APART_S from the others of its
-    recording and its recording has fewer than its share (the pool size over the number of recordings, plus one)."""
+    recording and its recording has fewer than its share (the pool size over the number of recordings, plus one).
+    POOL_APART_S keeps out the same moment twice: a candidate of the same kind (category, as near_duplicate reads it) or
+    one that shares seconds with it. Two different payoffs that share none are two moments (G37 #16, Nov 27: the runway
+    star rise 1119-135610-0678 kept the airliner taken 40 s later, which shares none of its seconds, out of the pool)."""
     rank = rank or (lambda m: m["score"])
     recordings = {m["video"] for m in moments}
     cap = max(2, -(-size // max(1, len(recordings))) + 1)
     pool, count = [], {}
     for m in sorted(moments, key=lambda m: (-rank(m), m["session_s"])):
-        near = any(p["video"] == m["video"] and abs(p["start_s"] - m["start_s"]) < apart for p in pool)
+        near = any(p["video"] == m["video"] and abs(p["start_s"] - m["start_s"]) < apart
+                   and (p.get("category") == m.get("category") or (p["start_s"] < m["end_s"] and m["start_s"] < p["end_s"]))
+                   for p in pool)
         if not near and count.get(m["video"], 0) < cap:
             pool.append(m)
             count[m["video"]] = count.get(m["video"], 0) + 1
