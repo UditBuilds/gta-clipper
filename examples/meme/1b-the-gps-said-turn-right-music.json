@@ -1,0 +1,47 @@
+{
+ "recording": "Grand Theft Auto VI_20261121164843",
+ "from_s": 943.6,
+ "to_s": 955.5,
+ "kind": "gag",
+ "motion_s": 943.6,
+ "punchline_s": 946.0,
+ "reaction_end_s": 954.9,
+ "heard": [
+  {
+   "from_s": 944.68,
+   "to_s": 944.8,
+   "text": "Hey!"
+  },
+  {
+   "from_s": 945.86,
+   "to_s": 947.46,
+   "text": "Holy fuck!"
+  },
+  {
+   "from_s": 947.98,
+   "to_s": 948.82,
+   "text": "Holy shit!"
+  },
+  {
+   "from_s": 949.98,
+   "to_s": 954.78,
+   "text": "Hey yo! What the fuck, man? My fucking ride, bruh! Damn!"
+  }
+ ],
+ "layout": "letterbox",
+ "focus": [
+  0.5,
+  0.55
+ ],
+ "captions": [
+  "It's not my fault bro",
+  "The GPS said turn right",
+  "Bro trusted the GPS"
+ ],
+ "star": 1,
+ "title": "The GPS said turn right",
+ "slug": "the-gps-said-turn-right-music",
+ "what": "The black SUV follows the GPS's 'Turn Right' (163 ft to 0 ft on screen) straight into a silver car at the intersection; the crash camera, then the other driver gets out: 'Hey yo! What the f, man? My f-ing ride, bruh! Damn!'",
+ "why": "letterbox: the turn and the crash move sideways and the GPS box is in the corner; no edit: the reaction line is the second laugh; this version has the optional wrong-mood music bed on (20 dB under the game while a line is heard, 12 dB under it between lines)",
+ "music": "Future - Anno Domini Beats.mp3"
+}

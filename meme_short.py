@@ -735,7 +735,10 @@ def vision_checks(spec, idx, work, log=print):
     for x, y, _ in safety.found(sheets, ("blood_or_gore",)):
         flags.append(f"BLOOD at {library.hms(x)}-{library.hms(y)} (after the first 7 s): look at it")
     flags = list(dict.fromkeys(flags))
-    return out, flags, {"calls": checker.calls, "cached": checker.cached, "seconds": round(checker.seconds, 1)}
+    got = {"calls": checker.calls, "cached": checker.cached, "seconds": round(checker.seconds, 1)}
+    if checker.calls:
+        checker.unload(checker.model)    # one heavy job at a time: the model leaves memory before ffmpeg and Whisper
+    return out, flags, got
 
 
 def motion_flags(spec, stem):
@@ -970,7 +973,10 @@ def main():
             for w in hear(args.recording, args.from_s, args.to_s, args.json):
                 print(f"{w['t']:8.2f} {w['word']}" + ("   <- SWEAR" if w["swear"] else ""))
             return
-        spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+        try:
+            spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise MemeError(f"{args.spec} can't be read as JSON: {e}") from None
         bad = problems(spec)
         if args.cmd == "check" or bad:
             print("\n".join(bad) or "OK: the spec keeps rules 1-8")

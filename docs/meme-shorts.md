@@ -100,3 +100,27 @@ sheets, the best on half-second strips; Whisper ran on three windows only. Best 
 
 Not taken: the alley fight (`_20261119022442` 13:06) lies inside never-shown `1119-022442-0779` (a body and blood); "a man attacks a
 woman" (`_20261119134026` 9:42) is not a joke.
+
+## Samples of Nov 27 (step 3)
+
+In `C:\AI\gta\shorts\meme-2026-11-27\<n>-<slug>\`: `short.mp4`, `captions.txt` (3 options, the starred one marked `*`), `title.txt`,
+`meme.json` (the spec, the timeline, the sound, the measurements, the safety looks and the flags). The specs are in `examples\meme\`.
+Each render ran every kept check (the index, the used footage, the safety question with 7-10 new looks, Whisper); the first and last
+frames of each were looked at.
+
+| folder | length | layout | edit | caption (starred) | LUFS / dBTP | flags |
+|---|---|---|---|---|---|---|
+| `1-the-gps-said-turn-right` | 11.9 s gag | letterbox | none | **The GPS said turn right** | -14.19 / -1.5 (limited from -0.8) | swearing in the game sound at 3.8, 4.5, 7.1, 9.0 s |
+| `1b-the-gps-said-turn-right-music` | 11.9 s gag | letterbox | none, music bed on | the same | -14.21 / -1.5 | the same |
+| `2-free-the-bear` | 21.9 s dialogue | letterbox | none | **"Free the bear"** | -14.2 / -1.1 | swearing at 5.6, 7.8 s; game subtitles all through (they say "sh*t", "f-in'", "a*s") |
+| `3-just-another-day-for-jason` | not rendered | | | | | BLOCKED by the safety question (see candidate 3) |
+
+- Every caption measured in the top bar (1: y 265-402, 2: y 303-351; the bar ends at 656) on the first and last frames.
+- **The music bed (1b)**, `Future - Anno Domini Beats.mp3`, picked without listening (no way to judge a track's mood here). Subtracting
+  render 1 from 1b leaves about -27.7 LUFS before the crash and -31.7 LUFS under the reaction lines, against -12.3 and -15.4 for the
+  game sound: roughly 15-16 dB under it. That method leaves some game sound in, so read it as approximate. The levels are set against
+  the game's average loudness, not its loudness at that moment.
+- **Short 2's ending**: the protester starts his next line ("Come on! They'll spend a fortune...") straight after the payoff, so any cut
+  0.5-1.5 s after it hears "Come on!" and shows the next subtitle on the last frames. Whisper also didn't hear the first line ("This
+  driver is trying to deliver an enslaved bear ...") under the chanting; its time (201.0 s) comes from the subtitle frames.
+- Short 1's GPS box is small in the letterbox (about 170 px wide); the caption says the joke.

@@ -1,0 +1,14 @@
+{
+ "recording": "Grand Theft Auto VI_20261121223830", "from_s": 200.6, "to_s": 222.5, "kind": "dialogue",
+ "motion_s": null, "punchline_s": 219.7, "reaction_end_s": 221.74,
+ "heard": [{"from_s": 201.0, "to_s": 203.3, "text": "This driver is trying to deliver an enslaved bear directly into the hands of sadistic zoo owners."},
+           {"from_s": 203.46, "to_s": 204.94, "text": "How did you piss these guys off so bad?"},
+           {"from_s": 205.66, "to_s": 210.42, "text": "I didn't do shit! I'm just doing my job. It's a fuckin' bear! What am I gonna do here? Let it out?"},
+           {"from_s": 217.16, "to_s": 221.74, "text": "You! You are oppressing our sister of the north's right to roam!"}],
+ "layout": "letterbox", "focus": [0.5, 0.5],
+ "captions": ["\"Free the bear\"", "Bro is just doing his job", "The angriest protest in history"], "star": 0,
+ "title": "These protesters will free the bear",
+ "slug": "free-the-bear",
+ "what": "Bear protesters block an Animal Services truck: 'This driver is trying to deliver an enslaved bear into the hands of sadistic zoo owners.' Driver: 'I didn't do shit! I'm just doing my job. It's a f-in' bear! What am I gonna do here? Let it out?' Protester: 'You are oppressing our sister of the north's right to roam!'",
+ "why": "dialogue that builds to one payoff (the right-to-roam line); letterbox: protesters on one side, the truck on the other, and the game's subtitles stay whole"
+}
