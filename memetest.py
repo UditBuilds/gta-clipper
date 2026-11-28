@@ -875,6 +875,50 @@ def a_failed_moment_is_tried_again_in_its_own_folder_and_its_bad_file_renamed():
                                                                                        after_second, failed_file)
 
 
+@check
+def render_takes_a_recording_with_no_index_and_flags_it():
+    """Nov 28: `meme_short.py render` refused every recording not indexed yet (load_index raised). source_and_index
+    finds the file in the input folder and gives a bare index (no segments, so render flags NOT INDEXED); the library's
+    index still wins when it is the same file; a stem with no file anywhere is a MemeError"""
+    tmp = Path(tempfile.mkdtemp(prefix="memetest_"))
+    lib, inp, other = tmp / "library", tmp / "input", tmp / "other"
+    for d in (lib, inp, other):
+        d.mkdir()
+    stem = "Grand Theft Auto VI_20261128130642"
+    (inp / f"{stem}.webm").write_bytes(b"x")
+    src, idx = meme_short.source_and_index(stem, lib=lib, folders=(inp,))
+    bare = src == inp / f"{stem}.webm" and idx["segments"] is None and idx["profile"]["name"] == "gta6"
+    (lib / stem).mkdir()
+    (lib / stem / "index.json").write_text(json.dumps({"video": {"stem": stem, "path": str(inp / f"{stem}.webm")},
+                                                       "segments": [], "profile": {"name": "gta6"}}), encoding="utf-8")
+    src2, idx2 = meme_short.source_and_index(stem, lib=lib, folders=(inp,))
+    indexed = src2 == inp / f"{stem}.webm" and idx2["segments"] == []
+    try:
+        meme_short.source_and_index("Grand Theft Auto VI_20261128000000", lib=lib, folders=(other,))
+        missing = False
+    except meme_short.MemeError:
+        missing = True
+    return bare and indexed and missing, (bare, indexed, missing, str(src))
+
+
+@check
+def day_scan_spikes_keep_the_strongest_apart_and_skip_the_phone():
+    """day_scan.py (Nov 28): the strongest spikes of sound and picture, at least 25 s apart, none in the first or last 3 s
+    or on the phone; a star change counts only when it holds 2 s"""
+    import day_scan
+    rows = [{"time_s": str(i * 0.5), "audio_z": "0", "visual_z": "0", "phone": "0", "stars": "0"} for i in range(400)]
+    for i, z in ((100, 9.0), (110, 8.0), (300, 6.0), (2, 20.0)):          # 50 s, 55 s (too near), 150 s, 1 s (edge)
+        rows[i]["audio_z"] = str(z)
+    rows[200]["audio_z"], rows[200]["phone"] = "12.0", "1"              # 100 s, on the phone
+    for i in range(240, 400):
+        rows[i]["stars"] = "1"
+    rows[260]["stars"] = "0"                                              # a one-sample flicker: no change
+    got = day_scan.spikes(rows, 200.0, per_10=6, gap=25.0)
+    times = [t for t, *_ in got]
+    changes = day_scan.star_changes(rows)
+    return times == [50.0, 150.0] and [c[:3] for c in changes] == [(120.0, 0, 1)], (times, changes)
+
+
 def main():
     ok = True
     for fn in testkit.selected(CHECKS):

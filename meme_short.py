@@ -762,6 +762,31 @@ def short_series(source, spec):
 
 # --- Safety (kept from the repo, rule 9) ---
 
+RECORDINGS_IN = (ROOT / "input", ROOT / "marked")   # where a recording with no index is looked for (Nov 28)
+VIDEO_SUFFIXES = (".webm", ".mp4", ".mkv", ".mov")
+
+
+def source_and_index(stem, source=None, lib=None, folders=RECORDINGS_IN):
+    """(video, index) for a render: the library's index when there is one for this file; else a bare one (Nov 28: the
+    day's new recordings are not indexed yet, and `render` refused them all), which render() flags NOT INDEXED and
+    checks with the safety question alone, as marked mode does. The video: `source`, else the index's, else the file
+    named `stem` in the input or marked folder. MemeError when there is no such file."""
+    lib = Path(lib or index.LIBRARY)
+    idx = index.read_json(lib / stem / "index.json")
+    if idx and (source is None or Path(idx["video"]["path"]).resolve() == Path(source).resolve()):
+        return Path(source or idx["video"]["path"]), idx
+    if source is None:
+        found = [Path(d) / f"{stem}{ext}" for d in folders for ext in VIDEO_SUFFIXES if (Path(d) / f"{stem}{ext}").is_file()]
+        if not found:
+            raise MemeError(f"no index for {stem} and no file {stem}.webm in " + " or ".join(str(d) for d in folders))
+        source = found[0]
+    if not Path(source).is_file():
+        raise MemeError(f"no file {source}")
+    return Path(source), {"video": {"stem": stem, "path": str(source)},
+                          "profile": {"name": "gta6" if "VI_" in stem else "gta5"}, "sheets": [], "segments": None,
+                          "every": 6.0}
+
+
 def load_index(stem):
     p = index.LIBRARY / stem / "index.json"
     if not p.is_file():
@@ -1043,6 +1068,8 @@ def main():
     r = sub.add_parser("render", help="check and render one meme Short")
     r.add_argument("spec")
     r.add_argument("--out", required=True, help="the Short's folder")
+    r.add_argument("--source", help="the video file (default: the index's, else the recording in C:\\AI\\gta\\input "
+                                    "or C:\\AI\\gta\\marked; a recording with no index is flagged NOT INDEXED)")
     m = sub.add_parser("marked", help="the owner's marked moments (saved clips, marks.txt): cut, caption, render each "
                                       "new one (.venv-tts)")
     m.add_argument("--marks", help="default C:\\AI\\gta\\marks.txt")
@@ -1079,7 +1106,8 @@ def main():
             print("\n".join(bad) or "OK: the spec keeps rules 1-8")
             sys.exit(1 if bad else 0)
         heavy.main_guard(f"meme_short.py render {Path(args.spec).name}")
-        got = render(spec, args.out)
+        source, idx = source_and_index(spec["recording"], args.source)
+        got = render(spec, args.out, source=source, idx=idx)
         print(f"READY {got['short']}  {got['measured']['duration_s']} s, {got['measured']['lufs']} LUFS, "
               f"{got['measured']['true_peak_db']} dBTP")
         for flag in got["flags"]:

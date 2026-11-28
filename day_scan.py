@@ -8,6 +8,9 @@ finds and ranks candidates and shows them on one page the owner can judge fast; 
   .\\.venv-tts\\Scripts\\python.exe day_scan.py hear                  Whisper on each candidate window only
   .\\.venv\\Scripts\\python.exe day_scan.py look                      the vision model on each candidate's punch only
   .\\.venv\\Scripts\\python.exe day_scan.py sheets                    thumbnails for the review page
+  .\\.venv\\Scripts\\python.exe day_scan.py overview STEM [STEM ...]   a frame every 10 s, 30 a sheet, to look at by eye
+  .\\.venv-tts\\Scripts\\python.exe day_scan.py transcribe STEM ...   Whisper over whole recordings (voice detector, beam 1)
+  .\\.venv\\Scripts\\python.exe day_scan.py page                      index.html from judged.json (what was seen)
 
 Cheap passes first: `measure` is the run /launch and the bank make of every recording (launch.run_clip into the bank's
 clip_runs, so a later `bank.py build` reuses it and asks nothing again); `spikes` reads its timeline.csv. Whisper and the
@@ -113,12 +116,13 @@ def spikes(rows, duration, per_10=PER_10_MIN, gap=MIN_GAP):
     keep = []
     limit = max(2, math.ceil(duration / 600.0 * per_10))
     for i in order:
-        t = float(rows[i]["time_s"])
-        if t < EDGE or t > duration - EDGE or phone[i] or sm[i] <= 0:
+        j = max(range(max(0, i - 1), min(n, i + 2)), key=lambda k: (raw[k], -k))   # the peak itself, not a neighbour
+        t = float(rows[j]["time_s"])
+        if t < EDGE or t > duration - EDGE or any(phone[max(0, j - 2):j + 3]) or sm[i] <= 0:
             continue
         if any(abs(t - k[0]) < gap for k in keep):
             continue
-        keep.append((t, round(sm[i], 2), round(az[i], 2), round(vz[i], 2)))
+        keep.append((t, round(sm[i], 2), round(az[j], 2), round(vz[j], 2)))
         if len(keep) >= limit:
             break
     return sorted(keep)
@@ -173,6 +177,32 @@ def hear_cmd(day, log=print):
             write_json(path, scan)
             log(f"  {c['id']}: {c['heard'][:100] or '-'}")
     return scan
+
+
+def transcribe_cmd(stems, day, log=print):
+    """Whisper over each whole recording, cheaply: the voice detector skips the stretches with no speech and the beam is 1
+    (speech.words, which checks finished Shorts, keeps beam 5 and no detector). The lines, in the recording's seconds, go
+    to transcripts\\<stem>.json. NPC dialogue is the funny candidates' best signal and the spikes miss it."""
+    import speech
+    tdir = day_dir(day) / "transcripts"
+    tdir.mkdir(parents=True, exist_ok=True)
+    import meme_marked
+    import meme_short
+    for stem in stems:
+        out = tdir / f"{stem}.json"
+        if out.is_file():
+            continue
+        t = time.perf_counter()
+        sound = speech.audio(video_of(stem))
+        segments, _ = speech.load().transcribe(sound, language="en", word_timestamps=True, vad_filter=True, beam_size=1,
+                                               condition_on_previous_text=False)
+        words = [(w.start, w.end, w.word.strip()) for s in segments for w in (s.words or [])]
+        lines = meme_marked.lines_of(words)
+        for ln in lines:
+            ln["text"] = meme_short.censor(ln["text"])
+        write_json(out, {"stem": stem, "seconds": round(len(sound) / 16000, 1), "lines": lines,
+                         "took_s": round(time.perf_counter() - t, 1)})
+        log(f"  {stem}: {len(lines)} lines in {time.perf_counter() - t:.0f} s")
 
 
 # --- 4. look: the vision model on each punch only ---
@@ -247,11 +277,174 @@ def sheets_cmd(day, log=print):
     return scan
 
 
+OVERVIEW_EVERY = 10.0          # one frame every 10 s for the overview sheets (looked at by eye: stores, NPCs, fights)
+OVERVIEW_COLS, OVERVIEW_ROWS = 6, 5   # 30 frames a sheet: 5 minutes of footage
+
+
+def frame_at(video, t, out, w=320, h=180):
+    import subprocess
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{max(0.0, t):.3f}", "-i", str(video), "-frames:v", "1",
+                    "-vf", f"scale={w}:{h}", "-q:v", "4", str(out)], check=True)
+    return out
+
+
+def overview_cmd(stems, day, every=OVERVIEW_EVERY, log=print):
+    """Sheets of one frame every `every` s (6 x 5, row by row: sheet k starts at k * 30 * every s), for looking by eye."""
+    import subprocess
+    import tempfile
+    import meme_short
+    odir = day_dir(day) / "overview"
+    odir.mkdir(parents=True, exist_ok=True)
+    per = OVERVIEW_COLS * OVERVIEW_ROWS
+    for stem in stems:
+        video = video_of(stem)
+        duration = float(meme_short.ex.probe(video)["format"]["duration"])
+        times = [k * every for k in range(int((duration - 1.0) // every) + 1)]
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, t in enumerate(times):
+                frame_at(video, t, Path(tmp) / f"f{i:04d}.jpg")
+            for s in range(0, len(times), per):
+                out = odir / f"{stem[-14:]}_{int(times[s]):05d}s.jpg"
+                n = min(per, len(times) - s)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-start_number", str(s), "-i", str(Path(tmp) / "f%04d.jpg"),
+                                "-frames:v", "1", "-vf", f"tile={OVERVIEW_COLS}x{OVERVIEW_ROWS}:padding=2", "-q:v", "4",
+                                str(out)] if n == per else
+                               ["ffmpeg", "-v", "error", "-y", "-start_number", str(s), "-i",
+                                str(Path(tmp) / "f%04d.jpg"), "-frames:v", "1", "-vf",
+                                f"tile={OVERVIEW_COLS}x{math.ceil(n / OVERVIEW_COLS)}:nb_frames={n}:padding=2",
+                                "-q:v", "4", str(out)], check=True)
+        log(f"  {stem}: {len(times)} frames, {math.ceil(len(times) / per)} sheet(s)")
+
+
+def strip_cmd(stem, a, b, every, out, cols=8):
+    """One sheet of frames from a to b every `every` s (cols across), for timing a moment by eye."""
+    import subprocess
+    import tempfile
+    video = video_of(stem)
+    times = []
+    t = a
+    while t <= b + 1e-6:
+        times.append(round(t, 2))
+        t += every
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, t in enumerate(times):
+            frame_at(video, t, Path(tmp) / f"f{i:04d}.jpg")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(Path(tmp) / "f%04d.jpg"), "-frames:v", "1", "-vf",
+                        f"tile={cols}x{math.ceil(len(times) / cols)}:nb_frames={len(times)}:padding=2", "-q:v", "4",
+                        str(out)], check=True)
+    return times
+
+
+def preview(stem, a, b, out):
+    """A small preview of a..b with its sound (854x480), for judging on the page with sound."""
+    import subprocess
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(video_of(stem)),
+                    "-vf", "scale=854:480", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac",
+                    "-b:a", "128k", "-movflags", "+faststart", str(out)], check=True)
+    return out
+
+
+# --- 6. page: the one review page, from judged.json (what was seen, written after looking at the frames) ---
+
+TYPES = {"npc_fight": "funny: NPC fight", "npc_dialogue": "funny: NPC dialogue", "ragdoll": "funny: ragdoll",
+         "crash_dialogue": "funny: crash during dialogue", "robbery": "robbery", "other": "other"}
+CSS = """body{font:15px/1.45 system-ui,Segoe UI,Arial,sans-serif;margin:0 auto;max-width:1100px;padding:16px 18px 60px;
+background:#111;color:#e8e8e8}h1{font-size:24px;margin:4px 0}h2{margin-top:34px;border-bottom:1px solid #333;padding-bottom:4px}
+.steps{background:#1c2230;border-radius:8px;padding:10px 16px}.c{background:#1a1a1a;border:1px solid #2c2c2c;border-radius:10px;
+padding:12px 14px;margin:14px 0}.c h3{margin:0 0 6px;font-size:18px}.tag{display:inline-block;border-radius:5px;padding:1px 8px;
+margin-right:6px;font-size:13px;background:#333}.funny{background:#5b3a00}.robbery{background:#123f5c}.other{background:#3a3a3a}
+.flag{background:#6b1f1f}img.t{width:100%;max-width:1080px;border-radius:6px;display:block;margin:6px 0}video{width:100%;
+max-width:854px;border-radius:6px;background:#000}.k{color:#9aa}.say{font-style:italic;color:#ffe9a8}code{background:#222;
+padding:1px 5px;border-radius:4px}table.r td{padding:2px 10px 2px 0;vertical-align:top}"""
+
+
+def esc(s):
+    import html
+    return html.escape(str(s if s is not None else ""))
+
+
+def page_cmd(day, log=print):
+    """index.html from judged.json: thumbnails (5 frames a row) and a small preview with sound for every candidate and
+    every robbery step, made once."""
+    d = day_dir(day)
+    judged = read_json(d / "judged.json")
+    if not judged:
+        raise SystemExit(f"ERROR: no {d / 'judged.json'}: write what was seen first")
+    (d / "thumbs").mkdir(parents=True, exist_ok=True)
+    (d / "previews").mkdir(parents=True, exist_ok=True)
+
+    def media(key, stem, a, b, at):
+        th, pv = d / "thumbs" / f"{key}.jpg", d / "previews" / f"{key}.mp4"
+        if not th.is_file():
+            thumbs(video_of(stem), at, th)
+        if not pv.is_file():
+            preview(stem, a, b, pv)
+        return f"thumbs/{th.name}", f"previews/{pv.name}"
+
+    out = [f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,"
+           f"initial-scale=1'><title>Review {esc(day)}</title><style>{CSS}</style></head><body>",
+           f"<h1>Today's footage, {esc(day)}: pick what is funny</h1>",
+           "<div class='steps'><b>How to use this page (about 10 minutes)</b><ol>"
+           "<li>Go down the list. For each one, look at the 5 pictures, then <b>press play</b> on the small video "
+           "(it has the game's sound).</li>"
+           "<li>If it made you laugh, note its number (e.g. <b>#3</b>). If not, skip it. The order is only my "
+           "guess: you decide.</li>"
+           "<li>The drafts I already made are marked <b>DRAFT MADE</b>; their files are listed in <code>picks.md"
+           "</code> next to this page.</li>"
+           "<li>The robberies are at the bottom: entry, grab, exit, and the wanted stars.</li>"
+           "<li>Tell me the numbers you like (and the caption you want) and I'll finish those.</li></ol></div>"]
+    for note in judged.get("notes", []):
+        out.append(f"<p class='k'>{esc(note)}</p>")
+    cands = sorted(judged.get("candidates", []), key=lambda c: c.get("rank", 99))[:20]
+    out.append(f"<h2>Candidates, best guess first ({len(cands)})</h2>")
+    for n, c in enumerate(cands, 1):
+        at = c.get("thumbs_at") or [c["from_s"] + k * (c["to_s"] - c["from_s"]) / 4 for k in range(5)]
+        th, pv = media(c["id"], c["stem"], c["from_s"], c["to_s"], at)
+        kind = TYPES.get(c.get("type"), c.get("type", "other"))
+        cls = "funny" if kind.startswith("funny") else "robbery" if kind == "robbery" else "other"
+        out += [f"<div class='c' id='c{n}'><h3>#{n} &nbsp;{esc(c.get('title') or c.get('what', '')[:60])}</h3>",
+                f"<span class='tag {cls}'>{esc(kind)}</span>"
+                + (f"<span class='tag funny'>DRAFT MADE: {esc(c['draft'])}</span>" if c.get("draft") else "")
+                + "".join(f"<span class='tag flag'>{esc(f)}</span>" for f in c.get("flags", [])),
+                f"<p><b>{esc(c['stem'][-15:])}</b> &nbsp; {hms(c['from_s'])} to {hms(c['to_s'])} "
+                f"<span class='k'>({c['from_s']:.1f}-{c['to_s']:.1f} s of the file)</span></p>",
+                f"<img class='t' src='{th}' loading='lazy' alt='frames'>",
+                f"<video controls preload='none' src='{pv}'></video>",
+                f"<p><b>What happens:</b> {esc(c.get('what', ''))}</p>",
+                "<p><b>Dialogue:</b> " + (" / ".join(f"<span class='say'>\"{esc(x)}\"</span>" for x in c.get("lines", []))
+                                         or "<span class='k'>none heard</span>") + "</p>"]
+        if c.get("why"):
+            out.append(f"<p class='k'>Why it might work: {esc(c['why'])}. Weakest point: {esc(c.get('weak', '-'))}</p>")
+        out.append("</div>")
+    robs = judged.get("robberies", [])
+    out.append(f"<h2>Robberies, start to finish ({len(robs)})</h2>")
+    for n, r in enumerate(robs, 1):
+        steps = [(k, r[k]) for k in ("entry", "grab", "exit", "after") if r.get(k)]
+        out += [f"<div class='c'><h3>Robbery {n}: {esc(r.get('title', ''))}</h3>",
+                f"<p><b>{esc(r['stem'][-15:])}</b> &nbsp; {hms(r['from_s'])} to {hms(r['to_s'])}. "
+                f"<b>Wanted stars:</b> {esc(r.get('stars', '?'))}</p>", f"<p>{esc(r.get('what', ''))}</p>",
+                "<table class='r'>"]
+        for k, s in steps:
+            out.append(f"<tr><td><b>{k}</b></td><td>{hms(s['from_s'])}-{hms(s['to_s'])}</td><td>{esc(s.get('what', ''))}"
+                       "</td></tr>")
+        out.append("</table>")
+        for k, s in steps:
+            at = s.get("thumbs_at") or [s["from_s"] + j * (s["to_s"] - s["from_s"]) / 4 for j in range(5)]
+            th, pv = media(f"rob{n}_{k}", r["stem"], s["from_s"], s["to_s"], at)
+            out += [f"<p class='k'>{k}</p><img class='t' src='{th}' loading='lazy' alt='{k}'>",
+                    f"<video controls preload='none' src='{pv}'></video>"]
+        out.append("</div>")
+    out.append("</body></html>")
+    (d / "index.html").write_text("\n".join(out), encoding="utf-8")
+    log(f"  wrote {d / 'index.html'}")
+    return d / "index.html"
+
+
 def main(argv=None):
     import fastff
     fastff.use()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("what", choices=("measure", "spikes", "hear", "look", "sheets"))
+    ap.add_argument("what", choices=("measure", "spikes", "hear", "transcribe", "look", "sheets", "overview", "page"))
     ap.add_argument("stems", nargs="*")
     ap.add_argument("--day", default=time.strftime("%Y-%m-%d"))
     a = ap.parse_args(argv)
@@ -266,6 +459,12 @@ def main(argv=None):
         hear_cmd(a.day)
     elif a.what == "look":
         look_cmd(a.day)
+    elif a.what == "overview":
+        overview_cmd(a.stems, a.day)
+    elif a.what == "transcribe":
+        transcribe_cmd(a.stems, a.day)
+    elif a.what == "page":
+        page_cmd(a.day)
     else:
         sheets_cmd(a.day)
     print(f"day_scan.py {a.what}: {time.perf_counter() - t:.0f} s")
