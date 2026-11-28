@@ -214,3 +214,24 @@ frames of each were looked at.
   0.5-1.5 s after it hears "Come on!" and shows the next subtitle on the last frames. Whisper also didn't hear the first line ("This
   driver is trying to deliver an enslaved bear ...") under the chanting; its time (201.0 s) comes from the subtitle frames.
 - Short 1's GPS box is small in the letterbox (about 170 px wide); the caption says the joke.
+
+## The bear, checked (Nov 28)
+
+Sample 2 (`2-free-the-bear`) ends on a protester's line. The known punchline of this street encounter is that the protesters get
+the polar bear freed and it attacks them, so `_20261121223830` was checked from 3:42 to its end, 6:11.8 (there is no 6:12-7:00):
+Whisper on 3:38-6:12, then the vision model (`qwen3-vl:4b-instruct`) one frame a second in 4 s sheets ("is a bear, an open truck
+door, an animal attacking or a vehicle hitting a person in view?"), then every half second by eye from 3:42 to 4:48. **No bear is
+ever freed or seen, and nothing attacks anyone.** What happens instead:
+
+- 3:42-4:16: Jason and two protesters work at the back doors of the Animal Services truck; the doors stay shut ("they used this
+  liberation-proof lock. Do you know how to open one of those?").
+- 4:17-4:29: at the cab, the game offers two choices on screen, **RUN THEM OVER** and **OPEN THE DOORS**; "Does anyone have any
+  explosives or something? But only ones that don't produce carbon gas!"; "Come on, you thinking about it? Run 'em over."
+- 4:30-4:33: the driver: "Yeah, f- it! I can't get fired over this. I'm goin'!" Jason walks back to his red car.
+- 4:34-4:38: behind him, the truck drives through the protesters: "Oh f-! He just ran over Mason!" (small, in the background).
+  The protesters scatter; 4:44 "Sh-! Dodos down! Abort the plan!"; Jason drives away.
+- 4:42-6:12: driving, the phone (texting Lucia, never usable), a cabin, a cutscene at 6:03.
+
+The freed-bear ending is the **OPEN THE DOORS** branch, which this play did not take, so no 2b was rendered. The vision model
+said "doors open" once (3:42; the frames show them shut) and put the run-over on Jason's car (it is the truck): its lines were
+read against the frames, not trusted alone. The checking script and its answers are not kept in the repo (a one-off).
