@@ -61,7 +61,8 @@ FONT_FILES = (FONT_FILE, CHUNKY_FILE)
 FFMPEG, FFPROBE = shutil.which("ffmpeg"), shutil.which("ffprobe")
 
 W, H, FPS = 1080, 1920, 30
-MIN_TOTAL_S, MAX_TOTAL_S = 34, 39    # the target runtime since PR 18 (it was 40-50); outside it warns
+MIN_TOTAL_S, MAX_TOTAL_S = 25, 39    # the target runtime since Nov 28 (the owner: 25-39; PR 18 made it 34-39, it was
+                                     # 40-50); outside it warns
 DEFAULT_VOICE, DEFAULT_SPEED = "am_puck", 1.0
 MAX_SPEED = 1.4                      # faster than this warns (PR 30: was 1.1; engine v4 speaks at 1.2, Whisper
                                      # heard every word up to 1.25 and misheard words from 1.3)
@@ -136,15 +137,16 @@ OPEN_POP = POP + "\\fad(0,120)"
 POP_PEAK = 1.06                      # how big POP grows text for a moment: text is fitted so it stays in the safe area then
 # Caption styles. "word" (the default): one word at a time in Lilita One, yellow with a thick black outline, its capitals
 # centred on WORD_Y, which sits over the lower part of a square card. "phrase": the PR 16 captions, 2-4 Anton words with
-# the spoken one yellow, bottom at CAPTION_BOTTOM.
-CAPTION_STYLES = ("word", "phrase")
+# the spoken one yellow, bottom at CAPTION_BOTTOM. "v4" (Nov 28, the owner's call for the robbery Short): engine v4's
+# captions from assemble.py (PR 38): 2-3 Lilita One words a line, white with 1-2 accent words, centred on WORD_Y.
+CAPTION_STYLES = ("word", "phrase", "v4")
 WORD_SIZE, WORD_OUTLINE, WORD_SHADOW, WORD_Y = 170, 13, 6, 1260
 WORD_POP = "\\fscx80\\fscy80\\t(0,80,\\fscx108\\fscy108)\\t(80,150,\\fscx100\\fscy100)"
 WORD_POP_PEAK = 1.08
 SAFE_WIDTH = 900                     # x 60-960: a word or card line, its outline and its shadow centred on CENTRE_X
 # Where each caption style can draw, top to bottom, outline and shadow in (explainertest.py measures both): labels
 # keep LABEL_GAP away from it.
-CAPTION_BANDS = {"word": (1185, 1345), "phrase": (1130, 1510)}
+CAPTION_BANDS = {"word": (1185, 1345), "phrase": (1130, 1510), "v4": (1185, 1345)}   # v4: 120 px on WORD_Y, inside word's
 # Card markup: | starts a new line, ~words~ get a red bar through them, *words* are cyan ("green"). A number at the
 # start of the first line counts up from 0 over COUNT_S. Text is in Lilita One, and every position comes from libass
 # itself (measure()), so the bar lands on the words. The bar is drawn, because libass's own strikeout is a hairline.
@@ -801,7 +803,8 @@ def load_script(path, root):
         layout = None
     caption_style = script.get("caption_style", "word")
     if caption_style not in CAPTION_STYLES:
-        problems.append("caption_style is word (one word at a time) or phrase (2-4 words, the spoken one yellow)")
+        problems.append("caption_style is word (one word at a time), phrase (2-4 words, the spoken one yellow) or v4 "
+                        "(engine v4's 2-3 white words with 1-2 accents)")
         caption_style = "word"
     game_volume = script.get("game_volume", 1.0)
     if (isinstance(game_volume, bool) or not isinstance(game_volume, (int, float))
@@ -2215,9 +2218,9 @@ def caption_events(words, total_s, hidden=()):
 
 def card_spans(slots, caption_style="word"):
     """When text cards are up, in seconds: no caption shows then, because a card says what the voice says. Phrase
-    captions also hide over a compare beat, whose two cards leave them no room."""
+    and v4 captions also hide over a compare beat, whose two cards leave them no room."""
     return [(s["start"] / FPS, s["end"] / FPS) for s in slots
-            if s["visual"]["kind"] == "card" or (caption_style == "phrase" and s["visual"]["kind"] == "compare")]
+            if s["visual"]["kind"] == "card" or (caption_style in ("phrase", "v4") and s["visual"]["kind"] == "compare")]
 
 
 def caption_places(slots):
@@ -3108,8 +3111,14 @@ def render(script_path, root, out_root, run_dir=None):
         warnings += runtime_warnings(voice_s)
 
         hidden = card_spans(slots, script["caption_style"])
-        captions = (word_events(words, total_s, hidden, caption_places(slots)) if script["caption_style"] == "word"
-                    else caption_events(words, total_s, hidden))
+        if script["caption_style"] == "v4":
+            import assemble                          # here, not at the top: assemble imports explainer
+            captions = assemble.caption_events(words, total_s, keys=assemble.cutplan.words_of(script["open_card"] or ""),
+                                               hidden=hidden)
+        elif script["caption_style"] == "word":
+            captions = word_events(words, total_s, hidden, caption_places(slots))
+        else:
+            captions = caption_events(words, total_s, hidden)
         events = card_events(slots, script["open_card"]) + captions + overlay_events(slots, script["open_card"])
         pill, pill_click = script.get("end_pill"), None
         if pill:
@@ -3193,6 +3202,8 @@ def render(script_path, root, out_root, run_dir=None):
                            "lift_in_pauses_db": GAME_LIFT_DB} if sound.get("game_pieces") else None),
            "captions": ("one word at a time, yellow; tagged words keep their colour (green tags draw cyan)"
                         if script["caption_style"] == "word" else
+                        "engine v4's: 2-3 words a line, white with 1-2 accent words (yellow, cyan for a thing to watch)"
+                        if script["caption_style"] == "v4" else
                         "2-4 words, the one being said turns yellow; tagged words keep their colour (green tags draw cyan)"),
            "look": {"caption_style": script["caption_style"], "grade": script["grade"],
                     "layout": script["layout"] or "framed for landscape pictures, full for portrait",
@@ -3325,7 +3336,8 @@ def runtime_note(seconds):
 
 
 def runtime_warnings(seconds):
-    """Outside the target warns (PR 18: 34-39 s, and both ways). A long Short loses people before the loop."""
+    """Outside the target warns (25-39 s since Nov 28, PR 18 made it 34-39; both ways). A long Short loses people
+    before the loop."""
     if seconds > MAX_TOTAL_S:
         return [f"the Short is {seconds:.1f} s, over the {MIN_TOTAL_S}-{MAX_TOTAL_S} s target: cut words rather than "
                 f"speed the voice past {MAX_SPEED:g}"]
@@ -3372,7 +3384,7 @@ def visual_changes(slots, pill_frames_total=None):
 def pacing_report(changes, total_s, words=None):
     """The pacing of a finished timeline: its length, how many visual changes it has, how many that is every 10 s,
     and the longest stretch without one (from the first frame, between changes, and to the last frame). warnings
-    lists what misses the targets: 34-39 s is checked by runtime_warnings(), so here it is the rate and the gaps."""
+    lists what misses the targets: 25-39 s is checked by runtime_warnings(), so here it is the rate and the gaps."""
     times = [0.0] + [at for at, _ in changes] + [total_s]
     gaps = sorted(((round(b - a, 2), round(a, 2), round(b, 2)) for a, b in zip(times, times[1:])), reverse=True)
     rate = len(changes) / total_s * 10 if total_s else 0.0

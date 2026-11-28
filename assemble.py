@@ -241,11 +241,13 @@ def accents(texts, keys=()):
     return {k: CYAN if bare(texts[k]) in things else YELLOW for k in picked}
 
 
-def caption_events(words, total_s, card=None, keys=None):
+def caption_events(words, total_s, card=None, keys=None, hidden=()):
     """The captions (Nov 26) as ASS events: one per line from caption_lines, white with its accents, popping in on its
     first word and up until the next line starts, or a moment after its last word when a pause, a sentence end or a word
     with no caption follows. card: the open card's text (its words said under it get no caption, PR 33, and no line runs
-    past it); keys: the words to accent first (the card's words by default: it says the key verb)."""
+    past it); keys: the words to accent first (the card's words by default: it says the key verb). hidden: (start, end)
+    spans with no caption (explainer's text cards, when make_short uses this style; none in engine v4)."""
+    spans = hidden
     hidden = card_hidden(words, card) if card else set()
     end_of_card = ex.OPEN_CARD_S if card else None
     keys = cutplan.words_of(card or "") if keys is None else keys
@@ -273,7 +275,7 @@ def caption_events(words, total_s, card=None, keys=None):
         body = " ".join(f"{{\\c{colour.get(k, ex.WHITE)}}}{word}" for k, word in enumerate(t))
         text = (f"{{\\an5\\pos({ex.CENTRE_X},{y:.0f}){ex.chunky(size)}\\3c{ex.BLACK}\\bord{LINE_OUTLINE}"
                 f"\\shad{LINE_SHADOW}\\4c{ex.BLACK}\\4a&H60&{ex.WORD_POP}}}{body}")
-        events += [ex.dialogue(2, a, b, "Caption", text) for a, b in ex.visible(first["start"], end, ())]
+        events += [ex.dialogue(2, a, b, "Caption", text) for a, b in ex.visible(first["start"], end, spans)]
     return events
 
 

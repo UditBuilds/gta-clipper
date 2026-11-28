@@ -901,6 +901,67 @@ def render_takes_a_recording_with_no_index_and_flags_it():
     return bare and indexed and missing, (bare, indexed, missing, str(src))
 
 
+
+
+def side_encounter_looks(answers, spec_kw):
+    """vision_checks on a made-up recording whose safety answers are given: (problems, flags). The vision model, the
+    never-shown rule and the first-7-s gore look are stand-ins; nothing is loaded."""
+    class FakeChecker:
+        calls, cached, seconds, model = 0, 0, 0.0, "fake"
+
+        def __init__(self, *a, **k):
+            pass
+
+        def look(self, path, a, b, every, folder):
+            return [{"from_s": a + i, "to_s": a + i + 1, "answer": {k: False for k in safety.WHAT} | ans}
+                    for i, ans in enumerate(answers)]
+
+        def unload(self, model):
+            pass
+    keep = safety.Checker, safety.never_shown, safety.gore_in
+    safety.Checker, safety.never_shown, safety.gore_in = FakeChecker, (lambda *a: []), (lambda *a: [])
+    try:
+        idx = {"video": {"path": "x.webm", "stem": "x"}, "profile": {"name": "gta6"}, "sheets": [], "every": 4.0}
+        with tempfile.TemporaryDirectory() as d:
+            out, flags, _ = meme_short.vision_checks(spec(**spec_kw), idx, Path(d))
+    finally:
+        safety.Checker, safety.never_shown, safety.gore_in = keep
+    return out, flags
+
+
+APPROVED = {"by": "owner", "on": "2026-11-28", "what": "the business lunch (STRANGER side encounter)"}
+
+
+@check
+def approved_side_encounter_turns_a_cutscene_into_a_flag():
+    """Nov 28, the owner: side-encounter conversations are NOT cutscenes. A spec with approved_side_encounter (by the
+    owner, a date, which encounter) is not blocked by the safety question's "cutscene"; it gets a SIDE ENCOUNTER flag"""
+    out, flags = side_encounter_looks([{}, {"cutscene": True}, {"cutscene": True}],
+                                      {"approved_side_encounter": APPROVED})
+    return (not out and any(f.startswith("SIDE ENCOUNTER") and "2026-11-28" in f for f in flags)
+            and not meme_short.problems(spec(approved_side_encounter=APPROVED)), (out, flags))
+
+
+@check
+def a_cutscene_still_blocks_without_the_owners_approval():
+    """the same footage with no approval is blocked as a cutscene, as before; a bare true, a missing date or an approval
+    not by the owner is refused by the rules before anything is looked at"""
+    out, flags = side_encounter_looks([{}, {"cutscene": True}], {})
+    bad = [meme_short.problems(spec(approved_side_encounter=v)) for v in
+           (True, {"by": "owner", "what": "x"}, {"by": "claude", "on": "2026-11-28", "what": "x"},
+            {"by": "owner", "on": "28 Nov", "what": "x"}, {"by": "owner", "on": "2026-11-28", "what": " "})]
+    return (any("cutscene" in o for o in out) and not any(f.startswith("SIDE ENCOUNTER") for f in flags)
+            and all(any("approved_side_encounter" in p for p in b) for b in bad), (out, bad))
+
+
+@check
+def approval_never_passes_a_phone_menu_or_loading_screen():
+    """with the approval, a phone on screen, a menu or map and a loading screen still block (only "cutscene" is
+    exempt), and a cutscene answer in the same footage is still flagged"""
+    out, flags = side_encounter_looks([{"phone_screen": True}, {"menu_or_map": True}, {"loading_or_black": True},
+                                       {"cutscene": True}], {"approved_side_encounter": APPROVED})
+    return (any("phone" in o for o in out) and any("menu" in o for o in out) and any("loading" in o for o in out)
+            and not any("cutscene" in o for o in out) and any(f.startswith("SIDE ENCOUNTER") for f in flags), out)
 @check
 def day_scan_spikes_keep_the_strongest_apart_and_skip_the_phone():
     """day_scan.py (Nov 28): the strongest spikes of sound and picture, at least 25 s apart, none in the first or last 3 s

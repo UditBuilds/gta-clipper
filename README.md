@@ -224,7 +224,7 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
 }
 ```
 
-- **Length.** The target is 34-39 s since PR 18 (it was 40-50 s), which is about 95-105 words at speed 1.1. Outside
+- **Length.** The target is 25-39 s since Nov 28 (the owner's call; PR 18 made it 34-39 s, it was 40-50 s); about 95-105 words fill 34-39 s at speed 1.1. Outside
   it warns, and so does a speed above 1.1: to fit the time, cut words rather than rush the voice. The
   [pacing check](#beat-types) prints after every render. A shot that stays up over 2.5 s warns (a pan may stay 3.5 s, because it keeps moving).
 - **Shots.** A line's shots share its time by `weight`, 1 each unless set, so a shot with weight 2 stays twice as long as
@@ -248,7 +248,8 @@ A script is a JSON file, and paths are relative to `C:\AI\gta\`:
 - `green` and `red` list words or phrases from that line's `say`, which must match or the render stops.
 - **Captions** follow Kokoro's own sound durations. By default each word shows alone as it is said (see
   [Explainer style](#explainer-style)); `"caption_style": "phrase"` shows 2-4 words at a time with the spoken one yellow,
-  as in PR 16. Words in `green` (drawn cyan) and `red` keep their colour. Captions stay inside Shorts' safe area, and none
+  as in PR 16; `"caption_style": "v4"` (Nov 28) draws engine v4's captions (assemble.py, PR 38): 2-3 white words a line
+  with 1-2 accent words, yellow or cyan. Words in `green` (drawn cyan) and `red` keep their colour. Captions stay inside Shorts' safe area, and none
   shows while a text card is up.
 - **Voice.** `voice` is any of Kokoro's English voices (`af_`, `am_`, `bf_`, `bm_`); the default is `am_puck`. A name
   that doesn't exist stops the run and lists them.
@@ -328,7 +329,7 @@ its shots `"beats"` instead of `"visuals"`. Shots without a beat are drawn as be
 - **Safe area.** A lock-on region too near the picture's top or bottom can't be brought into the safe area, and the
   render stops and says so. While a compare is up, the word captions sit between its two cards.
 - **Pacing check.** After a render the tool prints the length, the number of visual changes, the changes every 10 s and
-  the longest gap. It warns (it never fails) outside 34-39 s, under 4 or over 6 changes every 10 s, or with a gap over
+  the longest gap. It warns (it never fails) outside 25-39 s, under 4 or over 6 changes every 10 s, or with a gap over
   3 s. A change is a cut, a compare's second card, a mark or the pill; things within 0.5 s of a cut count with it.
 
 ```powershell
@@ -379,7 +380,7 @@ Each Short gets a folder, `C:\AI\gta\shorts\<date>-<slug>\`:
 | `pacing.txt` | The pacing check. |
 | `script.json`, `script_resolved.json` | The script as written, and as rendered (every query now a file). |
 
-The last line `make_short.py` prints is `READY` (34-39 s long and no pacing warning) or `NOT READY` and why.
+The last line `make_short.py` prints is `READY` (25-39 s long and no pacing warning) or `NOT READY` and why.
 
 ### The facts file
 
@@ -441,7 +442,7 @@ A shot then asks for a picture instead of naming a file (a file path still works
   (`regions.json`). The folder is trusted over the "where" tags, which are the model's weakest.
 - `lockon` and `marks` point at a spot in one picture, so those shots name a `file`.
 
-The three demo scripts are in `examples\shorts\`. The 34-39 s target is checked on the real voice: short, choppy lines
+The three demo scripts are in `examples\shorts\`. The 25-39 s target is checked on the real voice: short, choppy lines
 are read faster, so a script of place names needed speed 1.0 and 111 words where the others fit at 1.1 with 100-105.
 
 **Which model.** `qwen3-vl:8b-instruct`, compared with the 4b on 20 files that I judged by eye against notes written

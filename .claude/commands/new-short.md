@@ -33,7 +33,7 @@ Read `facts.json`. **Every claim in the Short must come from a fact in it whose 
   `--allow-stale` yourself: that flag is the owner's. If the owner asks you to check the facts again, open each
   fact's source links; if the fact still holds, set its `checked_on` to today; if it changed, do not edit the claim:
   tell the owner what the source says now.
-- If the checked facts can't carry the topic for 34-39 s, **stop and tell the owner which facts are missing.** Offer
+- If the checked facts can't carry the topic for 25-39 s, **stop and tell the owner which facts are missing.** Offer
   to add them to `facts.json` as `unverified` for the owner to check. Do not pad with unchecked claims.
 
 ## 3. Write the script
@@ -59,7 +59,7 @@ to Short" in `README.md`) with these parts:
 }
 ```
 
-**The words** (34-39 s, about 95-105 spoken words):
+**The words** (25-39 s since Nov 28; about 95-105 spoken words fill 34-39 s at 1.1):
 
 1. Seconds 0-2: a claim that is true and surprising. It must be literally true. No bait-and-switch, no "just kidding".
 2. Then "let me explain" or "here's why".

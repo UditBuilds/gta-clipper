@@ -26,7 +26,7 @@ What it does, in order, stopping at the first step that finds a problem:
        claims.txt   every line with its fact IDs, their status and their sources
        picks.jpg    each shot's words next to the picture chosen for it, and how long it is on screen
        pacing.txt   the pacing check
-The Short is READY when its length is 34-39 s, the pacing check has no warning and every picture on picks.jpg gets
+The Short is READY when its length is 25-39 s (34-39 until Nov 28), the pacing check has no warning and every picture on picks.jpg gets
 on screen. Otherwise the files are still written, the last line says NOT READY and why, and the exit code is 1.
 Nothing is ever uploaded.
 
@@ -58,7 +58,7 @@ ACRONYMS = {"GTA", "VI", "PS", "PC", "GB", "TB", "AM", "PM", "TV", "UK", "US", "
             "FPS", "XP", "ESRB", "PEGI", "GMT", "HDR", "SSD", "ID", "OK"}
 HASHTAGS = (3, 5)
 WORDS_TARGET = (95, 105)                  # about what fills 34-39 s; outside it warns
-WORDS_LIMIT = (85, 115)                   # outside this the Short can't land in 34-39 s, so nothing is rendered
+WORDS_LIMIT = (85, 115)                   # unchanged when the bar became 25-39 s (Nov 28); outside it nothing renders
 OWN_KEYS = ("topic", "topic_score", "description", "hashtags")     # settings explainer.py doesn't know
 MIN_TOPIC_SCORE = 3
 FONT = "C\\:/Windows/Fonts/arial.ttf"     # escaped for an ffmpeg filter
@@ -128,7 +128,8 @@ def check_script(script, facts, tags, recent=None, allow_weak=False, today=None,
     words = spoken_words(script)
     if not WORDS_LIMIT[0] <= words <= WORDS_LIMIT[1]:
         problems.append(f"the script has {words} spoken words; {WORDS_TARGET[0]}-{WORDS_TARGET[1]} fills a "
-                        f"34-39 s Short, and outside {WORDS_LIMIT[0]}-{WORDS_LIMIT[1]} it can't fit")
+                        f"34-39 s Short at speed 1.1, and outside {WORDS_LIMIT[0]}-{WORDS_LIMIT[1]} it can't fit the "
+                        "25-39 s bar")
     elif not WORDS_TARGET[0] <= words <= WORDS_TARGET[1]:
         warnings.append(f"the script has {words} spoken words; about {WORDS_TARGET[0]}-{WORDS_TARGET[1]} fills 34-39 s")
     score = script.get("topic_score")

@@ -391,14 +391,54 @@ def dollar_amounts_warn():
 
 @check
 def speed_and_length_warn():
-    """a voice faster than 1.4 warns (1.4 itself doesn't; PR 30, it was 1.1); the target is 34-39 s since PR 18 (it was 40-50 s, and only over it warned): a Short over 39 s warns, one under 34 s warns, and 34-39 s doesn't"""
+    """a voice faster than 1.4 warns (1.4 itself doesn't; PR 30, it was 1.1); the target is 25-39 s since Nov 28 (the owner's call; PR 18 made it 34-39 s, it was 40-50 s): a Short over 39 s warns, one under 25 s warns (a 24 s info Short is still NOT READY: its pacing report's length_ok is false), and 25-39 s doesn't"""
     fast = ex.script_warnings({"speed": 1.45, "lines": []})
     edge = ex.script_warnings({"speed": 1.4, "lines": []})
     return (len(fast) == 1 and "faster than 1.4" in fast[0] and not edge and ex.runtime_warnings(39.5)
-            and "over" in ex.runtime_warnings(39.5)[0] and ex.runtime_warnings(33.5) and "under" in ex.runtime_warnings(33.5)[0]
+            and "over" in ex.runtime_warnings(39.5)[0] and ex.runtime_warnings(24) and "under" in ex.runtime_warnings(24)[0]
+            and ex.runtime_warnings(24.9) and not ex.runtime_warnings(25) and not ex.runtime_warnings(30.3)
             and not ex.runtime_warnings(34) and not ex.runtime_warnings(37.6) and not ex.runtime_warnings(39)
-            and "under" in ex.runtime_note(33.5) and "inside" in ex.runtime_note(37.6) and "over" in ex.runtime_note(39.5)
-            and (ex.MIN_TOTAL_S, ex.MAX_TOTAL_S) == (34, 39))
+            and "under" in ex.runtime_note(24) and "inside" in ex.runtime_note(30.3) and "over" in ex.runtime_note(39.5)
+            and not ex.pacing_report([], 24.0, 70)["length_ok"] and ex.pacing_report([], 30.3, 115)["length_ok"]
+            and (ex.MIN_TOTAL_S, ex.MAX_TOTAL_S) == (25, 39))
+
+
+@check
+def v4_caption_style():
+    """caption_style "v4" (Nov 28) is accepted and draws engine v4's captions (assemble.caption_events): 2-3 words a line, white with 1-2 accent words, none while a text card is up (hidden), and a line that outlasts the card comes back after it; an unknown style is still refused"""
+    import assemble
+    texts = "Skip the front door. Go round the back and pick the lock.".split()
+    words, t, sentence = [], 0.0, 0
+    for tok in texts:
+        words.append({"text": tok, "key": tok.lower(), "start": t, "end": t + 0.3, "sentence": sentence,
+                      "pause": tok[-1] in ",;:", "colour": None, "tag": None})
+        t += 0.35
+        sentence += tok.endswith(".")
+    hidden = [(1.2, 2.0)]
+    events = assemble.caption_events(words, t, keys=[], hidden=hidden)
+    def sec(x):
+        h, m, rest = x.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(rest)
+    spans = [(sec(e.split(",")[1]), sec(e.split(",")[2])) for e in events]
+    colours = [re.findall(r"\\c(&H[0-9A-F]+&)", e) for e in events]
+    accents = [[c for c in cs if c != ex.WHITE] for cs in colours]
+    words_shown = [re.findall(r"\\c&H[0-9A-F]+&\}([^{]+)", e) for e in events]
+    with tempfile.TemporaryDirectory() as d:
+        bad = Path(d) / "bad.json"
+        bad.write_text(json.dumps({"title": "Style test", "caption_style": "neon", "lines": [{"say": "One line."}]}),
+                       encoding="utf-8")
+        try:
+            ex.load_script(bad, Path(d))
+            refused = False
+        except ex.ScriptError as e:
+            refused = "v4" in str(e)
+    return (bool(events) and "v4" in ex.CAPTION_STYLES and ex.CAPTION_BANDS["v4"] == ex.CAPTION_BANDS["word"]
+            and all(not (a < 2.0 - 1e-6 and b > 1.2 + 1e-6) for a, b in spans)
+            and any(a >= 2.0 - 1e-6 for a, _ in spans)
+            and all(1 <= len(w) <= 3 for w in words_shown)
+            and all(1 <= len(a) <= 2 and set(a) <= {assemble.YELLOW, assemble.CYAN} for a in accents)
+            and any(ex.WHITE in cs for cs in colours)
+            and assemble.caption_events(words, t, keys=[]) != events and refused)
 
 
 # --- Word timing ---
@@ -1153,15 +1193,15 @@ def captions_follow_the_real_speech():
 @check
 @testkit.full
 def log_says_what_happened():
-    """the log has the durations and target, the shot count, a visual for every second, each image's move, and its warnings (the runtime under 34 s; no speed warning at 1.18, under PR 30's 1.4); the console prints the runtime and the shots"""
+    """the log has the durations and target, the shot count, a visual for every second, each image's move, and its warnings (the runtime under 25 s; no speed warning at 1.18, under PR 30's 1.4); the console prints the runtime and the shots"""
     folder, log, stdout = main_run()
     images = [v for v in log["visuals"] if v["kind"] == "image"]
     return (len(log["per_second"]) == math.ceil(log["durations"]["frames"] / FPS) and log["per_second"][0]["visual"] == "a.mp4@0:03"
             and all(v["motion"] for v in images) and log["voice"] == "am_puck" and log["speed"] == 1.18
-            and any("under the 34-39 s target" in w for w in log["warnings"])
+            and any("under the 25-39 s target" in w for w in log["warnings"])
             and not any("faster than" in w for w in log["warnings"]) and "WARNING" in stdout
-            and log["durations"]["target_s"] == [34, 39] and log["shots"]["count"] == len(log["visuals"])
-            and re.search(r"Runtime \d+\.\d s \(target 34-39 s", stdout)
+            and log["durations"]["target_s"] == [25, 39] and log["shots"]["count"] == len(log["visuals"])
+            and re.search(r"Runtime \d+\.\d s \(target 25-39 s", stdout)
             and re.search(rf"Shots: {len(log['visuals'])} \({len(log['visuals']) - 1} plus the 1.5 s loop ending\), average", stdout)
             and {"voice_lufs", "final_lufs"} <= set(log["loudness"]))
 
@@ -2297,7 +2337,7 @@ def beats_render_never_ends_frozen_and_still_loops():
 @check
 @testkit.full
 def beats_render_prints_the_pacing_check():
-    """in the same render: the console prints the pacing check (length, changes, rate, longest gap), the log holds the same numbers with every change it counted (the compare's second card and the pill among them; the lock-on box and the marker count with their cuts), and a Short this short gets the under-34 s warning without failing"""
+    """in the same render: the console prints the pacing check (length, changes, rate, longest gap), the log holds the same numbers with every change it counted (the compare's second card and the pill among them; the lock-on box and the marker count with their cuts), and a Short this short gets the under-25 s warning without failing"""
     folder, log, stdout = beats_run()
     pacing = log["pacing"]
     what = " | ".join(e["what"] for e in pacing["events"])
@@ -2307,14 +2347,14 @@ def beats_render_prints_the_pacing_check():
     print(f"       {pacing['changes']} changes ({cuts} cuts) in {pacing['length_s']} s: {pacing['per_10_s']} per 10 s, longest "
           f"gap {pacing['longest_gap_s']} s; warnings {[w[:40] for w in log['warnings']]}")
     return ("Pacing check:" in stdout and f"Changes       {pacing['changes']} visual changes" in stdout
-            and re.search(r"Length\s+\d+\.\d s\s+\(target 34-39 s\)\s+WARN", stdout)
+            and re.search(r"Length\s+\d+\.\d s\s+\(target 25-39 s\)\s+WARN", stdout)
             and re.search(r"Rate\s+\d+\.\d per 10 s\s+\(target 4-6\)", stdout) and re.search(r"Longest gap\s+\d+\.\d s, from", stdout)
             and pacing["changes"] == len(pacing["events"]) and 4 <= pacing["changes"] <= cuts + 2
             and abs(pacing["length_s"] - log["durations"]["video_s"]) < 0.05
             and abs(pacing["per_10_s"] - pacing["changes"] / pacing["length_s"] * 10) < 0.02
             and all(k in what for k in ("second card slides in", "subscribe pill pops in", "loop ending"))
             and "lock-on box lands" not in what and "marker sweeps" not in what
-            and any("under the 34-39 s target" in w for w in log["warnings"])
+            and any("under the 25-39 s target" in w for w in log["warnings"])
             and again.returncode == 0 and "Pacing check:" in again.stdout and "the second card slides in" in again.stdout)
 
 

@@ -111,7 +111,7 @@ END_AFTER = (0.5, 1.5)
 TITLE_CHARS, TITLE_WORDS = 60, (2, 12)
 
 KEYS = {"recording", "from_s", "to_s", "kind", "motion_s", "punchline_s", "reaction_end_s", "heard", "layout", "focus",
-        "captions", "star", "swap", "edit", "music", "title", "slug", "what", "why", "notes"}
+        "captions", "star", "swap", "edit", "music", "title", "slug", "what", "why", "notes", "approved_side_encounter"}
 BANNED = ((4, re.compile(r"blur|background|^bg$"), "no blurred background in meme mode"),
           (5, re.compile(r"voice|^lines$|script|narrat|tts|^say$|speed"), "no AI voice: the game's own sound only"),
           (6, re.compile(r"whoosh|boom|sfx|sound_effect|arrow|freeze|insert|shake|flash|transition|^edits$|zoom"),
@@ -397,11 +397,26 @@ def ending_problems(spec, tl):
     return out
 
 
+def approval_problems(spec):
+    """The owner's approval of a side-encounter conversation (Nov 28: "side-encounter conversations are NOT cutscenes"),
+    given per spec: {"by": "owner", "on": "YYYY-MM-DD", "what": "which encounter"}. With it, and only for that spec, the
+    vision model's "cutscene" answer is a flag instead of a block; a phone, menu, map, loading screen, anything the bank
+    never shows and blood in the first 7 s still block. Claude never writes it without the owner's word."""
+    ok = spec.get("approved_side_encounter")
+    if ok is None:
+        return []
+    good = (isinstance(ok, dict) and set(ok) == {"by", "on", "what"} and ok["by"] == "owner"
+            and isinstance(ok["on"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", ok["on"])
+            and isinstance(ok["what"], str) and ok["what"].strip())
+    return [] if good else ["rule 9: approved_side_encounter is {\"by\": \"owner\", \"on\": \"YYYY-MM-DD\", \"what\": "
+                            "\"the side encounter\"}: the owner's approval, never a bare true"]
+
+
 def problems(spec):
     """Every rule's problems for a spec, each starting "rule N:" (or "spec:"); [] when it may be rendered."""
     if not isinstance(spec, dict):
         return ["spec: not a JSON object"]
-    out = key_problems(spec)
+    out = key_problems(spec) + approval_problems(spec)
     try:
         for k in ("from_s", "to_s", "punchline_s"):
             float(spec[k])
@@ -842,8 +857,15 @@ def vision_checks(spec, idx, work, log=print):
     a, b = float(spec["from_s"]), float(spec["to_s"])
     sheets = checker.look(path, a, b, safety.EVERY_S, Path(work) / "safety")
     out, flags = [], []
-    for x, y, what in safety.found(sheets, safety.BLOCKING):
+    approved = spec.get("approved_side_encounter")
+    blocking = tuple(k for k in safety.BLOCKING if not (approved and k == "cutscene"))
+    for x, y, what in safety.found(sheets, blocking):
         out.append(f"rule 9: {what} at {library.hms(x)}-{library.hms(y)}")
+    if approved:
+        for x, y, _ in safety.found(sheets, ("cutscene",)):
+            flags.append(f"SIDE ENCOUNTER at {library.hms(x)}-{library.hms(y)}: the safety question called it a cutscene; "
+                         f"the owner approved this side-encounter conversation ({approved['on']}: {approved['what']}), "
+                         "so it is not blocked. Check it is not a story scene")
     out += [f"rule 9: never shown: {w}" for w in safety.never_shown(rec, sheets, a, b)]
     first = [(a, min(b, a + safety.FIRST_S))]
     out += [f"rule 9: in the first 7 s: {w}" for w in safety.fmt(safety.gore_in(checker, rec, path, first,
