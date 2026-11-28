@@ -260,10 +260,11 @@ def a_missing_or_wrong_copy_falls_back_to_the_installed_ffmpeg_with_a_warning():
 
 @check
 def every_program_that_renders_or_indexes_asks_for_the_fast_ffmpeg():
-    """launch, index, footage_short, make_short, tag_media, explainer, edit2, speech and bank call fastff.use() in main()
-    and only there (importing them changes nothing), and clip.py is left alone"""
+    """launch, index, footage_short, make_short, tag_media, explainer, edit2, speech, bank and meme_short call
+    fastff.use() in main() and only there (importing them changes nothing), and clip.py is left alone"""
     wrong = []
-    for name in ("launch", "index", "footage_short", "make_short", "tag_media", "explainer", "edit2", "speech", "bank"):
+    for name in ("launch", "index", "footage_short", "make_short", "tag_media", "explainer", "edit2", "speech", "bank",
+                 "meme_short"):
         text = (run_tests.HERE / f"{name}.py").read_text(encoding="utf-8")
         body = re.split(r"^def main\(.*\):$", text, flags=re.M)[-1].split("\ndef ")[0]
         if text.count("fastff.use(") != 1 or "fastff.use(" not in body:

@@ -1,0 +1,11 @@
+{
+ "recording": "Grand Theft Auto VI_20261119134026", "from_s": 722.5, "to_s": 730.3, "kind": "gag",
+ "motion_s": 723.0, "punchline_s": 727.5, "reaction_end_s": 729.78,
+ "heard": [{"from_s": 727.54, "to_s": 728.58, "text": "Hey, hey!"}, {"from_s": 729.0, "to_s": 729.78, "text": "Get off me!"}],
+ "layout": "letterbox", "focus": [0.45, 0.6],
+ "captions": ["Just another day for Jason", "Jason chose violence today", "Jason is a psycho now"], "star": 0,
+ "title": "Jason at the beach is a problem",
+ "slug": "just-another-day-for-jason",
+ "what": "Jason walks up to beach guys, throws his drink, drops one ('Hey, hey! Get off me!') and the game pops 'Extremely violent behavior will contribute toward a psycho criminal profile'",
+ "why": "letterbox: the game's tip (the second punchline) is in the left corner and the fight moves sideways; the cut is at 730.3, as I'm calling the cops starts, because the weapon wheel opens at 731.0"
+}
