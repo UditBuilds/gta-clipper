@@ -6,12 +6,16 @@ No Ollama, no Whisper, no footage: the renders use made-up 16:9 videos.
   .venv\\Scripts\\python.exe memetest.py
 """
 import json
+import re
 import struct
 import subprocess
 import sys
 import tempfile
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import index
+import meme_marked
 import meme_short
 import safety
 import testkit
@@ -559,6 +563,248 @@ def meme_mode_writes_its_own_log_and_nothing_launch_reads():
     return ((folder / "short.mp4").is_file() and (folder / "title.txt").read_text(encoding="utf-8").strip() == s["title"]
             and len([c for c in caps if c.strip()]) == 3 and len(starred) == 1 and s["captions"][0] in starred[0]
             and not (folder / "render.json").exists() and data["spec"]["title"] == s["title"]), caps
+
+
+# --- Marked mode (Nov 28): the owner marks the moments, the pipeline only edits ---
+
+def rec_of(name, duration):
+    start, end = meme_marked.span_of(name, duration)
+    return {"name": name, "path": f"C:/made_up/{name}", "duration": duration, "start": start, "end": end}
+
+
+@check
+def a_recording_ends_at_its_file_name_time():
+    """A PS5 file name's time is when the recording ENDED (it was saved), in IST: start = that time less its length.
+    Measured on the owner's files (Nov 28): read as the start, three back-to-back pairs would overlap by 450-600 s and
+    their frames differ; read as the end, every gap is positive. Here: the three pairs keep a gap of 0 s or more"""
+    start, end = meme_marked.span_of("Grand Theft Auto VI_20261119014828.webm", 978.6)
+    pairs = [("Grand Theft Auto VI_20261119014828", 978.6, "Grand Theft Auto VI_20261119015444", 304.6),
+             ("Grand Theft Auto VI_20261119022442", 1031.5, "Grand Theft Auto VI_20261119023422", 537.8),
+             ("Grand Theft Auto VI_20261119035639", 1140.7, "Grand Theft Auto VI_20261119040546", 450.6)]
+    gaps = [(meme_marked.span_of(b, db)[0] - meme_marked.span_of(a, da)[1]).total_seconds() for a, da, b, db in pairs]
+    return (end == datetime(2026, 11, 19, 1, 48, 28) and start == end - timedelta(seconds=978.6)
+            and meme_marked.stamp_of("test1.webm") is None and all(g >= 0 for g in gaps)), (start, end, gaps)
+
+
+@check
+def marks_txt_lines_are_read_with_their_date_and_precision():
+    """marks.txt: one moment a line, "<clock time> <a few words>"; HH:MM or HH:MM:SS, "pm"/"am" allowed; a line with
+    only a date (2026-11-28) dates the lines under it; # and blank lines are skipped; a line it can't read is kept to
+    be listed, never dropped; the same line twice is two moments (the second keyed "#2")"""
+    text = ("# my marks\n2026-11-28\n11:47 bear attacks protesters\n11:47:30 car flips\n\n7:05 pm truck jump\n"
+            "hello there\n11:47 bear attacks protesters\n")
+    marks, bad = meme_marked.parse_marks(text)
+    m0, m1, m2, m3 = (marks + [None] * 4)[:4]
+    return (len(marks) == 4 and m0["date"] == date(2026, 11, 28) and (m0["h"], m0["m"], m0["s"]) == (11, 47, 0)
+            and m0["precision"] == "minute" and m0["words"] == "bear attacks protesters"
+            and m1["precision"] == "second" and m1["s"] == 30 and (m2["h"], m2["m"], m2["twelve"]) == (19, 5, False)
+            and m0["twelve"] and m3["key"] == m0["key"] + " #2" and m0["key"] != m3["key"]
+            and [t for _, t in bad] == ["hello there"]), (marks, bad)
+
+
+@check
+def an_undated_mark_is_the_latest_such_time_before_marks_txt_was_saved():
+    """A mark with no date line above it is the latest moment with that clock time at or before marks.txt was last
+    saved (23:58 saved at 00:10 is the day before); a time before 12:00 with no am/pm can also be the afternoon, so
+    both are tried (24-hour reading first); a dated mark is that day's"""
+    c = meme_marked.candidates
+    marks, _ = meme_marked.parse_marks("23:58 crash\n11:47 bear\n2026-11-21\n16:35:20 gps\n4:35 x\n")
+    saved = datetime(2026, 11, 29, 0, 10)
+    got = [c(m, saved) for m in marks]
+    want = [[datetime(2026, 11, 28, 23, 58)], [datetime(2026, 11, 28, 11, 47), datetime(2026, 11, 28, 23, 47)],
+            [datetime(2026, 11, 21, 16, 35, 20)], [datetime(2026, 11, 21, 4, 35), datetime(2026, 11, 21, 16, 35)]]
+    return got == want, got
+
+
+@check
+def a_mark_is_placed_in_the_recording_that_covers_it_with_its_window():
+    """The recording whose span covers the mark, and the window 20 s before to 5 s after it (a mark to the second);
+    a mark to the minute covers its minute (20 s before :00 to 5 s after :59); the window is cut to the recording; a
+    time no recording covers gives the reason (and the nearest recording), never nothing; the afternoon reading is used
+    only when the morning one is not covered, and the pick says so"""
+    recs = [rec_of("Grand Theft Auto VI_20261121164843.webm", 1753.8),
+            rec_of("Grand Theft Auto VI_20261121223830.webm", 371.8)]
+    sec = meme_marked.place([datetime(2026, 11, 21, 16, 35, 20)], recs, "second")
+    minute = meme_marked.place([datetime(2026, 11, 21, 16, 35)], recs, "minute")
+    edge = meme_marked.place([datetime(2026, 11, 21, 22, 38, 28)], recs, "second")
+    none = meme_marked.place([datetime(2026, 11, 21, 20, 0)], recs, "minute")
+    pm = meme_marked.place([datetime(2026, 11, 21, 4, 35), datetime(2026, 11, 21, 16, 35)], recs, "minute")
+    near = (lambda got, want: got is not None and all(abs(x - y) < 0.01 for x, y in zip(got, want)))
+    return (sec.get("recording", {}).get("name", "").endswith("164843.webm") and near(sec.get("window"), (930.8, 955.8))
+            and near(minute.get("window"), (910.8, 994.8)) and near(edge.get("window"), (346.8, 371.8))
+            and "no recording covers" in none.get("reason", "") and "223830" in none.get("reason", "")
+            and near(pm.get("window"), (910.8, 994.8)) and "afternoon" in pm.get("note", "")), (sec, minute, edge, none, pm)
+
+
+@check
+def a_saved_clip_is_searched_in_its_last_25_s():
+    """A PS5 "Save recent gameplay" clip ends just after the moment: the punch is looked for in its last 25 s (all of
+    it when shorter)"""
+    return meme_marked.clip_window(60.0) == (35.0, 60.0) and meme_marked.clip_window(12.0) == (0.0, 12.0), (
+        meme_marked.clip_window(60.0), meme_marked.clip_window(12.0))
+
+
+@check
+def the_done_record_keeps_rendered_moments_and_retries_the_rest():
+    """The record of what is done: a rendered moment is never made again; a failed or waiting one is tried again on the
+    next run; a mark's clock times are worked out once, when it is first seen, and kept (saving marks.txt again
+    tomorrow doesn't move it); a record that can't be read stops the run (never read as empty)"""
+    tmp = Path(tempfile.mkdtemp(prefix="memetest_"))
+    path = tmp / "marked_record.json"
+    rec = meme_marked.read_record(path)
+    meme_marked.set_entry(rec, "k1", status="rendered", folder="x")
+    meme_marked.set_entry(rec, "k2", status="failed", reason="rule 2")
+    meme_marked.set_entry(rec, "k3", status="waiting", reason="no recording covers it")
+    todo = meme_marked.todo(["k1", "k2", "k3", "k4"], rec)
+    meme_marked.write_record(path, rec)
+    back = meme_marked.read_record(path)
+    mark = meme_marked.parse_marks("23:58 crash\n")[0][0]
+    first = meme_marked.times_for(mark, datetime(2026, 11, 29, 0, 10), back)
+    later = meme_marked.times_for(mark, datetime(2026, 11, 30, 9, 0), back)
+    (tmp / "bad.json").write_text("{not json", encoding="utf-8")
+    try:
+        meme_marked.read_record(tmp / "bad.json")
+        damaged = False
+    except index.StateError:
+        damaged = True
+    return (todo == ["k2", "k3", "k4"] and meme_marked.entry(back, "k1")["status"] == "rendered"
+            and first == later == [datetime(2026, 11, 28, 23, 58)] and damaged), (todo, first, later)
+
+
+def spike_series(seconds=30.0, at=12.0, base_pic=2.0, base_snd=-30.0, before=None):
+    """Made-up measurements from 0 s: a spike of picture change and sound for 0.5 s at `at`; `before`: (pic, snd) for
+    everything before the spike instead of the base (a still, quiet lead-in)."""
+    n = round(seconds / meme_short.STEP_S)
+    pic, snd = [], []
+    for i in range(n):
+        t = i * meme_short.STEP_S
+        if at - 1e-9 <= t < at + 0.5:
+            pic.append(20.0), snd.append(-12.0)
+        elif before is not None and t < at:
+            pic.append(before[0]), snd.append(before[1])
+        else:
+            pic.append(base_pic), snd.append(base_snd)
+    return pic, snd
+
+
+@check
+def the_punch_is_the_biggest_sound_and_motion_spike_in_the_window():
+    """The punch is where sound and picture jump most inside the window (a bigger spike outside it is not taken),
+    at the jump's start"""
+    pic, snd = spike_series(seconds=40.0, at=12.0)
+    for i in range(round(30.0 / meme_short.STEP_S), round(31.0 / meme_short.STEP_S)):
+        pic[i], snd[i] = 40.0, -5.0                  # a bigger spike at 30 s, outside the window
+    p = meme_marked.find_punch(pic, snd, 100.0, (105.0, 120.0))
+    return abs(p["at_s"] - 112.0) <= 0.15, p
+
+
+def finished(plan, **kw):
+    s = {"recording": "made_up", "kind": "gag", "layout": "letterbox", "focus": [0.5, 0.5],
+         "captions": ["Bro trusted the GPS", "Nobody saw that coming", "Just another day for Jason"], "star": 0,
+         "title": "Bro trusted the GPS"}
+    s.update({k: plan[k] for k in ("from_s", "to_s", "punchline_s", "reaction_end_s", "motion_s", "heard")})
+    s.update(kw)
+    return s
+
+
+@check
+def the_cut_keeps_the_meme_rules_and_ends_after_the_reaction():
+    """The cut around a punch: a 7-12 s gag, the punch at 0:02-0:06, a hard cut 0.5-1.5 s after the last line heard
+    around it, a first second that passes rule 2 measured; a reaction line too long to fit is left out; a cut that can
+    only start still and quiet is not made, and says why"""
+    pic, snd = spike_series(seconds=30.0, at=12.0)
+    line = [{"from_s": 112.5, "to_s": 115.0, "text": "What the hell, man"}]
+    plan = meme_marked.plan_cut(112.0, line, pic, snd, 100.0, 130.0)
+    ok = (not plan.get("reason") and not meme_short.problems(finished(plan))
+          and 2.0 <= plan["punchline_s"] - plan["from_s"] <= 6.0 and 0.5 <= plan["to_s"] - 115.0 <= 1.5)
+    long_line = meme_marked.plan_cut(112.0, [{"from_s": 112.5, "to_s": 124.0, "text": "a long rant"}], pic, snd, 100.0,
+                                     130.0)
+    long_ok = (not long_line.get("reason") and not meme_short.problems(finished(long_line))
+               and long_line["to_s"] <= 112.0 + 1.5 + 1e-6)
+    dead_pic, dead_snd = spike_series(seconds=30.0, at=12.0, base_pic=8.0, base_snd=-20.0, before=(0.2, -50.0))
+    dead = meme_marked.plan_cut(112.0, [], dead_pic, dead_snd, 100.0, 130.0)
+    return ok and long_ok and "rule 2" in dead.get("reason", ""), (plan, long_line, dead)
+
+
+@check
+def captions_come_from_what_is_seen_and_never_from_swears():
+    """The model's captions are kept only when they keep rule 3 and carry no swear word (written censored or not);
+    the first kept one is starred; when fewer than 3 are left the rest are filled in and the pick says so; a title with
+    a hashtag is replaced by the starred caption"""
+    answer = {"seen": "A truck hits Jason on the road", "captions": [
+        "Bro got fucking destroyed", "Watch the truck", "Jason vs the truck", "Delivery came early", "Jason vs the truck",
+        "This is sht"], "title": "Jason got hit by a truck #gta6"}
+    caps, star, title, notes = meme_marked.pick_captions(answer)
+    clean = all(not meme_short.caption_problems(c) and meme_short.censor(c) == c and not re.search(r"(?i)\bsht\b", c)
+                for c in caps)
+    return (len(caps) == 3 and caps[:2] == ["Jason vs the truck", "Delivery came early"] and star == 0
+            and title == "Jason vs the truck" and clean and any("filled" in n for n in notes)), (caps, star, title, notes)
+
+
+class Stand:
+    """Stand-ins for marked mode's tools: no ffmpeg, Whisper, Ollama or render. Each made-up video has a spike at
+    spike_at[name] seconds."""
+
+    def __init__(self, durations, spike_at):
+        self.durations, self.spike_at, self.renders = durations, spike_at, []
+
+    def probe(self, path):
+        return self.durations[Path(path).name]
+
+    def measure(self, path, a, seconds):
+        pic, snd = spike_series(seconds=self.durations[Path(path).name], at=self.spike_at[Path(path).name])
+        i0, i1 = round(a / meme_short.STEP_S), round((a + seconds) / meme_short.STEP_S)
+        return pic[i0:i1], snd[i0:i1]
+
+    def hear(self, path, a, b):
+        return []
+
+    def caption(self, path, punch, lines, work):
+        return {"seen": "A car flips over", "captions": ["Bro forgot how cars work", "Gravity said no",
+                                                         "Just another day for Jason"], "title": "Bro forgot how cars work"}
+
+    def index_of(self, path):
+        return None
+
+    def render(self, spec, folder, source, idx):
+        self.renders.append((Path(source).name, spec["from_s"], spec["to_s"]))
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        (Path(folder) / "short.mp4").write_bytes(b"made up")
+        return {"short": str(Path(folder) / "short.mp4"), "flags": [], "measured": {"duration_s": spec["to_s"] -
+                                                                                  spec["from_s"]}}
+
+    def unload(self):
+        pass
+
+
+@check
+def a_marked_run_makes_each_moment_once_and_lists_every_one_it_could_not():
+    """One run: a saved clip and a mark in a copied recording are cut and rendered; a mark no recording covers, a line
+    it can't read and a mark on the same moment as the clip are listed in picks.md with the reason; a second run renders
+    nothing again and picks.md still lists everything"""
+    tmp = Path(tempfile.mkdtemp(prefix="memetest_"))
+    paths = meme_marked.Paths(marks=tmp / "marks.txt", clips=tmp / "marked", record=tmp / "marked" / "record.json",
+                              input=tmp / "input", out=tmp / "shorts")
+    paths.clips.mkdir()
+    paths.input.mkdir()
+    clip_name, rec_name = "Grand Theft Auto VI_20261128120000.webm", "Grand Theft Auto VI_20261128115500.webm"
+    (paths.clips / clip_name).write_bytes(b"x")                 # 11:59:00-12:00:00, the moment at 50 s (11:59:50)
+    (paths.input / rec_name).write_bytes(b"x")                  # 11:45:00-11:55:00, the moment at 310 s (11:50:10)
+    paths.marks.write_text("2026-11-28\n11:50:05 car flips\n13:00 nothing here\nnonsense line\n11:59:52 same as clip\n",
+                           encoding="utf-8")
+    tools = Stand({clip_name: 60.0, rec_name: 600.0}, {clip_name: 50.0, rec_name: 310.0})
+    now = datetime(2026, 11, 28, 14, 0)
+    first = meme_marked.run(paths, now, tools, log=lambda *a: None)
+    renders_first = list(tools.renders)
+    second = meme_marked.run(paths, now, tools, log=lambda *a: None)
+    page = (paths.out / "marked-2026-11-28" / "picks.md").read_text(encoding="utf-8")
+    rec = meme_marked.read_record(paths.record)
+    rendered = [e for e in rec["items"] if e["status"] == "rendered"]
+    return (len(renders_first) == 2 and tools.renders == renders_first and len(rendered) == 2
+            and {r[0] for r in renders_first} == {clip_name, rec_name}
+            and abs(renders_first[0][1] - (50.0 - 3.0)) <= 3.1 and "no recording covers" in page
+            and "nonsense line" in page and "same moment" in page and page.count("short.mp4") >= 2
+            and first["rendered"] == 2 and second["rendered"] == 0), (first, second, renders_first, page[:1500])
 
 
 def main():
