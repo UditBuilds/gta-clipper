@@ -243,7 +243,10 @@ def build_picks_sheet(picks, tags, out, root=GTA_ROOT):
             if size and source.is_file():
                 x, y, w, h = pick_view(pick, entry, size)
                 at = ["-ss", str((entry or {}).get("start_s") or 0)] if source.suffix.lower() in tag_media.VIDEO_EXTS else []
-                graph = (f"[1:v]crop={w}:{h}:{x}:{y},scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=decrease[p];"
+                # Clamped to the decoded frame (Nov 28): a PS5 VP9 recording is coded 1920x1088 and its container crops it
+                # to 1080, so the probed size can be a few rows taller than the frames ffmpeg hands the filter.
+                graph = (f"[1:v]crop=w='min({w},iw)':h='min({h},ih)':x='min({x},iw-ow)':y='min({y},ih-oh)',"
+                         f"scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=decrease[p];"
                          f"[0:v][p]overlay=20+({THUMB_W}-w)/2:({ROW_H}-h)/2,{base}")
                 args = [*canvas, *at, "-i", str(source), "-filter_complex", graph]
             else:

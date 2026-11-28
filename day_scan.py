@@ -21,6 +21,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -419,18 +420,21 @@ def page_cmd(day, log=print):
     robs = judged.get("robberies", [])
     out.append(f"<h2>Robberies, start to finish ({len(robs)})</h2>")
     for n, r in enumerate(robs, 1):
-        steps = [(k, r[k]) for k in ("entry", "grab", "exit", "after") if r.get(k)]
+        steps = [(s["name"], s) for s in r.get("steps", [])] or [(k, r[k]) for k in ("entry", "grab", "exit", "after")
+                                                                    if r.get(k)]
         out += [f"<div class='c'><h3>Robbery {n}: {esc(r.get('title', ''))}</h3>",
                 f"<p><b>{esc(r['stem'][-15:])}</b> &nbsp; {hms(r['from_s'])} to {hms(r['to_s'])}. "
                 f"<b>Wanted stars:</b> {esc(r.get('stars', '?'))}</p>", f"<p>{esc(r.get('what', ''))}</p>",
                 "<table class='r'>"]
         for k, s in steps:
-            out.append(f"<tr><td><b>{k}</b></td><td>{hms(s['from_s'])}-{hms(s['to_s'])}</td><td>{esc(s.get('what', ''))}"
-                       "</td></tr>")
+            other = f" of {esc(s['stem'][-15:])}" if s.get("stem") and s["stem"] != r["stem"] else ""
+            out.append(f"<tr><td><b>{esc(k)}</b></td><td>{hms(s['from_s'])}-{hms(s['to_s'])}{other}</td>"
+                       f"<td>{esc(s.get('what', ''))}</td></tr>")
         out.append("</table>")
         for k, s in steps:
             at = s.get("thumbs_at") or [s["from_s"] + j * (s["to_s"] - s["from_s"]) / 4 for j in range(5)]
-            th, pv = media(f"rob{n}_{k}", r["stem"], s["from_s"], s["to_s"], at)
+            th, pv = media(f"rob{n}_{re.sub(r'[^a-z0-9]+', '_', k.lower())}", s.get("stem", r["stem"]), s["from_s"],
+                           s["to_s"], at)
             out += [f"<p class='k'>{k}</p><img class='t' src='{th}' loading='lazy' alt='{k}'>",
                     f"<video controls preload='none' src='{pv}'></video>"]
         out.append("</div>")
