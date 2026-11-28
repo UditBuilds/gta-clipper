@@ -40,6 +40,7 @@ The finder and the checks read the index, the bank and _used_footage.json; nothi
 its own folder only: short.mp4, captions.txt, title.txt and meme.json (not render.json, which /launch reads).
 """
 import argparse
+import array
 import json
 import math
 import re
@@ -64,7 +65,6 @@ W, H, FPS = 1080, 1920, 30
 ROOT = Path(r"C:\AI\gta")
 SHORTS = ROOT / "shorts"
 BANK = ROOT / "bank" / "content_bank.json"
-RAW = ROOT / "bank" / "raw"
 MUSIC_DIR = ROOT / "music"
 LOG_NAME = "meme.json"                    # not render.json: launch.failed_before reads every render.json under SHORTS
 
@@ -73,6 +73,13 @@ KINDS = {"gag": (7.0, 12.0), "dialogue": (15.0, 24.0)}
 HARD_CAP_S = 30.0
 # Rule 2: the first second
 MOTION_BY_S, LINE_BY_S, PUNCH_AT = 1.0, 0.5, (2.0, 6.0)
+# Rule 2 measured on the cut itself (measure_start), every STEP_S: the picture's change between frames (a 96x54 gray
+# copy) and the sound's level. The first second passes when its busiest 0.2 s moves at least START_PIC_SHARE of the
+# rest's busy level (its START_PCT percentile), or when its first LINE_BY_S of sound comes within START_SND_DB of the
+# rest's loud level. Set on the owner's footage (Nov 28): sample 1 moves 2.41x, sample 2 is +1.0 dB (its line at
+# 0.4 s), Jason standing still by the bear truck at 4:30 is 0.11x and -11.5 dB.
+STEP_S, START_PCT, START_PIC_SHARE, START_SND_DB = 0.1, 0.75, 0.5, 3.0
+MEASURE_W, MEASURE_H, MEASURE_FPS, MEASURE_RATE = 96, 54, 30, 8000
 # Rule 3: the caption
 WORDS, SETUP_WORDS, SWAP_WORDS = (2, 6), 10, (1, 6)
 ARTICLES = ("a", "an", "the")              # not counted (counted_words)
@@ -668,6 +675,68 @@ def measure(short, spec, work, sw=1920, sh=1080):
             "caption": measure_caption(spec, work, duration, sw, sh)}
 
 
+# --- Rule 2 measured: the first second of the cut against the rest of it ---
+
+def percentile(values, q):
+    v = sorted(values)
+    return v[min(len(v) - 1, int(q * len(v)))] if v else 0.0
+
+
+def start_series(source, a, seconds):
+    """(picture, sound) of source a..a+seconds, one value every STEP_S: the mean change between frames of a 96x54 gray
+    copy (0-255), and the sound's RMS level in dB (mono, 8 kHz)."""
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.3f}", "-t", f"{seconds:.3f}", "-i", str(source), "-an",
+                          "-vf", f"fps={MEASURE_FPS},scale={MEASURE_W}:{MEASURE_H}:flags=area,format=gray", "-f",
+                          "rawvideo", "-"], capture_output=True, check=True).stdout
+    size = MEASURE_W * MEASURE_H
+    shots = [raw[i * size:(i + 1) * size] for i in range(len(raw) // size)]
+    diff = [0.0] + [sum(abs(x - y) for x, y in zip(shots[i], shots[i - 1])) / size for i in range(1, len(shots))]
+    per = round(MEASURE_FPS * STEP_S)
+    picture = [sum(diff[i:i + per]) / per for i in range(0, len(diff) - per + 1, per)]
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.3f}", "-t", f"{seconds:.3f}", "-i", str(source), "-vn",
+                          "-ac", "1", "-ar", str(MEASURE_RATE), "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    samples = array.array("h")
+    samples.frombytes(pcm[:len(pcm) // 2 * 2])
+    k = round(MEASURE_RATE * STEP_S)
+    sound = [20 * math.log10(max(math.sqrt(sum(v * v for v in samples[i:i + k]) / k), 1.0) / 32768)
+             for i in range(0, len(samples) - k + 1, k)]
+    return picture, sound
+
+
+def start_verdict(picture, sound):
+    """Rule 2 measured, from start_series' values: (what was measured, problems). The first second's busiest 0.2 s of
+    picture change against START_PIC_SHARE of the rest's START_PCT percentile; the loudest STEP_S of the first LINE_BY_S
+    against the rest's START_PCT percentile less START_SND_DB. Either one passes (motion by 1.0 s, or a line by 0.5 s)."""
+    first, line = round(MOTION_BY_S / STEP_S), round(LINE_BY_S / STEP_S)
+    pairs = [(picture[i] + picture[i + 1]) / 2 for i in range(len(picture) - 1)]
+    if len(pairs) <= first + 1 or len(sound) <= first + 1:
+        return {"note": "too short to measure"}, ["rule 2 (measured): the cut is too short to measure its first second "
+                                                  "against the rest"]
+    pic_first, pic_busy = max(pairs[:first - 1]), percentile(pairs[first:], START_PCT)
+    snd_first, snd_loud = max(sound[:line]), percentile(sound[first:], START_PCT)
+    pic_need, snd_need = START_PIC_SHARE * pic_busy, snd_loud - START_SND_DB
+    moves, heard = pic_first >= pic_need - 1e-9, snd_first >= snd_need - 1e-9
+    got = {"picture_first_s": round(pic_first, 2), "picture_rest_busy": round(pic_busy, 2),
+           "picture_need": round(pic_need, 2), "sound_first_db": round(snd_first, 1),
+           "sound_rest_loud_db": round(snd_loud, 1), "sound_need_db": round(snd_need, 1),
+           "alive_by": "picture and sound" if moves and heard else "picture" if moves else "sound" if heard else None}
+    if moves or heard:
+        return got, []
+    return got, [f"rule 2 (measured): the first second is still and quiet. Its picture changes {pic_first:.2f} "
+                 f"(at least {pic_need:.2f}: {START_PIC_SHARE:g}x the rest's busy level {pic_busy:.2f}), and its first "
+                 f"{LINE_BY_S:g} s of sound peaks at {snd_first:.1f} dB (at least {snd_need:.1f}: within "
+                 f"{START_SND_DB:g} dB of the rest's loud level {snd_loud:.1f}). Start later, where the action or the "
+                 "first line begins"]
+
+
+def measure_start(source, a, seconds):
+    """Rule 2 measured on source a..a+seconds: (what was measured, problems)."""
+    return start_verdict(*start_series(source, a, seconds))
+
+
+_MEASURE_START = measure_start           # render()'s own name for it: its argument measure_start says whether to run it
+
+
 # --- Safety (kept from the repo, rule 9) ---
 
 def load_index(stem):
@@ -741,25 +810,6 @@ def vision_checks(spec, idx, work, log=print):
     return out, flags, got
 
 
-def motion_flags(spec, stem):
-    """Rule 2 measured, as a flag: clip.py's picture change and loudness per half second over the first second (from the
-    bank's raw data, read only), against the recording's own middle."""
-    p = RAW / f"{stem}.json"
-    if not p.is_file():
-        return {"note": "no raw data for this recording"}, []
-    raw = json.loads(p.read_text(encoding="utf-8"))
-    a = float(spec["from_s"])
-    i0, i1 = int(a / clip.BUCKET), int((a + MOTION_BY_S) / clip.BUCKET) + 1
-    change = sorted(raw["change"])
-    median = change[len(change) // 2] if change else 0.0
-    first = max(raw["change"][i0:i1] or [0.0])
-    loud = max(raw["loud"][i0:i1] or [0.0])
-    got = {"change_first_s": round(first, 3), "change_median": round(median, 3), "loud_first_s": round(loud, 3)}
-    flags = [] if first >= median or loud > 0 else [f"FIRST SECOND: the picture changes less in the first second "
-                                                    f"({first:.2f}) than in half the recording ({median:.2f}); look at it"]
-    return got, flags
-
-
 def heard_flags(short):
     """Swearing heard in the finished Short (Whisper, .venv-tts): allowed in meme mode, always flagged."""
     import speech
@@ -778,10 +828,12 @@ def slug_of(spec):
     return re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")[:48] or "meme"
 
 
-def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=None, never=None):
+def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=None, never=None, measure_start=None):
     """The finished meme Short in out_dir: short.mp4, captions.txt, title.txt, meme.json. checks: "all" (the footage,
     the vision model and Whisper, as production runs it) or "none" (the made-up videos of the tests). source: the
-    video (default: the recording the index names). Returns the log; MemeError when a rule or a check stops it."""
+    video (default: the recording the index names). measure_start: rule 2 measured on the cut (default: with checks
+    "all"); a still, quiet first second stops the render before anything is encoded. Returns the log; MemeError when a
+    rule or a check stops it."""
     bad = problems(spec)
     if bad:
         raise MemeError("the spec breaks the rules, nothing was rendered:\n  " + "\n  ".join(bad))
@@ -793,19 +845,24 @@ def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=N
     flags, safety_log = [], {}
     if checks == "all":
         idx = idx or load_index(spec["recording"])
+        source = source or idx["video"]["path"]
+    if measure_start if measure_start is not None else checks == "all":
+        got, stop = _MEASURE_START(Path(source or spec["recording"]), float(spec["from_s"]),
+                                   float(spec["to_s"]) - float(spec["from_s"]))
+        safety_log["first_second"] = got
+        if stop:
+            raise MemeError("the cut fails rule 2 on the footage itself, nothing was rendered:\n  " + "\n  ".join(stop))
+    if checks == "all":
         used = used if used is not None else footage_short.load_used(SHORTS)
         never = never if never is not None else read_bank().get("never_used", [])
         stop = footage_problems(spec, idx, used, never)
         if not stop:
-            more, vflags, safety_log = vision_checks(spec, idx, work, log)
+            more, vflags, got = vision_checks(spec, idx, work, log)
+            safety_log.update(got)
             stop += more
             flags += vflags
         if stop:
             raise MemeError("the footage fails the kept checks, nothing was rendered:\n  " + "\n  ".join(stop))
-        source = source or idx["video"]["path"]
-        got, mflags = motion_flags(spec, idx["video"]["stem"])
-        safety_log["first_second"] = got
-        flags += mflags
     source = Path(source or spec["recording"])
     info = clip.probe(shutil.which("ffprobe"), source)
     sw, sh = proof.shown_size(info)

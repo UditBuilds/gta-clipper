@@ -25,8 +25,15 @@ frames are measured.
 
 1. **Length** (`length_problems`): a gag (physics or a sight gag) 7-12 s; dialogue that builds to one payoff 15-24 s; never over 30 s.
 2. **First second** (`first_second_problems`): motion or an impact by 1.0 s, or the first spoken line by 0.5 s; a gag's punchline at
-   0:02-0:06. The motion is declared (`motion_s`); the render also reads clip.py's picture change and loudness over the first second
-   from the bank's raw data and flags (never fails) a start that changes less than half the recording.
+   0:02-0:06. The motion is declared (`motion_s`) and, since Nov 28, also **measured on the cut itself** (`measure_start`,
+   `start_verdict`): every 0.1 s, the change between frames of a 96x54 gray copy and the sound's level. The first second passes
+   when its busiest 0.2 s moves at least 0.5x the rest of the cut's busy level (its 75th percentile), or when its first 0.5 s of
+   sound comes within 3 dB of the rest's loud level (75th percentile). A still, quiet start stops a production render before
+   anything is encoded ("rule 2 (measured)"). The old flag compared the first second with the bank's raw series, which are
+   clip.py's z-scores cut at 0 below the median, so their median was 0 (0.0 and 0.01 on the samples) and it could never fire.
+   On the owner's footage: sample 1 moves 20.24 (needs 4.20) and is loud; sample 2's picture is still (2.61, needs 4.20) but its
+   line at 0.4 s makes it -26.3 dB (needs -30.3); the bear recording at 4:30-4:40, where Jason stands still by the truck for
+   2.5 s, is 0.96 (needs 4.47) and -32.1 dB (needs -23.6), and is refused.
 3. **Caption** (`caption_problems`, `caption_rule_problems`, `ass_document`, `measure_caption`): exactly 3 options with one starred;
    2-6 words, up to 10 only for "<Subject> tried <X> and this happens..."; never "Watch the X" or "Can you X?"; swears written
    censored (`censor()`: fkng, sht, btch); no trailer names (only Jason and Lucia) and no story words (truth.py's lists); one swap at
