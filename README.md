@@ -1230,7 +1230,7 @@ is that kind of Short, as a separate mode: /launch and the narrated Shorts don't
 .\.venv-tts\Scripts\python.exe meme_short.py hear "<recording>" 196 228     # what is said in a window (Whisper on that window only)
 .\.venv\Scripts\python.exe meme_short.py check examples\meme\2-free-the-bear.json
 .\.venv-tts\Scripts\python.exe meme_short.py render examples\meme\2-free-the-bear.json --out C:\AI\gta\shorts\meme-<date>\2-free-the-bear
-.\.venv\Scripts\python.exe memetest.py                                     # 40 checks, about 30 s
+.\.venv\Scripts\python.exe memetest.py                                     # 42 checks, about 30 s
 ```
 
 - **Marked mode (Nov 28)**: the finder is not trusted to judge "funny" (sample 1 was picked from the swearing in its dialogue),
@@ -1279,9 +1279,9 @@ The rules with their functions, the Nov 27 candidates and the samples are in [do
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
 | PR 38 with PR 37 and both reviews: `--full` / `--quick` | 651 / 572 | 9.5 / 2.2 min |
 | PR 39 on Nov 27 (meme Shorts): `--full` / `--quick` / `--ci` on GitHub | 677 / 598 / 582 | 9.7 / 2.5 / 3.9 min |
-| now (PR 39 with marked mode, Nov 28): `--full` | 691 | 9.8 min |
-| now: `--quick` | 611 | 2.5 min |
-| now: `--ci`, on GitHub's Windows machine | 595 (as GitHub ran it on 5f0b835: memetest 39/39) | 3.9 min |
+| now (PR 39 with marked mode, Nov 28): `--full` | 693 | 9.9 min |
+| now: `--quick` | 613 | 2.5 min |
+| now: `--ci`, on GitHub's Windows machine | 597 (as GitHub ran it on 6a85d70: memetest 41/41) | 3.9 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|
@@ -1300,7 +1300,7 @@ The rules with their functions, the Nov 27 candidates and the samples are in [do
 | varietytest, vlmtest, spreadtest, evaltest | `.venv` | 87 | 87 | 87 | 2 s | 2 s |
 | runnertest | `.venv` | 11 | 11 | 11 | - | 0.5 s |
 | banktest (PR 32, 35, 37, 38) | `.venv` | 69 | 69 | 67 | - | 13 s |
-| memetest (PR 39) | `.venv` | 40 | 39 | 39 | - | 27 s |
+| memetest (PR 39) | `.venv` | 42 | 41 | 41 | - | 31 s |
 
 Every check before PR 31 and PR 32 is still there and asserts the same; how each tier did last is in `docs/test-timings-after.md`
 (the runner writes it), the start in `docs/test-timings-before.md`.

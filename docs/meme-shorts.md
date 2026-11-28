@@ -15,7 +15,7 @@ gave the rules below.
 .\.venv-tts\Scripts\python.exe meme_short.py hear "Grand Theft Auto VI_20261121223830" 196 228   # Whisper on that window only
 .\.venv\Scripts\python.exe meme_short.py check spec.json                                # rules 1-8, renders nothing
 .\.venv-tts\Scripts\python.exe meme_short.py render spec.json --out C:\AI\gta\shorts\meme-<date>\<n>-<slug>
-.\.venv\Scripts\python.exe memetest.py                                                  # 40 checks, about 30 s
+.\.venv\Scripts\python.exe memetest.py                                                  # 42 checks, about 30 s
 ```
 
 ## Marked mode (Nov 28): you mark the moments, the pipeline only edits
