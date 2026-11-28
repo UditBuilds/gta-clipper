@@ -552,6 +552,22 @@ def a_replay_jumps_back_and_plays_at_half_speed():
 
 
 @check
+def a_length_that_is_not_whole_frames_keeps_every_frame():
+    """A cut whose length rounds UP to whole frames (9.16 s = 274.8 frames -> 275) keeps all 275: the sound is cut to the
+    same whole frames as the picture, so the final mux's -shortest never ends on the sound first and drops the last
+    frames the B-frames hold back (marked mode's first unindexed run lost 4 of 335 and failed rule 1)"""
+    tmp = tempfile.mkdtemp(prefix="memetest_")
+    src = made_up(tmp)
+    s = spec(recording=str(src), from_s=1.0, to_s=10.16, motion_s=1.2, punchline_s=5.0, reaction_end_s=9.0)
+    try:
+        log = render(tmp, s, source=src)
+    except meme_short.MemeError as e:
+        return False, str(e)
+    frames = int(meme_short.ex.stream_of(meme_short.ex.probe(log["short"]), "video").get("nb_frames") or 0)
+    return frames == 275, (frames, log["measured"])
+
+
+@check
 def meme_mode_writes_its_own_log_and_nothing_launch_reads():
     """The render writes short.mp4, captions.txt (3 options, the starred one marked), title.txt and meme.json, and no
     render.json (launch.py reads every render.json under the shorts folder)"""
@@ -822,6 +838,41 @@ def a_marked_run_makes_each_moment_once_and_lists_every_one_it_could_not():
             and abs(renders_first[0][1] - (50.0 - 3.0)) <= 3.1 and "no recording covers" in page
             and "nonsense line" in page and "same moment" in page and page.count("short.mp4") >= 2
             and first["rendered"] == 2 and second["rendered"] == 0), (first, second, renders_first, page[:1500])
+
+
+class FailOnce(Stand):
+    """Stand-ins whose first render writes a short.mp4 and then fails a check (as a real render can, after the mux)."""
+
+    def render(self, spec, folder, source, idx):
+        if not self.renders:
+            self.renders.append(None)
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            (Path(folder) / "short.mp4").write_bytes(b"bad")
+            raise meme_short.MemeError("rule 1: the file is 9.033 s; the spec says 9.16 s")
+        return super().render(spec, folder, source, idx)
+
+
+@check
+def a_failed_moment_is_tried_again_in_its_own_folder_and_its_bad_file_renamed():
+    """A render that fails after writing short.mp4 leaves it renamed short.FAILED.mp4 (never uploaded by mistake); the
+    next run tries the moment again in the same folder, not a new numbered one"""
+    tmp = Path(tempfile.mkdtemp(prefix="memetest_"))
+    paths = meme_marked.Paths(marks=tmp / "marks.txt", clips=tmp / "marked", record=tmp / "marked" / "record.json",
+                              input=tmp / "input", out=tmp / "shorts")
+    paths.clips.mkdir()
+    name = "Grand Theft Auto VI_20261128120000.webm"
+    (paths.clips / name).write_bytes(b"x")
+    tools = FailOnce({name: 60.0}, {name: 50.0})
+    now = datetime(2026, 11, 28, 14, 0)
+    first = meme_marked.run(paths, now, tools, log=lambda *a: None)
+    day = paths.out / "marked-2026-11-28"
+    after_first = sorted(p.name for p in day.iterdir() if p.is_dir())
+    failed_file = [p.name for p in (day / after_first[0]).iterdir()] if after_first else []
+    second = meme_marked.run(paths, now, tools, log=lambda *a: None)
+    after_second = sorted(p.name for p in day.iterdir() if p.is_dir())
+    return (first["failed"] == 1 and second["rendered"] == 1 and after_first == after_second and len(after_first) == 1
+            and "short.FAILED.mp4" in failed_file and "short.mp4" not in failed_file), (first, second, after_first,
+                                                                                       after_second, failed_file)
 
 
 def main():

@@ -116,7 +116,7 @@ def parse_marks(text):
             continue
         if ampm:
             h = h % 12 + (12 if ampm == "p" else 0)
-        base = f"{day.isoformat()} {line}" if day else line
+        base = line                # not the date line above it: adding one later must not make old lines new
         seen[base] = seen.get(base, 0) + 1
         marks.append({"key": base + (f" #{seen[base]}" if seen[base] > 1 else ""), "line": line, "line_no": n,
                       "date": day, "h": h, "m": mi, "s": s, "precision": "second" if m.group(3) else "minute",
@@ -606,7 +606,9 @@ def run(paths, now, tools, log=print):
                 "what": (it["answer"] or {}).get("seen", ""), "why": f"marked by the owner: {it['source']}",
                 "notes": notes + plan.get("left_out", []) + ([it["note"]] if it.get("note") else [])}
         spec["slug"] = meme_short.slug_of(spec)
-        folder = day_dir / f"{next_number(day_dir)}-{spec['slug']}"
+        before = Path((entry(rec, it["key"]) or {}).get("folder") or "")
+        folder = (before if before.name and before.parent == day_dir and before.is_dir()     # a retry: its own folder
+                  else day_dir / f"{next_number(day_dir)}-{spec['slug']}")
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "spec.json").write_text(json.dumps(spec, indent=1, ensure_ascii=False), encoding="utf-8")
         bad = meme_short.problems(spec)
@@ -615,8 +617,12 @@ def run(paths, now, tools, log=print):
             continue
         try:
             got = tools.render(spec, folder, it["path"], tools.index_of(it["path"]))
-        except (meme_short.MemeError, safety.SafetyError, meme_short.ex.ScriptError, subprocess.CalledProcessError) as e:
-            done(it["key"], "failed", reason=str(e), folder=str(folder), captions=caps, star=star, title=title, **base)
+        except (meme_short.MemeError, safety.SafetyError, meme_short.ex.ScriptError, subprocess.CalledProcessError,
+                OSError, ValueError, KeyError) as e:      # one moment's surprise is listed, not the end of the run
+            if (folder / "short.mp4").exists():           # a render can fail a check after writing it: never upload that
+                (folder / "short.mp4").replace(folder / "short.FAILED.mp4")
+            why = str(e) if isinstance(e, (meme_short.MemeError, safety.SafetyError)) else f"{type(e).__name__}: {e}"
+            done(it["key"], "failed", reason=why, folder=str(folder), captions=caps, star=star, title=title, **base)
             continue
         done(it["key"], "rendered", folder=str(folder), short=got["short"], captions=caps, star=star, title=title,
              seen=spec["what"], notes=spec["notes"], flags=got.get("flags", []), from_s=spec["from_s"],

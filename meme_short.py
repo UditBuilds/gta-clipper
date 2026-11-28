@@ -539,7 +539,9 @@ def graph(spec, sw, sh, fix=""):
     """ffmpeg's filter graph: input 0 is the main part (from from_s), input 1 the replay's footage. Out: [v] and [a]."""
     tl = timeline(spec)
     main_n = frames(tl["main_s"])
-    parts, audio = [], [f"[0:a]aresample={ex.RATE},atrim=end_sample={round(tl['main_s'] * ex.RATE)},asetpts=N/SR/TB[a0]"]
+    # The sound is cut to the same whole frames as the picture: cut to the seconds, it ends first whenever the length
+    # rounds up to a frame, and the final mux's -shortest then drops the last frames the B-frames hold back.
+    parts, audio = [], [f"[0:a]aresample={ex.RATE},atrim=end_sample={round(main_n / FPS * ex.RATE)},asetpts=N/SR/TB[a0]"]
     p = punch_of(spec)
     if p:
         p0 = frames(float(p["at_s"]) - float(spec["from_s"]))
@@ -561,7 +563,7 @@ def graph(spec, sw, sh, fix=""):
                      f"{picture_filter(spec, sw, sh, 1.0, fix)}[vr]")
         parts.append("[vr]")
         audio.append(f"[1:a]aresample={ex.RATE},asetrate={ex.RATE * REPLAY_SPEED:g},aresample={ex.RATE},"
-                     f"atrim=end_sample={round(rep['for_s'] * ex.RATE)},asetpts=N/SR/TB[a1]")
+                     f"atrim=end_sample={round(n / FPS * ex.RATE)},asetpts=N/SR/TB[a1]")
         audio.append("[a0][a1]concat=n=2:v=0:a=1[a]")
     else:
         audio[0] = audio[0].replace("[a0]", "[a]")
@@ -887,7 +889,9 @@ def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=N
             raise MemeError("the footage fails the kept checks, nothing was rendered:\n  " + "\n  ".join(stop))
         if idx.get("segments") is None:
             flags.append("NOT INDEXED: no index labels (cutscene, menu, phone, loading) to check; the vision model's "
-                         "safety question looked at every second instead")
+                         "safety question looked at every second instead. The bank's never-shown rule could not run "
+                         "in full (a child near violence, a body with blood: they read the index's lines), so look "
+                         "for a child or a body yourself")
     source = Path(source or spec["recording"])
     info = clip.probe(shutil.which("ffprobe"), source)
     sw, sh = proof.shown_size(info)

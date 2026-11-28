@@ -33,12 +33,14 @@ The menu names below were written from memory, not checked on a console: each st
    **the last 30 seconds** (1 minute is fine too). **(check on your PS5)** The clip ends just after the moment; the tool looks for
    the moment in the clip's last 25 s.
 2. After playing: open the **Media Gallery**, select the saved clips, **... > Copy to USB drive**. **(check on your PS5)**
-3. On the laptop, copy **only those clips** (not full recordings) into `C:\AI\gta\marked\`. The PS5 writes them to
-   `PS5\CREATE\Video Clips\<game>` on the stick **(check on your PS5)**:
+3. On the laptop, copy **only those clips** into `C:\AI\gta\marked\`. Full recordings sit in the same folder on the stick
+   (`PS5\CREATE\Video Clips\<game>` **(check on your PS5)**) with the same kind of name, so the easy way is a stick with only
+   the saved clips on it (select just them in step 2), then:
    ```powershell
-   Copy-Item "E:\PS5\CREATE\Video Clips\*\Grand Theft Auto VI_20261128*.webm" C:\AI\gta\marked\    # E: = the stick; that day's clips
+   Copy-Item "E:\PS5\CREATE\Video Clips\*\*.webm" C:\AI\gta\marked\     # E: = the stick, with only the saved clips on it
    ```
-   Full recordings still go to `C:\AI\gta\input` as before. A full recording put in `marked` would only give a Short of its last 25 s.
+   Full recordings still go to `C:\AI\gta\input` as before. A full recording put in `marked` would give a junk Short of its last
+   25 s: move it to `input`.
 
 ### Way 2: write the time in `C:\AI\gta\marks.txt` (when you are recording anyway)
 
@@ -86,13 +88,18 @@ One line a moment: the clock time (IST, as the PS5 or your phone shows it) and a
    ones and flagged; the first kept one is starred. The model leaves memory before anything else runs.
 6. **Renders it** with every kept check (`meme_short.render`: rule 2 measured, the index's labels when the file is indexed, used
    or never-shown footage, the safety question every second, blood in the first 7 s, the sound, Whisper). A file with no index (a
-   saved clip, a recording not indexed yet) is checked by the safety question alone and flagged `NOT INDEXED`. Nothing is indexed.
+   saved clip, a recording not indexed yet) is checked by the safety question alone and flagged `NOT INDEXED`: the bank's
+   never-shown rule then can't run in full (a child near violence and a body with blood read the index's lines), so the flag
+   asks you to look for them. Blood in the first 7 s still blocks (the safety question twice a second). Nothing is indexed.
 7. **Lists everything** in `C:\AI\gta\shorts\marked-<date>\picks.md`: each Short with where it came from, the punch, what was seen
    and heard, the 3 captions (starred), the title, notes and flags, and the line to re-render it after you edit its `spec.json`;
    then every moment not made, with the reason.
 
 The record `C:\AI\gta\marked\marked_record.json` keeps what is done: a moment that was made is never made again (a clip by its
-name and size, a line by its text and day); one that failed or is waiting is tried again by the next run. If the record can't be
+name and size, a line by its text: the same text twice is two moments, the second keyed "#2"; a date line added above old lines
+later doesn't make them new, as their times were kept the first time); one that failed or is waiting is tried again by the next
+run, in the same folder (a render that failed a check after writing its file leaves it as `short.FAILED.mp4`, so it is
+never uploaded by mistake). Editing a line's words makes it a new moment. If the record can't be
 read, the run stops with an ERROR and changes nothing (never read as empty: that would make everything again). Marked mode
 writes nothing to `_used_footage.json`, `posted_topics.json`, the bank or the index.
 
@@ -127,7 +134,9 @@ frames are measured.
    number: a seek by time landed a frame off and missed the last one).
 4. **Layout** (`layout_problems`, `geometry`): `full` (a 9:16 crop centred on the subject's `focus`, kept inside the picture) or
    `letterbox` (the 16:9 picture 1080x608 at y 656, black bars). Anything else, a blurred background included, is refused.
-5. **Sound** (`audio_problems`, `key_problems`, `mix_sound`): no voice, script or narration key is accepted; the game's sound is brought
+5. **Sound** (`audio_problems`, `key_problems`, `mix_sound`; since Nov 28 the game's sound is cut to the same whole frames as
+   the picture: cut to the seconds, it ended first whenever a length rounded up to a frame, and the final mux's `-shortest`
+   dropped the last frames the B-frames held back, 4 of 335 on marked mode's first saved clip): no voice, script or narration key is accepted; the game's sound is brought
    to -14 LUFS by explainer's `normalise` and through `safety.guard_true_peak`; the measured file must be within 1 LU and under
    -1 dBTP. An optional music bed (off unless `"music"` names a file in `C:\AI\gta\music`) sits 12 dB under the game between lines and
    20 dB under it while a heard line plays, with 0.15 s ramps.
