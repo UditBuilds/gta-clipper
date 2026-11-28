@@ -1279,9 +1279,9 @@ The rules with their functions, the Nov 27 candidates and the samples are in [do
 | PR 31: `--full` / `--quick` / `--ci` | 536 / 460 / 446 | 8.2 / 1.7 / 1.6-2.6 min |
 | PR 38 with PR 37 and both reviews: `--full` / `--quick` | 651 / 572 | 9.5 / 2.2 min |
 | PR 39 on Nov 27 (meme Shorts): `--full` / `--quick` / `--ci` on GitHub | 677 / 598 / 582 | 9.7 / 2.5 / 3.9 min |
-| now (PR 39 with marked mode, Nov 28): `--full` | 693 | 9.9 min |
-| now: `--quick` | 613 | 2.5 min |
-| now: `--ci`, on GitHub's Windows machine | 597 (as GitHub ran it on 6a85d70: memetest 41/41) | 3.9 min |
+| now (review day, Nov 28): `--full` | 695 | 10.2 min |
+| now: `--quick` | 615 | 2.6 min |
+| now: `--ci`, on GitHub's Windows machine | not run on Nov 28 (597 as GitHub ran it on 6a85d70, before memetest's 2 new checks) | 3.9 min |
 
 | suite | interpreter | full | quick | ci | before | now (full) |
 |---|---|---:|---:|---:|---:|---:|

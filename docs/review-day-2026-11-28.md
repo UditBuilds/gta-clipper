@@ -11,6 +11,10 @@ let the owner make the final pick (the finder can't judge "funny": it picked a G
 .\.venv\Scripts\python.exe day_scan.py page              # review\<day>\index.html from judged.json (5.5 min, previews)
 ```
 
+`hear`, `look` (the local vision model on each spike) and `sheets` are in the file but were **not run on Nov 28**: the spikes
+were weak, so the frames were looked at by eye (overview sheets, then strips round each candidate) and the transcripts gave the
+dialogue. The vision model ran only inside the renders (the kept safety question).
+
 `judged.json` is written by hand after looking at the frames: what happens, the lines, a type, a rank, flags. The page shows 5
 thumbnails and a 480p preview with the game's sound for each candidate (best guess first, at most 20) and each robbery step.
 
