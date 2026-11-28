@@ -10,12 +10,91 @@ views a Short with real game audio, one caption and almost no editing; the owner
 gave the rules below.
 
 ```powershell
-.\.venv\Scripts\python.exe meme_short.py find --top 15                                  # funny candidates (index + bank, read only)
+.\.venv-tts\Scripts\python.exe meme_short.py marked                                     # YOUR marked moments -> Shorts (below)
+.\.venv\Scripts\python.exe meme_short.py find --top 15                                  # suggestions only (index + bank, read only)
 .\.venv-tts\Scripts\python.exe meme_short.py hear "Grand Theft Auto VI_20261121223830" 196 228   # Whisper on that window only
 .\.venv\Scripts\python.exe meme_short.py check spec.json                                # rules 1-8, renders nothing
 .\.venv-tts\Scripts\python.exe meme_short.py render spec.json --out C:\AI\gta\shorts\meme-<date>\<n>-<slug>
-.\.venv\Scripts\python.exe memetest.py                                                  # 26 checks, about 20 s
+.\.venv\Scripts\python.exe memetest.py                                                  # 39 checks, about 30 s
 ```
+
+## Marked mode (Nov 28): you mark the moments, the pipeline only edits
+
+Sample 1 (the GPS crash) was picked by the finder from the swearing in its dialogue, not from anything funny on screen: you
+stand, get hit from behind, a guy gets out, it ends. So the finder is not trusted to judge "funny" any more; it stays as a
+suggestion list. **You** mark the moments while you play, two ways, and `meme_short.py marked` cuts, captions and renders each new
+one.
+
+### Way 1: save a clip on the PS5 (best: the exact moment)
+
+The menu names below were written from memory, not checked on a console: each step says **(check on your PS5)**.
+
+1. Right after the funny moment, press the **Create** button, choose **Save recent gameplay**, then **Save short video clip** and
+   **the last 30 seconds** (1 minute is fine too). **(check on your PS5)** The clip ends just after the moment; the tool looks for
+   the moment in the clip's last 25 s.
+2. After playing: open the **Media Gallery**, select the saved clips, **... > Copy to USB drive**. **(check on your PS5)**
+3. On the laptop, copy **only those clips** (not full recordings) into `C:\AI\gta\marked\`. The PS5 writes them to
+   `PS5\CREATE\Video Clips\<game>` on the stick **(check on your PS5)**:
+   ```powershell
+   Copy-Item "E:\PS5\CREATE\Video Clips\*\Grand Theft Auto VI_20261128*.webm" C:\AI\gta\marked\    # E: = the stick; that day's clips
+   ```
+   Full recordings still go to `C:\AI\gta\input` as before. A full recording put in `marked` would only give a Short of its last 25 s.
+
+### Way 2: write the time in `C:\AI\gta\marks.txt` (when you are recording anyway)
+
+One line a moment: the clock time (IST, as the PS5 or your phone shows it) and a few words for yourself. With seconds if you can.
+
+```
+2026-11-28
+11:47 bear attacks protesters
+23:05:30 car flips off the bridge
+7:05 pm truck jump into the pool
+```
+
+- **The window** is 20 s before to 5 s after the time (you note it a little late). A time with seconds gets exactly that. A time
+  to the minute (`11:47`) covers its whole minute: 20 s before 11:47:00 to 5 s after 11:47:59 (my call: a minute mark anchored at
+  :00 would miss a moment at :40 and cut some other spike instead). The biggest jump of sound and picture in it is taken as the
+  punch, so **seconds make it exact**.
+- **The day**: a line with only a date (`2026-11-28`) dates the lines under it. Without one, a time is the latest moment with that
+  clock time before marks.txt was last saved (so write the lines on the day, or put the date line on top). It is worked out once,
+  the first time the line is seen, and kept.
+- **am / pm**: `7:05 pm` is 19:05. `11:47` with neither is read as 11:47 first and, when no recording covers that, as 23:47 (the
+  pick says so).
+- **The recording** must be in `C:\AI\gta\input`. A PS5 file name is the time the recording **ended** (when it was saved), in IST:
+  checked on your files on Nov 28. Read as the start, three back-to-back pairs (`_014828`/`_015444`, `_022442`/`_023422`,
+  `_035639`/`_040546`) would overlap by 450-600 s, and their frames at the overlap differ; read as the end, every gap between
+  recordings is 0 s or more (`_134026` ends on the pause menu and `_135610` starts on the same menu 5 s later). The `.mp4`'s own
+  creation time (19:20:08 UTC) is the 00:50:08 in its name, so the names are IST. Recording seconds = the mark - (name time - length).
+- A line it can't read, a time no recording covers yet (copy the recording and run again) and a time that is the same moment as a
+  saved clip are **listed with the reason**, never skipped silently.
+
+### What `meme_short.py marked` does with each new clip or line
+
+1. **Places it**: the clip's last 25 s, or the recording and window above.
+2. **Finds the punch**: every 0.1 s, the picture's change between frames and the sound's level (the same measurements as rule 2),
+   each against its own usual level there (robust z-scores, added); the biggest jump in the window, at its start.
+3. **Hears the lines** round it (Whisper, 8 s before to 11 s after) and takes the last line that starts within 1 s before to 4 s
+   after the punch and still fits (a line too long for a 12 s gag is left out, and the pick says so).
+4. **Cuts it** to the rules: a gag of 7-12 s, the punch 2-6 s in (3 s when there is a choice), the hard cut 0.5-1.5 s after that
+   last line (1.0 s when it fits), and a start whose first second passes rule 2 measured. When no plain cut starts alive (with no
+   line after the punch, rules 1 and 7 put it 5.5-6 s in, behind a long lead-in), it uses rule 6's one replay: the main part stops
+   just after the punch, then the punch again from 1 s before it for 3 s at 0.5x. Letterbox, so nothing is cropped away (change
+   `layout` and `focus` in the spec for full-bleed).
+5. **Captions it from what is seen**: the vision model looks at 4 frames round the punch (prompt `meme_caption_v1`, reason in
+   `prompts/LOG.md`), with the lines heard given censored as context only, and writes what happens, 3 captions and a title. A
+   caption with a swear word (written censored or not) or that breaks rule 3 is dropped; fewer than 3 kept are filled with stock
+   ones and flagged; the first kept one is starred. The model leaves memory before anything else runs.
+6. **Renders it** with every kept check (`meme_short.render`: rule 2 measured, the index's labels when the file is indexed, used
+   or never-shown footage, the safety question every second, blood in the first 7 s, the sound, Whisper). A file with no index (a
+   saved clip, a recording not indexed yet) is checked by the safety question alone and flagged `NOT INDEXED`. Nothing is indexed.
+7. **Lists everything** in `C:\AI\gta\shorts\marked-<date>\picks.md`: each Short with where it came from, the punch, what was seen
+   and heard, the 3 captions (starred), the title, notes and flags, and the line to re-render it after you edit its `spec.json`;
+   then every moment not made, with the reason.
+
+The record `C:\AI\gta\marked\marked_record.json` keeps what is done: a moment that was made is never made again (a clip by its
+name and size, a line by its text and day); one that failed or is waiting is tried again by the next run. If the record can't be
+read, the run stops with an ERROR and changes nothing (never read as empty: that would make everything again). Marked mode
+writes nothing to `_used_footage.json`, `posted_topics.json`, the bank or the index.
 
 ## The rules, and where they are checked
 
@@ -27,13 +106,17 @@ frames are measured.
 2. **First second** (`first_second_problems`): motion or an impact by 1.0 s, or the first spoken line by 0.5 s; a gag's punchline at
    0:02-0:06. The motion is declared (`motion_s`) and, since Nov 28, also **measured on the cut itself** (`measure_start`,
    `start_verdict`): every 0.1 s, the change between frames of a 96x54 gray copy and the sound's level. The first second passes
-   when its busiest 0.2 s moves at least 0.5x the rest of the cut's busy level (its 75th percentile), or when its first 0.5 s of
-   sound comes within 3 dB of the rest's loud level (75th percentile). A still, quiet start stops a production render before
-   anything is encoded ("rule 2 (measured)"). The old flag compared the first second with the bank's raw series, which are
-   clip.py's z-scores cut at 0 below the median, so their median was 0 (0.0 and 0.01 on the samples) and it could never fire.
-   On the owner's footage: sample 1 moves 20.24 (needs 4.20) and is loud; sample 2's picture is still (2.61, needs 4.20) but its
-   line at 0.4 s makes it -26.3 dB (needs -30.3); the bear recording at 4:30-4:40, where Jason stands still by the truck for
-   2.5 s, is 0.96 (needs 4.47) and -32.1 dB (needs -23.6), and is refused.
+   when its busiest 0.2 s moves at least 0.5x the busy level of the rest of the Short (its 90th percentile; a replay counts,
+   slowed), or when its first 0.5 s of sound comes within 3 dB of the rest's loud level (90th percentile). A still, quiet start
+   stops a production render before anything is encoded ("rule 2 (measured)"). The old flag compared the first second with the
+   bank's raw series, which are clip.py's z-scores cut at 0 below the median, so their median was 0 (0.0 and 0.01 on the
+   samples) and it could never fire. The 90th percentile, not the 75th: in a 7 s gag the punch fills less than a quarter of the
+   rest, so the 75th sat on the lead-in and a still start looked as busy as the rest. On the owner's footage: sample 1 changes
+   20.24 (needs 6.05); sample 2's picture is still (2.61, needs 8.38) but its line at 0.4 s makes it -26.3 dB (needs -27.9); the
+   bear recording at 4:30-4:40, where Jason stands still by the truck for 2.5 s, is 0.96 (needs 6.32) and -32.1 dB (needs
+   -20.5), and is refused. Of eight other 10 s cuts where clip.py's loudness and picture change are both under the recording's
+   median for 1.5 s, three are refused (a bar talk with little movement, looked at; two stretches of `_051818`, not looked
+   at) and five pass.
 3. **Caption** (`caption_problems`, `caption_rule_problems`, `ass_document`, `measure_caption`): exactly 3 options with one starred;
    2-6 words, up to 10 only for "<Subject> tried <X> and this happens..."; never "Watch the X" or "Can you X?"; swears written
    censored (`censor()`: fkng, sht, btch); no trailer names (only Jason and Lucia) and no story words (truth.py's lists); one swap at

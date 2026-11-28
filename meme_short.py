@@ -76,9 +76,11 @@ MOTION_BY_S, LINE_BY_S, PUNCH_AT = 1.0, 0.5, (2.0, 6.0)
 # Rule 2 measured on the cut itself (measure_start), every STEP_S: the picture's change between frames (a 96x54 gray
 # copy) and the sound's level. The first second passes when its busiest 0.2 s moves at least START_PIC_SHARE of the
 # rest's busy level (its START_PCT percentile), or when its first LINE_BY_S of sound comes within START_SND_DB of the
-# rest's loud level. Set on the owner's footage (Nov 28): sample 1 moves 2.41x, sample 2 is +1.0 dB (its line at
-# 0.4 s), Jason standing still by the bear truck at 4:30 is 0.11x and -11.5 dB.
-STEP_S, START_PCT, START_PIC_SHARE, START_SND_DB = 0.1, 0.75, 0.5, 3.0
+# rest's loud level. The rest is the rest of the Short (a replay included), and its busy level is the 90th percentile:
+# the 75th sat on the lead-in of a 7 s gag, whose punch fills less than a quarter of it. Set on the owner's footage
+# (Nov 28): sample 1's picture changes 20.24 (needs 6.05); sample 2's picture is still but its line at 0.4 s is -26.3 dB
+# (needs -27.9); Jason standing still by the bear truck at 4:30 is 0.96 (needs 6.32) and -32.1 dB (needs -20.5).
+STEP_S, START_PCT, START_PIC_SHARE, START_SND_DB = 0.1, 0.9, 0.5, 3.0
 MEASURE_W, MEASURE_H, MEASURE_FPS, MEASURE_RATE = 96, 54, 30, 8000
 # Rule 3: the caption
 WORDS, SETUP_WORDS, SWAP_WORDS = (2, 6), 10, (1, 6)
@@ -714,11 +716,14 @@ def start_verdict(picture, sound):
                                                   "against the rest"]
     pic_first, pic_busy = max(pairs[:first - 1]), percentile(pairs[first:], START_PCT)
     snd_first, snd_loud = max(sound[:line]), percentile(sound[first:], START_PCT)
+    pic_at = (pairs[:first - 1].index(pic_first) + 1) * STEP_S        # the middle of the busiest 0.2 s
+    snd_at = sound[:line].index(snd_first) * STEP_S
     pic_need, snd_need = START_PIC_SHARE * pic_busy, snd_loud - START_SND_DB
     moves, heard = pic_first >= pic_need - 1e-9, snd_first >= snd_need - 1e-9
     got = {"picture_first_s": round(pic_first, 2), "picture_rest_busy": round(pic_busy, 2),
            "picture_need": round(pic_need, 2), "sound_first_db": round(snd_first, 1),
            "sound_rest_loud_db": round(snd_loud, 1), "sound_need_db": round(snd_need, 1),
+           "picture_at_s": round(pic_at, 2), "sound_at_s": round(snd_at, 2),
            "alive_by": "picture and sound" if moves and heard else "picture" if moves else "sound" if heard else None}
     if moves or heard:
         return got, []
@@ -734,7 +739,23 @@ def measure_start(source, a, seconds):
     return start_verdict(*start_series(source, a, seconds))
 
 
-_MEASURE_START = measure_start           # render()'s own name for it: its argument measure_start says whether to run it
+def with_replay(picture, sound, replay_picture, replay_sound):
+    """The Short's measurements when a replay follows the main part: the replayed footage's values each last
+    1 / REPLAY_SPEED as long (rule 2 compares the first second with the rest of the Short, the replay included)."""
+    k = round(1 / REPLAY_SPEED)
+    return (list(picture) + [v for v in replay_picture for _ in range(k)],
+            list(sound) + [v for v in replay_sound for _ in range(k)])
+
+
+def short_series(source, spec):
+    """(picture, sound) of the Short a spec makes, every STEP_S: the main part, then its replay slowed."""
+    a, b = float(spec["from_s"]), float(spec["to_s"])
+    picture, sound = start_series(source, a, b - a)
+    rep = replay_of(spec)
+    if rep:
+        r0 = float(spec["punchline_s"]) - float(rep["back_s"])
+        picture, sound = with_replay(picture, sound, *start_series(source, r0, float(rep["for_s"]) * REPLAY_SPEED))
+    return picture, sound
 
 
 # --- Safety (kept from the repo, rule 9) ---
@@ -770,7 +791,9 @@ def footage_problems(spec, idx, used, never):
     b = max(float(spec["to_s"]), float(spec["punchline_s"]) - float(rep["back_s"]) + float(rep["for_s"]) * REPLAY_SPEED
             if rep else 0.0)
     out = []
-    if not footage_short.clean(idx, a, b):
+    if idx.get("segments") is None:
+        pass                    # not indexed (marked mode: a saved clip, a new recording): the safety question alone
+    elif not footage_short.clean(idx, a, b):
         out.append(f"rule 9: {library.hms(a)}-{library.hms(b)} is not clean footage in the index (a cutscene, menu, phone "
                    "call or loading screen is in it or within 0.5 s)")
     hit = overlap(stem, a, b, used_spans(used))
@@ -847,8 +870,7 @@ def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=N
         idx = idx or load_index(spec["recording"])
         source = source or idx["video"]["path"]
     if measure_start if measure_start is not None else checks == "all":
-        got, stop = _MEASURE_START(Path(source or spec["recording"]), float(spec["from_s"]),
-                                   float(spec["to_s"]) - float(spec["from_s"]))
+        got, stop = start_verdict(*short_series(Path(source or spec["recording"]), spec))
         safety_log["first_second"] = got
         if stop:
             raise MemeError("the cut fails rule 2 on the footage itself, nothing was rendered:\n  " + "\n  ".join(stop))
@@ -863,6 +885,9 @@ def render(spec, out_dir, source=None, checks="all", log=print, idx=None, used=N
             flags += vflags
         if stop:
             raise MemeError("the footage fails the kept checks, nothing was rendered:\n  " + "\n  ".join(stop))
+        if idx.get("segments") is None:
+            flags.append("NOT INDEXED: no index labels (cutscene, menu, phone, loading) to check; the vision model's "
+                         "safety question looked at every second instead")
     source = Path(source or spec["recording"])
     info = clip.probe(shutil.which("ffprobe"), source)
     sw, sh = proof.shown_size(info)
@@ -1014,8 +1039,19 @@ def main():
     r = sub.add_parser("render", help="check and render one meme Short")
     r.add_argument("spec")
     r.add_argument("--out", required=True, help="the Short's folder")
+    m = sub.add_parser("marked", help="the owner's marked moments (saved clips, marks.txt): cut, caption, render each "
+                                      "new one (.venv-tts)")
+    m.add_argument("--marks", help="default C:\\AI\\gta\\marks.txt")
+    m.add_argument("--clips", help="default C:\\AI\\gta\\marked")
+    m.add_argument("--input", help="the full recordings, default C:\\AI\\gta\\input")
+    m.add_argument("--out", help="default C:\\AI\\gta\\shorts (a marked-<date> folder in it)")
     args = ap.parse_args()
     try:
+        if args.cmd == "marked":
+            import meme_marked
+            heavy.main_guard("meme_short.py marked")
+            meme_marked.main(args)
+            return
         if args.cmd == "find":
             got = find_candidates(gta6_indexes(), footage_short.load_used(SHORTS), read_bank().get("never_used", []))
             for n, cand in enumerate(got[:args.top], 1):
@@ -1044,7 +1080,7 @@ def main():
               f"{got['measured']['true_peak_db']} dBTP")
         for flag in got["flags"]:
             print(f"  FLAG {flag}")
-    except (MemeError, index.StateError, safety.SafetyError, ex.ScriptError) as e:
+    except (MemeError, index.StateError, index.IndexError_, safety.SafetyError, ex.ScriptError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(2)
 

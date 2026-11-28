@@ -1225,19 +1225,29 @@ GTA 6 character moments gets millions of views a Short with the game's own sound
 is that kind of Short, as a separate mode: /launch and the narrated Shorts don't change.
 
 ```powershell
-.\.venv\Scripts\python.exe meme_short.py find --top 15                     # funny candidates from the index and bank (read only)
+.\.venv-tts\Scripts\python.exe meme_short.py marked                       # YOUR marked moments (saved clips, marks.txt) -> Shorts
+.\.venv\Scripts\python.exe meme_short.py find --top 15                     # suggestions only, from the index and bank (read only)
 .\.venv-tts\Scripts\python.exe meme_short.py hear "<recording>" 196 228     # what is said in a window (Whisper on that window only)
 .\.venv\Scripts\python.exe meme_short.py check examples\meme\2-free-the-bear.json
 .\.venv-tts\Scripts\python.exe meme_short.py render examples\meme\2-free-the-bear.json --out C:\AI\gta\shorts\meme-<date>\2-free-the-bear
 .\.venv\Scripts\python.exe memetest.py                                     # 26 checks, about 20 s
 ```
 
+- **Marked mode (Nov 28)**: the finder is not trusted to judge "funny" (sample 1 was picked from the swearing in its dialogue),
+  so I mark the moments while I play: PS5 "Save recent gameplay" clips copied to `C:\AI\gta\marked\`, or a line
+  `<clock time> <a few words>` in `C:\AI\gta\marks.txt`. `marked` places each new one (a clip's last 25 s; a mark 20 s before
+  to 5 s after its time in the recording that covers it: a file name is the time the recording ENDED), finds the punch (the
+  biggest jump of sound and picture), hears the lines round it, cuts it to the rules below, captions it from what the vision
+  model sees (never from swear words), renders it with every check and lists everything, made or not, in
+  `C:\AI\gta\shorts\marked-<date>\picks.md`. Nothing is made twice. The exact PS5 steps and the marks.txt format are in
+  [docs/meme-shorts.md](docs/meme-shorts.md).
 - **A spec** names a stretch of one recording, its kind (`gag` or `dialogue`), the first motion, the punchline and the last reaction,
   the layout (`full` or `letterbox`) and the subject, 3 caption options with one starred, an optional swap, at most one edit and an
   optional music bed.
 - **The rules are checks** (`problems()`, before anything renders):
   - **length:** a gag 7-12 s, dialogue 15-24 s, never over 30 s;
-  - **the start:** motion by 1.0 s or a line by 0.5 s, and a gag's punchline at 2-6 s;
+  - **the start:** motion by 1.0 s or a line by 0.5 s, and a gag's punchline at 2-6 s; a production render also measures the
+    cut's first second against the rest of the Short and refuses a still, quiet start;
   - **the caption:** one, 2-6 words (10 for "... tried ... and this happens..."), never "Watch the" or "Can you", swears
     written fkng and sht, no emoji in v1, and one swap after the payoff;
   - **the layout:** full-bleed or letterbox, never a blur;

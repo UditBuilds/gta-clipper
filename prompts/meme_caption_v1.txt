@@ -1,0 +1,12 @@
+These are 4 frames from a {GAME} gameplay clip, in reading order (left to right, then the next row): about 1.5 s before a funny moment, 0.5 s before it, just after it, and about 1 s after it.
+{HEARD}
+Write the caption for a funny YouTube Short of this moment, the way meme gaming channels do it ("Bro trusted the GPS", "Jason became a gorilla for a sec", "I'm sorry Lucia", "The slowest robbery in history").
+
+Rules:
+- Say what a viewer SEES happen in these frames (who does what, and what goes wrong), dry and funny. Never build a caption on a swear word or on the dialogue alone.
+- Each caption is 2 to 6 words. No emoji, no hashtags, no quote marks.
+- Never start with "Watch" and never ask "Can you".
+- Name only Jason or Lucia. Call anyone else "bro", "this guy", "the driver", "the cop" and so on.
+- No swear words, not even censored.
+
+Answer as JSON: "seen" (one plain sentence: what happens in the frames), "captions" (3 different captions, best first), "title" (a YouTube title, 3 to 8 words, no hashtags).

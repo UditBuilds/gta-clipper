@@ -288,3 +288,15 @@ frames, one a second, so v3 adds what it sees there: crash, shooting, police, ex
 fields come first and are worded as before, so its blocking answers should stay as measured; v3 has not been measured
 against the answer keys yet. A label (and a crash, explosion, stunt or shootout the narration may name) is kept only
 where these answers saw it.
+
+## meme_caption_v1 (`meme_caption_v1.txt`), 2026-11-28 (marked mode), reason logged before running
+
+Reason: the owner now marks the funny moments while playing and the pipeline only edits, so meme mode needs three caption
+options and a title for each marked moment. Sample 1 was picked from the swearing in its dialogue, not from anything
+on screen, so this question is about what the frames show: four frames around the punch (1.5 s and 0.5 s before it,
+just after it, 1 s after it, a 2x2 sheet like the index's), with the lines heard around it given censored as context
+only. The answer (`seen`, `captions`, `title`) is checked by meme mode's own rule 3 and rule 8 checks
+(`meme_marked.pick_captions`): a caption with a swear word, written censored or not, is dropped, and fewer than three
+kept ones are filled with stock captions and flagged for the owner. temperature 0.6 (seed 42, so a run repeats): a
+caption is a creative line, unlike the labels and safety answers at temperature 0. Not measured against an answer key:
+the owner judges the captions on picks.md.

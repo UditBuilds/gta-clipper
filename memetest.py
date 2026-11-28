@@ -631,7 +631,7 @@ def a_mark_is_placed_in_the_recording_that_covers_it_with_its_window():
     pm = meme_marked.place([datetime(2026, 11, 21, 4, 35), datetime(2026, 11, 21, 16, 35)], recs, "minute")
     near = (lambda got, want: got is not None and all(abs(x - y) < 0.01 for x, y in zip(got, want)))
     return (sec.get("recording", {}).get("name", "").endswith("164843.webm") and near(sec.get("window"), (930.8, 955.8))
-            and near(minute.get("window"), (910.8, 994.8)) and near(edge.get("window"), (346.8, 371.8))
+            and near(minute.get("window"), (910.8, 994.8)) and near(edge.get("window"), (349.8, 371.8))
             and "no recording covers" in none.get("reason", "") and "223830" in none.get("reason", "")
             and near(pm.get("window"), (910.8, 994.8)) and "afternoon" in pm.get("note", "")), (sec, minute, edge, none, pm)
 
@@ -724,6 +724,23 @@ def the_cut_keeps_the_meme_rules_and_ends_after_the_reaction():
     dead_pic, dead_snd = spike_series(seconds=30.0, at=12.0, base_pic=8.0, base_snd=-20.0, before=(0.2, -50.0))
     dead = meme_marked.plan_cut(112.0, [], dead_pic, dead_snd, 100.0, 130.0)
     return ok and long_ok and "rule 2" in dead.get("reason", ""), (plan, long_line, dead)
+
+
+@check
+def the_reaction_runs_on_through_lines_that_follow_and_the_cut_misses_the_next_line():
+    """Lines that follow each other within 1.5 s are one reaction (the GPS crash's "My f-ing ride, bruh!" came 0.9 s after
+    "The f-, man?" and was cut off 0.1 s in): the cut comes after the last of them that fits; the hard cut never lands
+    inside the next line when 0.5-1.5 s leaves room before it"""
+    pic, snd = spike_series(seconds=30.0, at=12.0)
+    chain = [{"from_s": 112.4, "to_s": 113.0, "text": "Oh no!"}, {"from_s": 113.5, "to_s": 116.0, "text": "What the hell?"},
+             {"from_s": 116.9, "to_s": 119.0, "text": "My ride!"}, {"from_s": 121.5, "to_s": 123.0, "text": "unrelated"}]
+    a = meme_marked.plan_cut(112.0, chain, pic, snd, 100.0, 130.0)
+    close = [{"from_s": 112.5, "to_s": 115.0, "text": "What the hell?"},
+             {"from_s": 115.7, "to_s": 124.5, "text": "a long rant that can't fit"}]
+    b = meme_marked.plan_cut(112.0, close, pic, snd, 100.0, 130.0)
+    return (a.get("reaction_end_s") == 119.0 and 119.5 <= a.get("to_s", 0) <= 120.5 and not meme_short.problems(finished(a))
+            and b.get("reaction_end_s") == 115.0 and 115.5 - 1e-6 <= b.get("to_s", 0) <= 115.65
+            and not meme_short.problems(finished(b))), (a, b)
 
 
 @check
