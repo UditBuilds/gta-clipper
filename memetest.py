@@ -88,6 +88,77 @@ def motion_starts_by_1_s_or_the_first_line_by_0_5_s():
             (late, saved, not_saved, nothing, talk_late))
 
 
+def series(pic_first, snd_first, pic_rest=8.0, snd_rest=-25.0, seconds=10.0, snd_at=0.0):
+    """Made-up measurements every 0.1 s: picture change pic_first in the first second and pic_rest after it; sound
+    snd_first (dB) from snd_at to 1.0 s and snd_rest after it, -60 dB before snd_at."""
+    n = round(seconds / meme_short.STEP_S)
+    pic = [pic_first if i * meme_short.STEP_S < 1.0 else pic_rest for i in range(n)]
+    snd = [-60.0 if i * meme_short.STEP_S < snd_at - 1e-9 else snd_first if i * meme_short.STEP_S < 1.0 else snd_rest
+           for i in range(n)]
+    return pic, snd
+
+
+@check
+def the_measured_first_second_is_compared_with_the_rest_of_the_cut():
+    """Rule 2 measured (PR 39's blocker: the old flag compared with the bank's z-scores, whose median is 0 by
+    construction, so it never fired): the first second's picture change against the rest's busy level (its 75th
+    percentile), and the first 0.5 s of sound against the rest's loud level. A still, quiet start is refused; motion
+    in the first second or a sound by 0.5 s passes; a sound that starts at 0.7 s does not save a still picture"""
+    v = meme_short.start_verdict
+    dead = v(*series(0.5, -40.0))[1]
+    moving = v(*series(6.0, -40.0))[1]
+    line = v(*series(0.5, -26.0))[1]
+    late_line = v(*series(0.5, -26.0, snd_at=0.7))[1]
+    return dead and not moving and not line and late_line, (dead, moving, line, late_line)
+
+
+def made_up_start(folder, still_s):
+    """A 640x360 video, 10 s: still grey and silent for still_s, then a white bar that moves and a 440 Hz tone."""
+    out = Path(folder) / f"start_{still_s:g}.mp4"
+    picture = (f"color=c=black:s=640x360:r=30,geq=lum='if(between(X\\,max(0\\,T-{still_s})*{BAR_PX_S}\\,"
+               f"max(0\\,T-{still_s})*{BAR_PX_S}+7)*gte(T\\,{still_s})\\,235\\,71)':cb=128:cr=128")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"{picture},format=yuv420p", "-f", "lavfi",
+                    "-i", "sine=f=440:sample_rate=48000", "-af", f"volume='if(lt(t\\,{still_s})\\,0\\,1)':eval=frame",
+                    "-t", "10", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-c:a", "aac", "-shortest",
+                    str(out)], check=True, capture_output=True)
+    return out
+
+
+@check
+def a_dead_start_is_measured_on_the_footage_and_refused():
+    """Rule 2 measured on a real file: a cut whose first 2 s are still and silent is refused (and a render that measures
+    its start stops before it encodes anything); the same cut starting where the bar moves and the tone sounds passes"""
+    tmp = tempfile.mkdtemp(prefix="memetest_")
+    src = made_up_start(tmp, 2.0)
+    dead = meme_short.measure_start(src, 0.0, 9.0)
+    live = meme_short.measure_start(src, 2.0, 7.5)
+    s = spec(recording=str(src), from_s=0.0, to_s=9.0, motion_s=0.5, punchline_s=4.0, reaction_end_s=8.0)
+    try:
+        render(tmp, s, source=src, measure_start=True)
+        refused = []
+    except meme_short.MemeError as e:
+        refused = [str(e)]
+    return (dead[1] and not live[1] and refused and "rule 2" in refused[0]
+            and not (Path(tmp) / "out" / "short.mp4").exists()), (dead, live, refused)
+
+
+@check
+@testkit.full
+@testkit.needs("gta")
+def the_measured_first_second_fires_on_a_real_dead_start_and_passes_samples_1_and_2():
+    """Rule 2 measured on the owner's footage: samples 1 (the GPS crash, moving from 0.0 s) and 2 (the bear protest, a
+    line at 0.4 s) pass; a cut of the same bear recording at 4:30-4:40, where Jason stands still by the truck for 2.5 s
+    (clip.py's loudness and picture change both under the recording's median there), is refused"""
+    out = {}
+    for name in ("1-the-gps-said-turn-right", "2-free-the-bear"):
+        s = json.loads((Path(__file__).parent / "examples" / "meme" / f"{name}.json").read_text(encoding="utf-8"))
+        src = Path(r"C:\AI\gta\input") / f"{s['recording']}.webm"
+        out[name] = meme_short.measure_start(src, s["from_s"], s["to_s"] - s["from_s"])
+    dead_src = Path(r"C:\AI\gta\input\Grand Theft Auto VI_20261121223830.webm")
+    out["dead 4:30"] = meme_short.measure_start(dead_src, 270.0, 10.0)
+    return (not out["1-the-gps-said-turn-right"][1] and not out["2-free-the-bear"][1] and out["dead 4:30"][1]), out
+
+
 @check
 def a_gag_lands_its_punchline_at_2_to_6_s():
     """Rule 2: a gag's punchline lands at 0:02-0:06 (1.5 s and 6.5 s are refused); dialogue is not held to it"""
